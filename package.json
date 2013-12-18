@@ -20,10 +20,11 @@
     "url": "https://github.com/anvaka/ngraph.forceDirectedLayout/issues"
   },
   "devDependencies": {
-    "tap": "~0.4.4"
+    "tap": "~0.4.4",
     "ngraph.graph": "~0.0.2"
   },
   "dependencies": {
-    "ngraph.quadtreebh": "0.0.1"
+    "ngraph.quadtreebh": "0.0.1",
+    "ngraph.random": "0.0.1"
   }
 }
