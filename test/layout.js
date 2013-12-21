@@ -80,8 +80,7 @@ test('layout has defined graph rectange', function (t) {
     layout.step();
 
     var rect = layout.getGraphRect();
-    t.ok(Math.abs(rect.x2 - rect.x1) > 0 ||
-         Math.abs(rect.y2 - rect.y1) > 0, 'Graph rectangle is not empty');
+    t.ok(!rectangleIsEmpty(rect), 'Graph rectangle is not empty');
 
     t.end();
   })
@@ -152,11 +151,29 @@ test('it listens to graph events', function (t) {
   t.end();
 });
 
+test('it removes removed nodes', function (t) {
+  var graph = createGraph();
+  var layout = createLayout(graph);
+  var link = graph.addLink(1, 2);
+
+  layout.step();
+  graph.clear();
+
+  // since we removed evrything from graph rect should be empty:
+  var rect = layout.getGraphRect();
+
+  t.ok(rectangleIsEmpty(rect), 'Graph rect is empty');
+  t.end();
+});
+
 function positionChanged(pos1, pos2) {
-  return pos1.x !== pos2.x ||
-         pos1.y !== pos2.y;
+  return (pos1.x !== pos2.x) || (pos1.y !== pos2.y);
 }
 
 function copy(obj) {
   return JSON.parse(JSON.stringify(obj));
+}
+
+function rectangleIsEmpty(rect) {
+  return rect.x1 === 0 && rect.y1 === 0 && rect.x2 === 0 && rect.y2 === 0;
 }

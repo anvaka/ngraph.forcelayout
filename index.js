@@ -174,6 +174,21 @@ function createLayout(graph, settings) {
     }
   }
 
+  function releaseNode(node) {
+    var nodeId = node.id;
+    var body = nodeBodies[nodeId];
+    if (body) {
+      nodeBodies[nodeId] = null;
+      delete nodeBodies[nodeId];
+
+      physicsSimulator.removeBody(body);
+      if (graph.getNodesCount() === 0) {
+        graphRect.x1 = graphRect.y1 = 0;
+        graphRect.x2 = graphRect.y2 = 0;
+      }
+    }
+  }
+
   function initLink(link) {
     updateBodyMass(link.fromId);
     updateBodyMass(link.toId);
@@ -183,6 +198,21 @@ function createLayout(graph, settings) {
         spring = physicsSimulator.addSpring(fromBody, toBody, link.length);
 
     springs[link.id] = spring;
+  }
+
+  function releaseLink(link) {
+    var spring = springs[link.id];
+    if (spring) {
+      var from = graph.getNode(link.fromId),
+          to = graph.getNode(link.toId);
+
+      if (from) updateBodyMass(from.id);
+      if (to) updateBodyMass(to.id);
+
+      delete springs[link.id];
+
+      physicsSimulator.removeSpring(spring);
+    }
   }
 
   function getBestInitialNodePosition(node) {
