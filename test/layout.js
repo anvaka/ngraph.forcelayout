@@ -2,6 +2,15 @@ var test = require('tap').test,
     createGraph = require('ngraph.graph'),
     createLayout = require('..');
 
+test('does not tolerate bad input', function (t) {
+  t.throws(missingGraph);
+  t.end();
+
+  function missingGraph() {
+    // graph is missing:
+    createLayout();
+  }
+});
 
 test('layout initialized with graph nodes', function (t) {
   var graph = createGraph();
@@ -27,11 +36,17 @@ test('layout has defined graph rectange', function (t) {
     var layout = createLayout(graph);
 
     var rect = layout.getGraphRect();
-    t.ok(rect && ['x1', 'y1', 'x2', 'y2'].reduce(
-      function (result, key) {
-        return result && typeof rect[key] === 'number';
-      }, true), 'Values are present');
+    var expectedProperties = ['x1', 'y1', 'x2', 'y2'];
+    t.ok(rect && expectedProperties.reduce(hasProperties, true), 'Values are present before step()');
+
+    layout.step();
+
+    t.ok(rect && expectedProperties.reduce(hasProperties, true), 'Values are present after step()');
     t.end();
+
+    function hasProperties(result, key) {
+      return result && typeof rect[key] === 'number';
+    }
   });
 
   t.test('two nodes', function (t) {
