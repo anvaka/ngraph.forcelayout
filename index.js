@@ -89,13 +89,7 @@ function createLayout(graph, settings) {
      * For a given `nodeId` returns position
      */
     getNodePosition: function (nodeId) {
-      var body = nodeBodies[nodeId];
-      if (!body) {
-        initBody(nodeId);
-        body = nodeBodies[nodeId];
-      }
-
-      return body && body.pos;
+      return getInitializedBody(nodeId).pos;
     },
 
     /**
@@ -105,6 +99,16 @@ function createLayout(graph, settings) {
      */
     getGraphRect: function () {
       return graphRect;
+    },
+
+    /*
+     * Requests layout algorithm to pin/unpin node to its current position
+     * Pinned nodes should not be affected by layout algorithm and always
+     * remain at their position
+     */
+    pinNode: function (node, isPinned) {
+      var body = getInitializedBody(node.id);
+       body.isPinned = !!isPinned;
     }
   };
 
@@ -144,7 +148,7 @@ function createLayout(graph, settings) {
     if (!body) {
       var node = graph.getNode(nodeId);
       if (!node) {
-        throw new Error('initBody() was with unknown node id');
+        throw new Error('initBody() was called with unknown node id');
       }
 
       var pos = getBestInitialNodePosition(node);
@@ -274,5 +278,14 @@ function createLayout(graph, settings) {
    */
   function isBodyPinned (body) {
     return body.isPinned;
+  }
+
+  function getInitializedBody(nodeId) {
+    var body = nodeBodies[nodeId];
+    if (!body) {
+      initBody(nodeId);
+      body = nodeBodies[nodeId];
+    }
+    return body;
   }
 }

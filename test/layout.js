@@ -12,7 +12,7 @@ test('does not tolerate bad input', function (t) {
   }
 });
 
-test('layout initialized with graph nodes', function (t) {
+test('layout initializes nodes positions', function (t) {
   var graph = createGraph();
   graph.addLink(1, 2);
 
@@ -65,7 +65,26 @@ test('layout has defined graph rectange', function (t) {
   t.end();
 });
 
-test('Listens to graph events', function  (t) {
+test('it does not move pinned nodes', function (t) {
+  var graph = createGraph();
+  graph.addLink(1, 2);
+
+  var layout = createLayout(graph);
+  layout.pinNode(graph.getNode(1), true);
+  layout.step();
+  var pos1 = copy(layout.getNodePosition(1));
+  var pos2 = copy(layout.getNodePosition(2));
+
+  // make one more step and make sure node 1 did not move:
+  layout.step();
+
+  t.ok(!positionChanged(pos1, layout.getNodePosition(1)), 'Node 1 was not moved');
+  t.ok(positionChanged(pos2, layout.getNodePosition(2)), 'Node 2 has moved');
+
+  t.end();
+});
+
+test('it listens to graph events', function (t) {
   // we first initialize with empty graph:
   var graph = createGraph();
   var layout = createLayout(graph);
@@ -84,13 +103,13 @@ test('Listens to graph events', function  (t) {
   t.ok(positionChanged(pos2, layout.getNodePosition(2)), 'Node 2 has moved');
 
   t.end();
-
-  function positionChanged(pos1, pos2) {
-    return pos1.x !== pos2.x ||
-           pos1.y !== pos2.y;
-  }
-
-  function copy(obj) {
-    return JSON.parse(JSON.stringify(obj));
-  }
 });
+
+function positionChanged(pos1, pos2) {
+  return pos1.x !== pos2.x ||
+         pos1.y !== pos2.y;
+}
+
+function copy(obj) {
+  return JSON.parse(JSON.stringify(obj));
+}
