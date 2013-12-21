@@ -4,11 +4,20 @@ var test = require('tap').test,
 
 test('does not tolerate bad input', function (t) {
   t.throws(missingGraph);
+  t.throws(invalidNodeId)
   t.end();
 
   function missingGraph() {
     // graph is missing:
     createLayout();
+  }
+
+  function invalidNodeId() {
+    var graph = createGraph();
+    var layout = createLayout(graph);
+
+    // we don't have nodes in the graph. This should throw:
+    layout.getNodePosition(1);
   }
 });
 
