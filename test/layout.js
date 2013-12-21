@@ -34,5 +34,18 @@ test('layout has defined graph rectange', function (t) {
     t.end();
   });
 
+  t.test('two nodes', function (t) {
+    var graph = createGraph();
+    graph.addLink(1, 2);
+    var layout = createLayout(graph);
+    layout.step();
+
+    var rect = layout.getGraphRect();
+    t.ok(Math.abs(rect.x2 - rect.x1) > 0 ||
+         Math.abs(rect.y2 - rect.y1) > 0, 'Graph rectangle is not empty');
+
+    t.end();
+  })
+
   t.end();
 });
