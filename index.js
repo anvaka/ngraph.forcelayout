@@ -155,6 +155,7 @@ function createLayout(graph, settings) {
     graph.forEachNode(function (node) {
       initBody(node.id);
     });
+    graph.forEachLink(initLink);
   }
 
   function initBody(nodeId) {

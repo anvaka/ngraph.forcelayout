@@ -39,6 +39,29 @@ test('layout initializes nodes positions', function (t) {
   t.end();
 });
 
+test('layout initializes links', function (t) {
+  var graph = createGraph();
+  var node1 = graph.addNode(1); node1.position = {x : -1000, y: 0};
+  var node2 = graph.addNode(2); node2.position = {x : 1000, y: 0};
+
+  graph.addLink(1, 2);
+
+  var layout = createLayout(graph);
+
+  // perform one iteration of layout:
+  layout.step();
+
+  // since both nodes are connected by spring and distance is too large between
+  // them, they should start attracting each other
+  var pos1 = layout.getNodePosition(1);
+  var pos2 = layout.getNodePosition(2);
+
+  t.ok(pos1.x > -1000, 'Node 1 moves towards node 2');
+  t.ok(pos2.x < 1000, 'Node 1 moves towards node 2');
+
+  t.end();
+});
+
 test('layout respects proposed original position', function (t) {
   var graph = createGraph();
   var node = graph.addNode(1);
