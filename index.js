@@ -188,10 +188,10 @@ function createLayout(graph, settings) {
 
     if (node.links && node.links.length > 0) {
       var firstLink = node.links[0],
-          otherNode = firstLink.fromId !== node.id ? nodeBodies[firstLink.fromId] : nodeBodies[firstLink.toId];
-      if (otherNode && otherNode.pos) {
-        baseX = otherNode.pos.x;
-        baseY = otherNode.pos.y;
+          otherBody = firstLink.fromId !== node.id ? nodeBodies[firstLink.fromId] : nodeBodies[firstLink.toId];
+      if (otherBody && otherBody.pos) {
+        baseX = otherBody.pos.x;
+        baseY = otherBody.pos.y;
       }
     }
 
