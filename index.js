@@ -83,8 +83,26 @@ function createLayout(graph, settings) {
       return totalMovement < MAX_MOVEMENT;
     },
 
+    /**
+     * For a given `nodeId` returns position
+     */
     getNodePosition: function (nodeId) {
-      throw new Error('Not implemented');
+      var body = nodeBodies[nodeId];
+      if (!body) {
+        initBody(nodeId);
+        body = nodeBodies[nodeId];
+      }
+
+      return body && body.pos;
+    },
+
+    /**
+     * @returns {Object} area required to fit in the graph. Object contains
+     * `x1`, `y1` - top left coordinates
+     * `x2`, `y2` - bottom right coordinates
+     */
+    getGraphRect: function () {
+      return graphRect;
     }
   };
 
