@@ -66,11 +66,13 @@ function createLayout(graph, settings) {
       physics = require('ngraph.physics.primitives');
 
   var nodeBodies = {},
+      springs = {},
       physicsSimulator = simulator(),
       graphRect = { x1: 0, y1: 0, x2: 0, y2: 0 };
 
   // Initialize physical objects according to what we have in the graph:
   initPhysics();
+  listenToGraphEvents();
 
   return {
     /**
@@ -106,6 +108,31 @@ function createLayout(graph, settings) {
     }
   };
 
+  function listenToGraphEvents() {
+    graph.on('changed', onGraphChanged);
+  }
+
+  function onGraphChanged(changes) {
+    for (var i = 0; i < changes.length; ++i) {
+      var change = changes[i];
+      if (change.changeType === 'add') {
+        if (change.node) {
+          initBody(change.node.id);
+        }
+        if (change.link) {
+          initLink(change.link);
+        }
+      } else if (change.changeType === 'remove') {
+        if (change.node) {
+          releaseNode(change.node);
+        }
+        if (change.link) {
+          releaseLink(change.link);
+        }
+      }
+    }
+  }
+
   function initPhysics() {
     graph.forEachNode(function (node) {
       initBody(node.id);
@@ -134,6 +161,17 @@ function createLayout(graph, settings) {
 
       physicsSimulator.addBody(body);
     }
+  }
+
+  function initLink(link) {
+    updateBodyMass(link.fromId);
+    updateBodyMass(link.toId);
+
+    var fromBody = nodeBodies[link.fromId],
+        toBody  = nodeBodies[link.toId],
+        spring = physicsSimulator.addSpring(fromBody, toBody, link.length);
+
+    springs[link.id] = spring;
   }
 
   function getBestInitialNodePosition(node) {
