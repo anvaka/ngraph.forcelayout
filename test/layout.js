@@ -75,20 +75,43 @@ test('layout has defined graph rectange', function (t) {
 });
 
 test('it does not move pinned nodes', function (t) {
-  var graph = createGraph();
-  graph.addLink(1, 2);
+  t.test('respects original data.isPinned attribute', function (t) {
+    var graph = createGraph();
+    var testNode = graph.addNode(1, { isPinned: true });
+    var layout = createLayout(graph);
+    t.ok(layout.isNodePinned(testNode), 'Node is pinned');
+    t.end();
+  });
 
-  var layout = createLayout(graph);
-  layout.pinNode(graph.getNode(1), true);
-  layout.step();
-  var pos1 = copy(layout.getNodePosition(1));
-  var pos2 = copy(layout.getNodePosition(2));
+  t.test('respects node.isPinned attribute', function (t) {
+    var graph = createGraph();
+    var testNode = graph.addNode(1);
 
-  // make one more step and make sure node 1 did not move:
-  layout.step();
+    // this was possible in vivagraph. Port it over to ngraph:
+    testNode.isPinned = true;
+    var layout = createLayout(graph);
+    t.ok(layout.isNodePinned(testNode), 'Node is pinned');
+    t.end();
+  });
 
-  t.ok(!positionChanged(pos1, layout.getNodePosition(1)), 'Node 1 was not moved');
-  t.ok(positionChanged(pos2, layout.getNodePosition(2)), 'Node 2 has moved');
+  t.test('can pin nodes after graph is initialized', function (t) {
+    var graph = createGraph();
+    graph.addLink(1, 2);
+
+    var layout = createLayout(graph);
+    layout.pinNode(graph.getNode(1), true);
+    layout.step();
+    var pos1 = copy(layout.getNodePosition(1));
+    var pos2 = copy(layout.getNodePosition(2));
+
+    // make one more step and make sure node 1 did not move:
+    layout.step();
+
+    t.ok(!positionChanged(pos1, layout.getNodePosition(1)), 'Node 1 was not moved');
+    t.ok(positionChanged(pos2, layout.getNodePosition(2)), 'Node 2 has moved');
+
+    t.end();
+  });
 
   t.end();
 });

@@ -109,6 +109,13 @@ function createLayout(graph, settings) {
     pinNode: function (node, isPinned) {
       var body = getInitializedBody(node.id);
        body.isPinned = !!isPinned;
+    },
+
+    /**
+     * Checks whether given graph's node is currently pinned
+     */
+    isNodePinned: function (node) {
+      return getInitializedBody(node.id).isPinned;
     }
   };
 
@@ -159,7 +166,7 @@ function createLayout(graph, settings) {
       nodeBodies[nodeId] = body;
       updateBodyMass(nodeId);
 
-      if (isNodePinned(node)) {
+      if (isNodeOriginallyPinned(node)) {
         body.isPinned = true;
       }
 
@@ -263,13 +270,13 @@ function createLayout(graph, settings) {
    * @param {Object} node a graph node to check
    * @return {Boolean} true if node should be treated as pinned; false otherwise.
    */
-  function isNodePinned(node) {
+  function isNodeOriginallyPinned(node) {
     return (node && (node.isPinned || (node.data && node.data.isPinned)));
   }
 
   /**
    * Checks whether given physical body should be treated as pinned. Unlinke
-   * `isNodePinned` this operates on body object, which is specific to layout
+   * `isNodeOriginallyPinned` this operates on body object, which is specific to layout
    * instance. Thus two layouters can independntly pin bodies, which represent
    * same node of a source graph.
    *
