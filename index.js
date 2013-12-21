@@ -116,6 +116,13 @@ function createLayout(graph, settings) {
      */
     isNodePinned: function (node) {
       return getInitializedBody(node.id).isPinned;
+    },
+
+    /**
+     * Request to release all resources
+     */
+    dispose: function() {
+      graph.off('changed', onGraphChanged);
     }
   };
 

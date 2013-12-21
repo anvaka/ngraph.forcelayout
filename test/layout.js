@@ -151,6 +151,24 @@ test('it listens to graph events', function (t) {
   t.end();
 });
 
+test('can stop listen to events', function (t) {
+  // we first initialize with empty graph:
+  var graph = createGraph();
+  var layout = createLayout(graph);
+  layout.dispose();
+
+  graph.addLink(1, 2);
+  layout.step();
+  var pos1 = copy(layout.getNodePosition(1));
+  var pos2 = copy(layout.getNodePosition(2));
+
+  layout.step();
+
+  t.ok(!positionChanged(pos1, layout.getNodePosition(1)), 'Node 1 was not moved');
+  t.ok(!positionChanged(pos2, layout.getNodePosition(2)), 'Node 2 was not moved');
+
+  t.end();
+});
 test('it removes removed nodes', function (t) {
   var graph = createGraph();
   var layout = createLayout(graph);
