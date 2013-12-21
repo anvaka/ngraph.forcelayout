@@ -39,6 +39,21 @@ test('layout initializes nodes positions', function (t) {
   t.end();
 });
 
+test('layout respects proposed original position', function (t) {
+  var graph = createGraph();
+  var node = graph.addNode(1);
+
+  var initialPosition = {x: 100, y: 100};
+  node.position = copy(initialPosition);
+
+  var layout = createLayout(graph);
+  layout.step();
+
+  t.deepEqual(layout.getNodePosition(node.id), initialPosition, 'original position preserved');
+
+  t.end();
+});
+
 test('layout has defined graph rectange', function (t) {
   t.test('empty graph', function (t) {
     var graph = createGraph();
