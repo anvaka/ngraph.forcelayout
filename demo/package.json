@@ -1,0 +1,15 @@
+{
+  "name": "test",
+  "version": "0.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "browserify -s b index.js > bundle.js && open index.html"
+  },
+  "author": "Andrei Kashcha",
+  "license": "BSD-2-Clause",
+  "dependencies": {
+    "ngraph.generators": "0.0.1"
+  }
+}
