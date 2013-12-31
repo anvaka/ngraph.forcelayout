@@ -1,73 +1,25 @@
 module.exports = createLayout;
 
-// Maximum movement of the system at which system should be considered as stabile
+// Maximum movement of the system at which system should be considered as stable
 var MAX_MOVEMENT = 0.001; 
-
-var merge = require('./lib/merge');
 
 /**
  * Creates force based layout for a given graph.
  * @param {ngraph.graph} graph which needs to be layed out
  */
-function createLayout(graph, settings) {
+function createLayout(graph, physicsSimulator) {
   if (!graph) {
     throw new Error('Graph structure cannot be undefined');
   }
-
-  settings = merge(settings, {
-      /**
-       * Ideal length for links (springs in physical model).
-       */
-      springLength: 80,
-
-      /**
-       * Hook's law coefficient. 1 - solid spring.
-       */
-      springCoeff: 0.0002,
-
-      /**
-       * Coulomb's law coefficient. It's used to repel nodes thus should be negative
-       * if you make it positive nodes start attract each other :).
-       */
-      gravity: -1.2,
-
-      /**
-       * Theta coeffiecient from Barnes Hut simulation. Ranged between (0, 1).
-       * The closer it's to 1 the more nodes algorithm will have to go through.
-       * Setting it to one makes Barnes Hut simulation no different from
-       * brute-force forces calculation (each node is considered).
-       */
-      theta: 0.8,
-
-      /**
-       * Drag force coefficient. Used to slow down system, thus should be less than 1.
-       * The closer it is to 0 the less tight system will be.
-       */
-      dragCoeff: 0.02,
-
-      /**
-       * Default time step (dt) for forces integration
-       */
-      timeStep : 20,
-
-      /**
-       * Calculates mass of a body, which corresponds to node with given id.
-       *
-       * @param {String|Number} nodeId identifier of a node, for which body mass needs to be calculated
-       * @returns {Number} recommended mass of the body;
-       */
-      nodeMass: function (nodeId) {
-        return 1 + graph.getLinks(nodeId).length / 3.0;
-      }
-  });
 
   var random = require('ngraph.random').random(42),
       simulator = require('ngraph.physics.simulator'),
       physics = require('ngraph.physics.primitives');
 
+  physicsSimulator = physicsSimulator || simulator();
+
   var nodeBodies = {},
       springs = {},
-      physicsSimulator = simulator(),
       graphRect = { x1: 0, y1: 0, x2: 0, y2: 0 };
 
   // Initialize physical objects according to what we have in the graph:
@@ -79,7 +31,7 @@ function createLayout(graph, settings) {
      * Performs one step of iterative layout algorithm
      */
     step: function() {
-      var totalMovement = physicsSimulator.step(settings.timeStep);
+      var totalMovement = physicsSimulator.step();
       updateGraphRect();
 
       return totalMovement < MAX_MOVEMENT;
@@ -233,7 +185,7 @@ function createLayout(graph, settings) {
 
     var baseX = (graphRect.x1 + graphRect.x2) / 2,
         baseY = (graphRect.y1 + graphRect.y2) / 2,
-        springLength = settings.springLength;
+        springLength = physicsSimulator.springLength();
 
     if (node.links && node.links.length > 0) {
       var firstLink = node.links[0],
@@ -252,7 +204,7 @@ function createLayout(graph, settings) {
 
   function updateBodyMass(nodeId) {
     var body = nodeBodies[nodeId];
-    body.mass = settings.nodeMass(nodeId);
+    body.mass = nodeMass(nodeId);
   }
 
 
@@ -332,5 +284,15 @@ function createLayout(graph, settings) {
       body = nodeBodies[nodeId];
     }
     return body;
+  }
+
+  /**
+   * Calculates mass of a body, which corresponds to node with given id.
+   *
+   * @param {String|Number} nodeId identifier of a node, for which body mass needs to be calculated
+   * @returns {Number} recommended mass of the body;
+   */
+  function nodeMass(nodeId) {
+    return 1 + graph.getLinks(nodeId).length / 3.0;
   }
 }
