@@ -1,6 +1,6 @@
 {
   "name": "ngraph.forceDirectedLayout",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Force directed graph drawing layout",
   "main": "index.js",
   "scripts": {
@@ -27,6 +27,6 @@
     "ngraph.quadtreebh": "0.0.1",
     "ngraph.random": "0.0.1",
     "ngraph.physics.primitives": "0.0.3",
-    "ngraph.physics.simulator": "0.0.1"
+    "ngraph.physics.simulator": "0.0.3"
   }
 }
