@@ -8,7 +8,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/anvaka/ngraph.forceDirectedLayout.git"
+    "url": "https://github.com/anvaka/ngraph.forcelayout.git"
   },
   "keywords": [
     "ngraph",
@@ -17,7 +17,7 @@
   "author": "Andrei Kashcha",
   "license": "BSD-3-Clause",
   "bugs": {
-    "url": "https://github.com/anvaka/ngraph.forceDirectedLayout/issues"
+    "url": "https://github.com/anvaka/ngraph.forcelayout/issues"
   },
   "devDependencies": {
     "tap": "~0.4.4",
