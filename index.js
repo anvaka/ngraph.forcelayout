@@ -45,7 +45,7 @@ function createLayout(graph, physicsSimulator) {
     },
 
     /**
-     * @returns {Object} Link position
+     * @returns {Object} Link position by link id
      * @returns {Object.from} {x, y} coordinates of link start
      * @returns {Object.to} {x, y} coordinates of link end
      */
