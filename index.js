@@ -45,6 +45,21 @@ function createLayout(graph, physicsSimulator) {
     },
 
     /**
+     * @returns {Object} Link position
+     * @returns {Object.from} {x, y} coordinates of link start
+     * @returns {Object.to} {x, y} coordinates of link end
+     */
+    getLinkPosition: function (linkId) {
+      var spring = springs[linkId];
+      if (spring) {
+        return {
+          from: spring.from.pos,
+          to: spring.to.pos
+        };
+      }
+    },
+
+    /**
      * @returns {Object} area required to fit in the graph. Object contains
      * `x1`, `y1` - top left coordinates
      * `x2`, `y2` - bottom right coordinates

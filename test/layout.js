@@ -36,6 +36,15 @@ test('layout initializes nodes positions', function (t) {
          && typeof pos.y === 'number', 'Position is defined');
   });
 
+  graph.forEachLink(function (link) {
+    var linkPos = layout.getLinkPosition(link.id);
+    t.ok(linkPos && linkPos.from && linkPos.to, 'Link position is defined');
+    var fromPos = layout.getNodePosition(link.fromId);
+    t.ok(linkPos.from === fromPos, '"From" should be identical to getNodePosition');
+    var toPos = layout.getNodePosition(link.toId);
+    t.ok(linkPos.to === toPos, '"To" should be identical to getNodePosition');
+  });
+
   t.end();
 });
 
