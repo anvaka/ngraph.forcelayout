@@ -45,6 +45,16 @@ function createLayout(graph, physicsSimulator) {
     },
 
     /**
+     * Sets position of a node to a given coordinates
+     */
+    setNodePosition: function (nodeId, x, y) {
+      var body = getInitializedBody(nodeId);
+      if (body) {
+        body.prevPos.x = body.pos.x = x;
+        body.prevPos.y = body.pos.y = y;
+      }
+    },
+    /**
      * @returns {Object} Link position by link id
      * @returns {Object.from} {x, y} coordinates of link start
      * @returns {Object.to} {x, y} coordinates of link end

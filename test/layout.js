@@ -48,6 +48,25 @@ test('layout initializes nodes positions', function (t) {
   t.end();
 });
 
+test('Layout can set node position', function (t) {
+  var graph = createGraph();
+  graph.addLink(1, 2);
+
+  var layout = createLayout(graph);
+
+  layout.pinNode(graph.getNode(1), true);
+  layout.setNodePosition(1, 42, 42);
+
+  // perform one iteration of layout:
+  layout.step();
+
+  // and make sure node 1 was not moved:
+  var actualPosition = layout.getNodePosition(1);
+  t.equals(actualPosition.x, 42, 'X has not changed');
+  t.equals(actualPosition.y, 42, 'Y has not changed');
+
+  t.end();
+});
 test('layout initializes links', function (t) {
   var graph = createGraph();
   var node1 = graph.addNode(1); node1.position = {x : -1000, y: 0};
