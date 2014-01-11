@@ -6,6 +6,9 @@ var MAX_MOVEMENT = 0.001;
 /**
  * Creates force based layout for a given graph.
  * @param {ngraph.graph} graph which needs to be layed out
+ * @param {ngraph.physics.simulator=} physicsSimulator if you need custom settings
+ * for physics simulator you can pass your own simulator here. If it's not passed
+ * a default one will be created
  */
 function createLayout(graph, physicsSimulator) {
   if (!graph) {
@@ -100,7 +103,12 @@ function createLayout(graph, physicsSimulator) {
      */
     dispose: function() {
       graph.off('changed', onGraphChanged);
-    }
+    },
+
+    /**
+     * [Read only] Gets current physics simulator
+     */
+    simulator: physicsSimulator
   };
 
   function listenToGraphEvents() {

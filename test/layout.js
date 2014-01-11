@@ -220,6 +220,27 @@ test('can stop listen to events', function (t) {
 
   t.end();
 });
+
+test('physics simulator', function (t) {
+  t.test('has default simulator', function (t) {
+    var graph = createGraph();
+    var layout = createLayout(graph);
+
+    t.ok(layout.simulator, 'physics simulator is present');
+    t.end();
+  });
+
+  t.test('can override default simulator', function (t) {
+    var simulator = require('ngraph.physics.simulator');
+    var graph = createGraph();
+    var layout = createLayout(graph, simulator);
+    t.equals(layout.simulator, simulator, 'Simulator is overridden');
+    t.end();
+  });
+
+  t.end();
+});
+
 test('it removes removed nodes', function (t) {
   var graph = createGraph();
   var layout = createLayout(graph);
