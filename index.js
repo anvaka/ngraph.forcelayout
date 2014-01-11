@@ -52,10 +52,8 @@ function createLayout(graph, physicsSimulator) {
      */
     setNodePosition: function (nodeId, x, y) {
       var body = getInitializedBody(nodeId);
-      if (body) {
-        body.prevPos.x = body.pos.x = x;
-        body.prevPos.y = body.pos.y = y;
-      }
+      body.prevPos.x = body.pos.x = x;
+      body.prevPos.y = body.pos.y = y;
     },
     /**
      * @returns {Object} Link position by link id
