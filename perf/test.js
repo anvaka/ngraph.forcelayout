@@ -1,12 +1,20 @@
-var graph = require('ngraph.generators').grid(100, 100);
-var simulator = require('../')(graph);
-var iterationsCount = 100;
+var graph = require('ngraph.generators').grid(20, 20);
 
-console.log('Performing ' + iterationsCount + ' iterations of grid 100x100');
-var started = new Date();
-for (var i = 0; i < iterationsCount; ++i) {
-  simulator.step();
-}
+var Benchmark = require('benchmark');
+var suite = new Benchmark.Suite;
 
-var doneMs = new Date() - started;
-console.log('Done in ' + doneMs + 'ms');
+// add tests
+suite.add('Run default', function() {
+  var layout = require('../')(graph);
+  for (var i = 0; i < 20; ++i) {
+    layout.step();
+  }
+})
+.on('cycle', function(event) {
+  console.log(String(event.target));
+})
+.on('complete', function() {
+  console.log('Fastest is ' + this.filter('fastest').pluck('name'));
+})
+// run async
+.run({ 'async': true });
