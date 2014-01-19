@@ -21,7 +21,8 @@
   },
   "devDependencies": {
     "tap": "~0.4.4",
-    "ngraph.graph": "0.0.2"
+    "ngraph.graph": "0.0.2",
+    "ngraph.generators": "0.0.2"
   },
   "dependencies": {
     "ngraph.random": "0.0.1",
