@@ -210,13 +210,7 @@ test('can stop listen to events', function (t) {
 
   graph.addLink(1, 2);
   layout.step();
-  var pos1 = copy(layout.getNodePosition(1));
-  var pos2 = copy(layout.getNodePosition(2));
-
-  layout.step();
-
-  t.ok(!positionChanged(pos1, layout.getNodePosition(1)), 'Node 1 was not moved');
-  t.ok(!positionChanged(pos2, layout.getNodePosition(2)), 'Node 2 was not moved');
+  t.ok(layout.simulator.bodies.length === 0, 'No bodies in the simulator');
 
   t.end();
 });

@@ -22,8 +22,7 @@ function createLayout(graph, physicsSimulator) {
   physicsSimulator = physicsSimulator || simulator();
 
   var nodeBodies = {},
-      springs = {},
-      graphRect = { x1: 0, y1: 0, x2: 0, y2: 0 };
+      springs = {};
 
   // Initialize physical objects according to what we have in the graph:
   initPhysics();
@@ -35,8 +34,6 @@ function createLayout(graph, physicsSimulator) {
      */
     step: function() {
       var totalMovement = physicsSimulator.step();
-      updateGraphRect();
-
       return totalMovement < MAX_MOVEMENT;
     },
 
@@ -55,6 +52,7 @@ function createLayout(graph, physicsSimulator) {
       body.prevPos.x = body.pos.x = x;
       body.prevPos.y = body.pos.y = y;
     },
+
     /**
      * @returns {Object} Link position by link id
      * @returns {Object.from} {x, y} coordinates of link start
@@ -76,7 +74,7 @@ function createLayout(graph, physicsSimulator) {
      * `x2`, `y2` - bottom right coordinates
      */
     getGraphRect: function () {
-      return graphRect;
+      return physicsSimulator.getBBox();
     },
 
     /*
@@ -151,8 +149,6 @@ function createLayout(graph, physicsSimulator) {
 
       var pos = getBestInitialNodePosition(node);
       body = new physics.Body(pos.x, pos.y);
-      // we need to augment body with previous position to let users pin them
-      body.prevPos = new physics.Vector2d(pos.x, pos.y);
 
       nodeBodies[nodeId] = body;
       updateBodyMass(nodeId);
@@ -173,10 +169,6 @@ function createLayout(graph, physicsSimulator) {
       delete nodeBodies[nodeId];
 
       physicsSimulator.removeBody(body);
-      if (graph.getNodesCount() === 0) {
-        graphRect.x1 = graphRect.y1 = 0;
-        graphRect.x2 = graphRect.y2 = 0;
-      }
     }
   }
 
@@ -213,6 +205,7 @@ function createLayout(graph, physicsSimulator) {
     if (node.position) {
       return node.position;
     }
+    var graphRect = physicsSimulator.getBBox();
 
     var baseX = (graphRect.x1 + graphRect.x2) / 2,
         baseY = (graphRect.y1 + graphRect.y2) / 2,
@@ -238,51 +231,6 @@ function createLayout(graph, physicsSimulator) {
     body.mass = nodeMass(nodeId);
   }
 
-
-  function updateGraphRect() {
-    if (graph.getNodesCount() === 0) {
-      // don't have to wory here.
-      return;
-    }
-
-    var x1 = Number.MAX_VALUE,
-        y1 = Number.MAX_VALUE,
-        x2 = Number.MIN_VALUE,
-        y2 = Number.MIN_VALUE;
-
-    // this is O(n), could it be done faster with quadtree?
-    for (var key in nodeBodies) {
-      if (nodeBodies.hasOwnProperty(key)) {
-        // how about pinned nodes?
-        var body = nodeBodies[key];
-        if (isBodyPinned(body)) {
-          body.pos.x = body.prevPos.x;
-          body.pos.y = body.prevPos.y;
-        } else {
-          body.prevPos.x = body.pos.x;
-          body.prevPos.y = body.pos.y;
-        }
-        if (body.pos.x < x1) {
-          x1 = body.pos.x;
-        }
-        if (body.pos.x > x2) {
-          x2 = body.pos.x;
-        }
-        if (body.pos.y < y1) {
-          y1 = body.pos.y;
-        }
-        if (body.pos.y > y2) {
-          y2 = body.pos.y;
-        }
-      }
-    }
-
-    graphRect.x1 = x1;
-    graphRect.x2 = x2;
-    graphRect.y1 = y1;
-    graphRect.y2 = y2;
-  }
-
   /**
    * Checks whether graph node has in its settings pinned attribute,
    * which means layout algorithm cannot move it. Node can be preconfigured
@@ -293,19 +241,6 @@ function createLayout(graph, physicsSimulator) {
    */
   function isNodeOriginallyPinned(node) {
     return (node && (node.isPinned || (node.data && node.data.isPinned)));
-  }
-
-  /**
-   * Checks whether given physical body should be treated as pinned. Unlinke
-   * `isNodeOriginallyPinned` this operates on body object, which is specific to layout
-   * instance. Thus two layouters can independntly pin bodies, which represent
-   * same node of a source graph.
-   *
-   * @param {ngraph.physics.Body} body - body to check
-   * @return {Boolean} true if body should be treated as pinned; false otherwise.
-   */
-  function isBodyPinned (body) {
-    return body.isPinned;
   }
 
   function getInitializedBody(nodeId) {
