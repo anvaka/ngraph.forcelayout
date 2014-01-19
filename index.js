@@ -15,8 +15,7 @@ function createLayout(graph, physicsSimulator) {
     throw new Error('Graph structure cannot be undefined');
   }
 
-  var random = require('ngraph.random').random(42),
-      simulator = require('ngraph.physics.simulator'),
+  var simulator = require('ngraph.physics.simulator'),
       physics = require('ngraph.physics.primitives');
 
   physicsSimulator = physicsSimulator || simulator();
@@ -147,8 +146,13 @@ function createLayout(graph, physicsSimulator) {
         throw new Error('initBody() was called with unknown node id');
       }
 
-      var pos = getBestInitialNodePosition(node);
-      body = new physics.Body(pos.x, pos.y);
+      var pos = node.position;
+      if (!pos) {
+        var neighbors = getNeighborBodies(node);
+        pos = physicsSimulator.getBestNewBodyPosition(neighbors);
+      }
+
+      body = new physics.Body(pos);
 
       nodeBodies[nodeId] = body;
       updateBodyMass(nodeId);
@@ -198,32 +202,22 @@ function createLayout(graph, physicsSimulator) {
     }
   }
 
-  function getBestInitialNodePosition(node) {
-    // TODO: Initial position could be picked better, e.g. take into
-    // account all neighbouring nodes/links, not only one.
-    // How about center of mass?
-    if (node.position) {
-      return node.position;
+  function getNeighborBodies(node) {
+    // TODO: Could probably be done better on memory
+    var neighbors = [];
+    if (!node.links) {
+      return neighbors;
     }
-    var graphRect = physicsSimulator.getBBox();
-
-    var baseX = (graphRect.x1 + graphRect.x2) / 2,
-        baseY = (graphRect.y1 + graphRect.y2) / 2,
-        springLength = physicsSimulator.springLength();
-
-    if (node.links && node.links.length > 0) {
-      var firstLink = node.links[0],
-          otherBody = firstLink.fromId !== node.id ? nodeBodies[firstLink.fromId] : nodeBodies[firstLink.toId];
+    var maxNeighbors = Math.min(node.links.length, 2);
+    for (var i = 0; i < maxNeighbors; ++i) {
+      var link = node.links[i];
+      var otherBody = link.fromId !== node.id ? nodeBodies[link.fromId] : nodeBodies[link.toId];
       if (otherBody && otherBody.pos) {
-        baseX = otherBody.pos.x;
-        baseY = otherBody.pos.y;
+        neighbors.push(otherBody);
       }
     }
 
-    return {
-      x: baseX + random.next(springLength) - springLength / 2,
-      y: baseY + random.next(springLength) - springLength / 2
-    };
+    return neighbors;
   }
 
   function updateBodyMass(nodeId) {

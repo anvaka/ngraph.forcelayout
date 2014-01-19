@@ -67,6 +67,7 @@ test('Layout can set node position', function (t) {
 
   t.end();
 });
+
 test('layout initializes links', function (t) {
   var graph = createGraph();
   var node1 = graph.addNode(1); node1.position = {x : -1000, y: 0};

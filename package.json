@@ -26,7 +26,6 @@
     "benchmark": "~1.0.0"
   },
   "dependencies": {
-    "ngraph.random": "0.0.1",
     "ngraph.physics.primitives": "~0.0",
     "ngraph.physics.simulator": "~0.0"
   }
