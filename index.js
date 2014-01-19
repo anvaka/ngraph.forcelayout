@@ -152,7 +152,7 @@ function createLayout(graph, physicsSimulator) {
         pos = physicsSimulator.getBestNewBodyPosition(neighbors);
       }
 
-      body = new physics.Body(pos);
+      body = physicsSimulator.addBodyAt(pos);
 
       nodeBodies[nodeId] = body;
       updateBodyMass(nodeId);
@@ -160,8 +160,6 @@ function createLayout(graph, physicsSimulator) {
       if (isNodeOriginallyPinned(node)) {
         body.isPinned = true;
       }
-
-      physicsSimulator.addBody(body);
     }
   }
 
