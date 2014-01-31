@@ -68,7 +68,7 @@ What if you still want to move your node according to some external factor (e.g.
 
 ## Monitoring changes
 
-Like many other algorithms in `ngraph` family, force layout monitors graph changes via [ngrap.graph events](https://github.com/anvaka/ngraph.graph#listening-to-events). It keeps layout up to date whenever graph changes:
+Like many other algorithms in `ngraph` family, force layout monitors graph changes via [graph events](https://github.com/anvaka/ngraph.graph#listening-to-events). It keeps layout up to date whenever graph changes:
 
 ``` js
   var graph = require('ngraph.graph')(); // empty graph
@@ -83,4 +83,49 @@ If you want to stop monitorying graph events, call `dispose()` method:
   layout.dispose();
 ```
   
-  
+## Configuring physics
+
+Since this is force directed layout, sometimes it's desirable to adjust physics simulator. Please refer to [ngraph.physics.simulator](https://github.com/anvaka/ngraph.physics.simulator) to see source code and simulator parameters. Once you have instance of physics simulator you can pass it as a second argument to layout constructor:
+
+``` js
+// construct physics simulator:
+var physics = require('ngraph.physics.simulator')({
+      springLength: 30,
+      springCoeff: 0.0008,
+      gravity: -1.2,
+      theta: 0.8,
+      dragCoeff: 0.02,
+      timeStep : 20
+    });
+
+// pass it as second argument to layout:
+var layout = require('ngraph.forcelayout')(graph, physics);
+```
+
+You can always get current physics simulator from layout by checking `layout.simulator` property. This is read only property.
+
+## Space occupied by graph
+
+Finally, it's often desirable to know how much space does our graph occupy. To quickly get bounding box use `getGraphRect()` method:
+
+``` js
+  var rect = layout.getGraphRect();
+  // rect.x1, rect.y1 - top left coordinates of bounding box
+  // rect.x2, rect.y2 - bottom right coordinates of bounding box
+```
+
+# install
+
+With [npm](https://npmjs.org) do:
+
+```
+npm install ngraph.layout
+```
+
+# license
+
+MIT
+
+# Feedback?
+
+I'd totally love it! Please email me, open issue here, or [tweet](https://twitter.com/anvaka) to me
