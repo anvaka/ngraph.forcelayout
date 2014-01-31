@@ -2,7 +2,7 @@ ngraph.forcelayout
 ==========================
 [![Build Status](https://travis-ci.org/anvaka/ngraph.forcelayout.png?branch=master)](https://travis-ci.org/anvaka/ngraph.forcelayout)
 
-This is a [force directed](http://en.wikipedia.org/wiki/Force-directed_graph_drawing) graph layouter. It is using quad tree as an n-body solver. 
+This is a [force directed](http://en.wikipedia.org/wiki/Force-directed_graph_drawing) graph layouter. It is using quad tree as an n-body solver. This repository is part of [ngraph family](https://github.com/anvaka/ngraph), and operates on [`ngraph.graph`](https://github.com/anvaka/ngraph.graph) data structure.
 
 # API
 
@@ -35,7 +35,8 @@ graph.forEachLink(function(link) {
 });
 ```
 
-Note: result of `getNodePosition()`/`getLinkPosition()` will be always the same for the same node. This is true:
+
+Result of `getNodePosition()`/`getLinkPosition()` will be always the same for the same node. This is true:
 
 ``` js
   layout.getNodePosition(1) === layout.getNodePosition(1);
@@ -64,3 +65,22 @@ What if you still want to move your node according to some external factor (e.g.
 ``` js
   layout.setNodePosition(nodeId, x, y);
 ```
+
+## Monitoring changes
+
+Like many other algorithms in `ngraph` family, force layout monitors graph changes via [ngrap.graph events](https://github.com/anvaka/ngraph.graph#listening-to-events). It keeps layout up to date whenever graph changes:
+
+``` js
+  var graph = require('ngraph.graph')(); // empty graph
+  var layout = require('ngraph.layout')(graph); // layout of empty graph
+  
+  garph.addLink(1, 2); // create node 1 and 2, and make link between them
+  layout.getNodePosition(1); // returns position. 
+```
+
+If you want to stop monitorying graph events, call `dispose()` method:
+``` js
+  layout.dispose();
+```
+  
+  
