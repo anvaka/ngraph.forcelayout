@@ -34,3 +34,33 @@ graph.forEachLink(function(link) {
   // }
 });
 ```
+
+Note: result of `getNodePosition()`/`getLinkPosition()` will be always the same for the same node. This is true:
+
+``` js
+  layout.getNodePosition(1) === layout.getNodePosition(1);
+```
+
+Reason for this is performance. If you are interested in storing positions somewhere else, you can do it and they still will be updated after each force directed layout iteration.
+
+## "Pin" node and initial position
+
+Sometimes it's desirable to tell layout algorithm not to move certain nodes. This can be done with `pinNode()` method:
+
+``` js
+  var nodeToPin = graph.getNode(nodeId);
+  layout.pinNode(nodeToPin, true); // now layout will not move this node
+```
+
+If you want to check whether node is pinned or not you can use `isNodePinned()` method. Here is an example how to toggle node pinning, without knowing it's original state:
+
+``` js
+  var node = graph.getNode(nodeId);
+  layout.pinNode(node, !layout.isNodePinned(node)); // toggle it
+```
+
+What if you still want to move your node according to some external factor (e.g. you have initial positions, or user drags pinned node)? To do this, call `setNodePosition()` method:
+
+``` js
+  layout.setNodePosition(nodeId, x, y);
+```
