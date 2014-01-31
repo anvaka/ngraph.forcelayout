@@ -74,7 +74,7 @@ Like many other algorithms in `ngraph` family, force layout monitors graph chang
   var graph = require('ngraph.graph')(); // empty graph
   var layout = require('ngraph.layout')(graph); // layout of empty graph
   
-  garph.addLink(1, 2); // create node 1 and 2, and make link between them
+  graph.addLink(1, 2); // create node 1 and 2, and make link between them
   layout.getNodePosition(1); // returns position. 
 ```
 
