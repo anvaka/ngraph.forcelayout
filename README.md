@@ -78,7 +78,7 @@ Like many other algorithms in `ngraph` family, force layout monitors graph chang
   layout.getNodePosition(1); // returns position. 
 ```
 
-If you want to stop monitorying graph events, call `dispose()` method:
+If you want to stop monitoring graph events, call `dispose()` method:
 ``` js
   layout.dispose();
 ```
