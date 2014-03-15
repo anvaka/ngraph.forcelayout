@@ -20,7 +20,7 @@ function createLayout(graph, physicsSimulator) {
 
   physicsSimulator = physicsSimulator || simulator();
 
-  var nodeBodies = {},
+  var nodeBodies = typeof Object.create === 'function' ? Object.create(null) : {},
       springs = {};
 
   // Initialize physical objects according to what we have in the graph:
