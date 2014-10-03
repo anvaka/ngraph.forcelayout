@@ -27,6 +27,6 @@
   },
   "dependencies": {
     "ngraph.physics.primitives": "~0.0",
-    "ngraph.physics.simulator": "~0.0"
+    "ngraph.physics.simulator": "0.0.7"
   }
 }
