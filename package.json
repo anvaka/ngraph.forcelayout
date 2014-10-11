@@ -1,6 +1,6 @@
 {
   "name": "ngraph.forcelayout",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "description": "Force directed graph drawing layout",
   "main": "index.js",
   "scripts": {
