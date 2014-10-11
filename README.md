@@ -2,7 +2,7 @@ ngraph.forcelayout
 ==========================
 [![Build Status](https://travis-ci.org/anvaka/ngraph.forcelayout.png?branch=master)](https://travis-ci.org/anvaka/ngraph.forcelayout)
 
-This is a [force directed](http://en.wikipedia.org/wiki/Force-directed_graph_drawing) graph layouter. It is using quad tree as an n-body solver. This repository is part of [ngraph family](https://github.com/anvaka/ngraph), and operates on [`ngraph.graph`](https://github.com/anvaka/ngraph.graph) data structure.
+This is a [force directed](http://en.wikipedia.org/wiki/Force-directed_graph_drawing) graph layouter in 2d. It is using quad tree as an n-body solver. This repository is part of [ngraph family](https://github.com/anvaka/ngraph), and operates on [`ngraph.graph`](https://github.com/anvaka/ngraph.graph) data structure. If you want to go the 3D space, please check out [`ngraph.forcelayout3d`](https://github.com/anvaka/ngraph.forcelayout3d)
 
 # API
 

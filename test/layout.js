@@ -267,6 +267,31 @@ test('it removes removed nodes', function (t) {
   t.end();
 });
 
+test('it handles large graphs', function (t) {
+  var graph = createGraph();
+  var layout = createLayout(graph);
+
+  var count = 60000;
+  
+  var i = count;
+  while (i--) {
+    graph.addNode(i);
+  }
+
+  // link each node to 2 other random nodes
+  var i = count;
+  while (i--) {
+    graph.addLink(i, Math.ceil(Math.random() * count));
+    graph.addLink(i, Math.ceil(Math.random() * count));
+  }
+
+  layout.step();
+
+  t.ok(layout.simulator.bodies.length !== 0, 'Bodies in the simulator');
+  t.end();
+});
+
+
 function positionChanged(pos1, pos2) {
   return (pos1.x !== pos2.x) || (pos1.y !== pos2.y);
 }
