@@ -1,11 +1,11 @@
 module.exports = createLayout;
 
 // Maximum movement of the system at which system should be considered as stable
-var MAX_MOVEMENT = 0.001; 
+var MAX_MOVEMENT = 0.001;
 
 /**
  * Creates force based layout for a given graph.
- * @param {ngraph.graph} graph which needs to be layed out
+ * @param {ngraph.graph} graph which needs to be laid out
  * @param {ngraph.physics.simulator=} physicsSimulator if you need custom settings
  * for physics simulator you can pass your own simulator here. If it's not passed
  * a default one will be created
