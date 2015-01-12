@@ -1,4 +1,5 @@
 module.exports = createLayout;
+module.exports.simulator = require('ngraph.physics.simulator');
 
 var guard = require('varta');
 

@@ -2,9 +2,14 @@ var test = require('tap').test,
     createGraph = require('ngraph.graph'),
     createLayout = require('..');
 
+test('it exposes simulator', function(t) {
+  t.ok(typeof createLayout.simulator === 'function', 'Simulator is exposed');
+  t.end();
+});
+
 test('does not tolerate bad input', function (t) {
   t.throws(missingGraph);
-  t.throws(invalidNodeId)
+  t.throws(invalidNodeId);
   t.end();
 
   function missingGraph() {
@@ -151,7 +156,7 @@ test('layout has defined graph rectange', function (t) {
     t.ok(!rectangleIsEmpty(rect), 'Graph rectangle is not empty');
 
     t.end();
-  })
+  });
 
   t.end();
 });
@@ -272,14 +277,14 @@ test('it handles large graphs', function (t) {
   var layout = createLayout(graph);
 
   var count = 60000;
-  
+
   var i = count;
   while (i--) {
     graph.addNode(i);
   }
 
   // link each node to 2 other random nodes
-  var i = count;
+  i = count;
   while (i--) {
     graph.addLink(i, Math.ceil(Math.random() * count));
     graph.addLink(i, Math.ceil(Math.random() * count));
