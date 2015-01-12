@@ -242,7 +242,7 @@ test('physics simulator', function (t) {
   });
 
   t.test('can override default simulator', function (t) {
-    var simulator = require('ngraph.physics.simulator');
+    var simulator = require('ngraph.physics.simulator')();
     var graph = createGraph();
     var layout = createLayout(graph, simulator);
     t.equals(layout.simulator, simulator, 'Simulator is overridden');

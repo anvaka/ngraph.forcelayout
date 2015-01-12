@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "ngraph.physics.primitives": "0.0.7",
-    "ngraph.physics.simulator": "0.0.8"
+    "ngraph.physics.simulator": "0.0.8",
+    "varta": "0.1.1"
   }
 }

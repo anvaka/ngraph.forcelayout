@@ -1,5 +1,7 @@
 module.exports = createLayout;
 
+var guard = require('varta');
+
 // Maximum movement of the system at which system should be considered as stable
 var MAX_MOVEMENT = 0.001;
 
@@ -19,6 +21,8 @@ function createLayout(graph, physicsSimulator) {
       physics = require('ngraph.physics.primitives');
 
   physicsSimulator = physicsSimulator || simulator();
+
+  guard(physicsSimulator, 'physicsSimulator').has('step', 'getBestNewBodyPosition', 'addBodyAt');
 
   var nodeBodies = typeof Object.create === 'function' ? Object.create(null) : {},
       springs = {};
