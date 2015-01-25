@@ -1,2 +1,2 @@
 Grid 20x20, 20 layout steps:
-Run default x 24.52 ops/sec ±3.45% (44 runs sampled)
+Run default x 29.79 ops/sec ±3.49% (53 runs sampled)
