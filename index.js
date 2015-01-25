@@ -3,9 +3,6 @@ module.exports.simulator = require('ngraph.physics.simulator');
 
 var guard = require('varta');
 
-// Maximum movement of the system at which system should be considered as stable
-var MAX_MOVEMENT = 0.001;
-
 /**
  * Creates force based layout for a given graph.
  * @param {ngraph.graph} graph which needs to be laid out
@@ -18,27 +15,27 @@ function createLayout(graph, physicsSimulator) {
     throw new Error('Graph structure cannot be undefined');
   }
 
-  var simulator = require('ngraph.physics.simulator'),
-      physics = require('ngraph.physics.primitives');
+  var simulator = require('ngraph.physics.simulator');
 
   physicsSimulator = physicsSimulator || simulator();
 
   guard(physicsSimulator, 'physicsSimulator').has('step', 'getBestNewBodyPosition', 'addBodyAt');
 
-  var nodeBodies = typeof Object.create === 'function' ? Object.create(null) : {},
-      springs = {};
+  var nodeBodies = typeof Object.create === 'function' ? Object.create(null) : {};
+  var springs = {};
+
+  var springTransform = physicsSimulator.settings.springTransform || noop;
 
   // Initialize physical objects according to what we have in the graph:
   initPhysics();
   listenToGraphEvents();
 
-  return {
+  var api = {
     /**
      * Performs one step of iterative layout algorithm
      */
     step: function() {
-      var totalMovement = physicsSimulator.step();
-      return totalMovement < MAX_MOVEMENT;
+      return physicsSimulator.step();
     },
 
     /**
@@ -50,8 +47,12 @@ function createLayout(graph, physicsSimulator) {
 
     /**
      * Sets position of a node to a given coordinates
+     * @param {string} nodeId node identifier
+     * @param {number} x position of a node
+     * @param {number} y position of a node
+     * @param {number=} z position of node (only if applicable to body)
      */
-    setNodePosition: function (nodeId, x, y) {
+    setNodePosition: function (nodeId) {
       var body = getInitializedBody(nodeId);
       body.setPosition.apply(body, Array.prototype.slice.call(arguments, 1));
     },
@@ -105,10 +106,52 @@ function createLayout(graph, physicsSimulator) {
     },
 
     /**
+     * Gets physical body for a given node id. If node is not found undefined
+     * value is returned.
+     */
+    getBody: getBody,
+
+    /**
+     * Gets spring for a given edge.
+     *
+     * @param {string} linkId link identifer. If two arguments are passed then
+     * this argument is treated as formNodeId
+     * @param {string=} toId when defined this parameter denotes head of the link
+     * and first argument is trated as tail of the link (fromId)
+     */
+    getSpring: getSpring,
+
+    /**
      * [Read only] Gets current physics simulator
      */
     simulator: physicsSimulator
   };
+
+  return api;
+
+  function getSpring(fromId, toId) {
+    var linkId;
+    if (toId === undefined) {
+      if (typeof fromId === 'string') {
+        // assume fromId as a linkId:
+        linkId = fromId;
+      } else {
+        // assume fromId to be a link object:
+        linkId = fromId.id;
+      }
+    } else {
+      // toId is defined, should grab link:
+      var link = graph.hasLink(fromId, toId);
+      if (!link) return;
+      linkId = link.id;
+    }
+
+    return springs[linkId];
+  }
+
+  function getBody(nodeId) {
+    return nodeBodies[nodeId];
+  }
 
   function listenToGraphEvents() {
     graph.on('changed', onGraphChanged);
@@ -186,6 +229,8 @@ function createLayout(graph, physicsSimulator) {
         toBody  = nodeBodies[link.toId],
         spring = physicsSimulator.addSpring(fromBody, toBody, link.length);
 
+    springTransform(link, spring);
+
     springs[link.id] = spring;
   }
 
@@ -258,3 +303,5 @@ function createLayout(graph, physicsSimulator) {
     return 1 + graph.getLinks(nodeId).length / 3.0;
   }
 }
+
+function noop() { }

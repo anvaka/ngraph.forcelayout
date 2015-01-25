@@ -7,6 +7,35 @@ test('it exposes simulator', function(t) {
   t.end();
 });
 
+test('it returns spring', function(t) {
+  var g = createGraph();
+  var layout = createLayout(g);
+
+  var link = g.addLink(1, 2);
+
+  var springForLink = layout.getSpring(link);
+  var springForLinkId = layout.getSpring(link.id);
+  var springForFromTo = layout.getSpring(1, 2);
+
+  t.ok(springForLink, 'spring is here');
+  t.ok(springForLinkId === springForLink, 'Spring is the same');
+  t.ok(springForFromTo === springForLink, 'Spring is the same');
+  t.end();
+});
+
+test('it returns body', function(t) {
+  var g = createGraph();
+  var layout = createLayout(g);
+
+  g.addLink(1, 2);
+
+  t.ok(layout.getBody(1), 'node 1 has body');
+  t.ok(layout.getBody(2), 'node 2 has body');
+  t.notOk(layout.getBody(4), 'there is no node 4');
+
+  t.end();
+});
+
 test('does not tolerate bad input', function (t) {
   t.throws(missingGraph);
   t.throws(invalidNodeId);
