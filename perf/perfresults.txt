@@ -1,2 +1,11 @@
-Grid 20x20, 20 layout steps:
-Run default x 29.79 ops/sec ±3.49% (53 runs sampled)
+{ 'ngraph.forcelayout': '0.0.15',
+  npm: '2.5.1',
+  ares: '1.10.0-DEV',
+  http_parser: '2.3.0',
+  modules: '43',
+  node: '1.3.0',
+  openssl: '1.0.1k',
+  uv: '1.4.0',
+  v8: '4.1.0.14',
+  zlib: '1.2.8' }
+Run default x 32.38 ops/sec ±2.69% (56 runs sampled)

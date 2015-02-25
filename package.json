@@ -4,7 +4,8 @@
   "description": "Force directed graph drawing layout",
   "main": "index.js",
   "scripts": {
-    "test": "tap test/*.js"
+    "test": "tap test/*.js",
+    "perf": "npm version && node perf/test.js"
   },
   "repository": {
     "type": "git",
