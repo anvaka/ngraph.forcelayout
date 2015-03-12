@@ -119,7 +119,7 @@ Finally, it's often desirable to know how much space does our graph occupy. To q
 With [npm](https://npmjs.org) do:
 
 ```
-npm install ngraph.layout
+npm install ngraph.forcelayout
 ```
 
 # license
