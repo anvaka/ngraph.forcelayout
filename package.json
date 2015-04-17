@@ -27,7 +27,6 @@
     "benchmark": "~1.0.0"
   },
   "dependencies": {
-    "ngraph.physics.simulator": "0.0.10",
-    "varta": "0.1.1"
+    "ngraph.physics.simulator": "0.0.10"
   }
 }

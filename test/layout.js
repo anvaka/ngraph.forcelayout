@@ -275,11 +275,12 @@ test('physics simulator', function (t) {
     t.end();
   });
 
-  t.test('can override default simulator', function (t) {
-    var simulator = require('ngraph.physics.simulator')();
+  t.test('can override default settings', function (t) {
     var graph = createGraph();
-    var layout = createLayout(graph, simulator);
-    t.equals(layout.simulator, simulator, 'Simulator is overridden');
+    var layout = createLayout(graph, {
+      theta: 1.5
+    });
+    t.equals(layout.simulator.theta(), 1.5, 'Simulator settings are overridden');
     t.end();
   });
 
@@ -289,7 +290,7 @@ test('physics simulator', function (t) {
 test('it removes removed nodes', function (t) {
   var graph = createGraph();
   var layout = createLayout(graph);
-  var link = graph.addLink(1, 2);
+  graph.addLink(1, 2);
 
   layout.step();
   graph.clear();
