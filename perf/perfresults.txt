@@ -11,5 +11,5 @@
   uv: '1.5.0',
   v8: '3.28.71.19',
   zlib: '1.2.8' }
-Run default x 29.46 ops/sec ±4.42% (51 runs sampled)
+Run default x 32.74 ops/sec ±3.45% (57 runs sampled)
 Fastest is Run default
