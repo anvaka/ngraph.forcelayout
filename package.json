@@ -21,12 +21,13 @@
     "url": "https://github.com/anvaka/ngraph.forcelayout/issues"
   },
   "devDependencies": {
-    "tap": "~0.4.4",
-    "ngraph.graph": "~0.0.11",
+    "benchmark": "~1.0.0",
     "ngraph.generators": "0.0.15",
-    "benchmark": "~1.0.0"
+    "ngraph.graph": "~0.0.11",
+    "tap": "^2.0.0"
   },
   "dependencies": {
-    "ngraph.physics.simulator": "0.0.11"
+    "ngraph.events": "0.0.3",
+    "ngraph.physics.simulator": "0.0.12"
   }
 }

@@ -1,6 +1,8 @@
 module.exports = createLayout;
 module.exports.simulator = require('ngraph.physics.simulator');
 
+var eventify = require('ngraph.events');
+
 /**
  * Creates force based layout for a given graph.
  * @param {ngraph.graph} graph which needs to be laid out
@@ -23,7 +25,7 @@ function createLayout(graph, physicsSettings) {
 
   // Initialize physical objects according to what we have in the graph:
   initPhysics();
-  listenToGraphEvents();
+  listenToEvents();
 
   var api = {
     /**
@@ -98,6 +100,7 @@ function createLayout(graph, physicsSettings) {
      */
     dispose: function() {
       graph.off('changed', onGraphChanged);
+      physicsSimulator.off('stable', onStableChanged);
     },
 
     /**
@@ -122,12 +125,13 @@ function createLayout(graph, physicsSettings) {
     simulator: physicsSimulator
   };
 
+  eventify(api);
   return api;
 
   function getSpring(fromId, toId) {
     var linkId;
     if (toId === undefined) {
-      if (typeof fromId === 'string') {
+      if (typeof fromId !== 'object') {
         // assume fromId as a linkId:
         linkId = fromId;
       } else {
@@ -148,8 +152,13 @@ function createLayout(graph, physicsSettings) {
     return nodeBodies[nodeId];
   }
 
-  function listenToGraphEvents() {
+  function listenToEvents() {
     graph.on('changed', onGraphChanged);
+    physicsSimulator.on('stable', onStableChanged);
+  }
+
+  function onStableChanged(isStable) {
+    api.fire('stable', isStable);
   }
 
   function onGraphChanged(changes) {
@@ -295,7 +304,9 @@ function createLayout(graph, physicsSettings) {
    * @returns {Number} recommended mass of the body;
    */
   function nodeMass(nodeId) {
-    return 1 + graph.getLinks(nodeId).length / 3.0;
+    var links = graph.getLinks(nodeId);
+    if (!links) return 1;
+    return 1 + links.length / 3.0;
   }
 }
 

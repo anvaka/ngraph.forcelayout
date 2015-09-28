@@ -71,6 +71,23 @@ test('can add bodies which are standard prototype names', function (t) {
   t.end();
 });
 
+test('it can step when no links present', function (t) {
+  var graph = createGraph();
+  graph.addNode('constructor');
+  graph.addNode('watch');
+
+  var layout = createLayout(graph);
+  layout.step();
+
+  graph.forEachNode(function (node) {
+    var pos = layout.getNodePosition(node.id);
+    t.ok(pos && typeof pos.x === 'number' &&
+         typeof pos.y === 'number', 'Position is defined');
+  });
+
+  t.end();
+});
+
 test('layout initializes nodes positions', function (t) {
   var graph = createGraph();
   graph.addLink(1, 2);
