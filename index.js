@@ -78,6 +78,13 @@ function createLayout(graph, physicsSettings) {
       return physicsSimulator.getBBox();
     },
 
+    /**
+     * Iterats over each body in the layout simulator and performs a callback(body, nodeId)
+     */
+    forEachBody: function(cb) {
+      Object.keys(nodeBodies).forEach(function(bodyId) { cb(nodeBodies[bodyId], bodyId); });
+    },
+
     /*
      * Requests layout algorithm to pin/unpin node to its current position
      * Pinned nodes should not be affected by layout algorithm and always

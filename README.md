@@ -136,6 +136,38 @@ var rect = layout.getGraphRect();
 // rect.x2, rect.y2 - bottom right coordinates of bounding box
 ```
 
+## Manipulating bodies
+
+This is advanced technique to get to internal state of the simulator. If you need
+to get a node position use regular `layout.getNodePosition(nodeId)` described
+above.
+
+In some cases you really need to manipulate physic attributes on a body level.
+To get to a single body by node id:
+
+``` js
+var graph = createGraph();
+graph.addLink(1, 2);
+
+// Get body that represents node 1:
+var body = layout.getBody(1);
+assert(
+  typeof body.pos.x === 'number' &&
+  typeof body.pos.y === 'number, 'Body has positoin');
+assert(body.mass, 'Body has mass');
+```
+
+To iterate over all bodies at once:
+
+``` js
+layout.forEachBody(function(body, nodeId) {
+  assert(
+    typeof body.pos.x === 'number' &&
+    typeof body.pos.y === 'number, 'Body has positoin');
+  assert(graph.getNode(nodeId), 'NodeId is coming from the graph');
+});
+```
+
 # install
 
 With [npm](https://npmjs.org) do:

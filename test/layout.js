@@ -33,6 +33,10 @@ test('it returns body', function(t) {
   t.ok(layout.getBody(2), 'node 2 has body');
   t.notOk(layout.getBody(4), 'there is no node 4');
 
+  var body = layout.getBody(1);
+  t.ok(body.pos.x && body.pos.y, 'Body has a position');
+  t.ok(body.mass, 'Body has a mass');
+
   t.end();
 });
 
@@ -316,6 +320,22 @@ test('it removes removed nodes', function (t) {
   var rect = layout.getGraphRect();
 
   t.ok(rectangleIsEmpty(rect), 'Graph rect is empty');
+  t.end();
+});
+
+test('it can iterate over bodies', function(t) {
+  var graph = createGraph();
+  var layout = createLayout(graph);
+  graph.addLink(1, 2);
+  var calledCount = 0;
+
+  layout.forEachBody(function(body, bodyId) {
+    t.ok(body.pos, bodyId + ' has position');
+    t.ok(graph.getNode(bodyId), bodyId + ' matches a graph node');
+    calledCount += 1;
+  });
+
+  t.equals(calledCount, 2, 'Both bodies are visited');
   t.end();
 });
 
