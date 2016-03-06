@@ -153,7 +153,7 @@ graph.addLink(1, 2);
 var body = layout.getBody(1);
 assert(
   typeof body.pos.x === 'number' &&
-  typeof body.pos.y === 'number, 'Body has positoin');
+  typeof body.pos.y === 'number', 'Body has positoin');
 assert(body.mass, 'Body has mass');
 ```
 
@@ -163,7 +163,7 @@ To iterate over all bodies at once:
 layout.forEachBody(function(body, nodeId) {
   assert(
     typeof body.pos.x === 'number' &&
-    typeof body.pos.y === 'number, 'Body has positoin');
+    typeof body.pos.y === 'number', 'Body has positoin');
   assert(graph.getNode(nodeId), 'NodeId is coming from the graph');
 });
 ```
