@@ -5,6 +5,7 @@ var eventify = require('ngraph.events');
 
 /**
  * Creates force based layout for a given graph.
+ *
  * @param {ngraph.graph} graph which needs to be laid out
  * @param {object} physicsSettings if you need custom settings
  * for physics simulator you can pass your own settings here. If it's not passed
@@ -18,12 +19,12 @@ function createLayout(graph, physicsSettings) {
   var createSimulator = require('ngraph.physics.simulator');
   var physicsSimulator = createSimulator(physicsSettings);
 
-  var nodeBodies = typeof Object.create === 'function' ? Object.create(null) : {};
+  var nodeBodies = Object.create(null);
   var springs = {};
 
   var springTransform = physicsSimulator.settings.springTransform || noop;
 
-  // Initialize physical objects according to what we have in the graph:
+  // Initialize physics with what we have in the graph:
   initPhysics();
   listenToEvents();
 
@@ -133,6 +134,7 @@ function createLayout(graph, physicsSettings) {
   };
 
   eventify(api);
+
   return api;
 
   function getSpring(fromId, toId) {
