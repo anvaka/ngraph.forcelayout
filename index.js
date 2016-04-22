@@ -21,6 +21,7 @@ function createLayout(graph, physicsSettings) {
 
   var nodeBodies = Object.create(null);
   var springs = {};
+  var bodiesCount = 0;
 
   var springTransform = physicsSimulator.settings.springTransform || noop;
 
@@ -28,12 +29,38 @@ function createLayout(graph, physicsSettings) {
   initPhysics();
   listenToEvents();
 
+  var wasStable = false;
+  var count = 0;
+
   var api = {
     /**
      * Performs one step of iterative layout algorithm
+     *
+     * @returns {boolean} true if the system should be considered stable; Flase otherwise.
+     * The system is stable if no further call to `step()` can improve the layout.
      */
     step: function() {
-      return physicsSimulator.step();
+      if (bodiesCount === 0) return true; // TODO: This will never fire 'stable'
+
+      var lastMove = physicsSimulator.step();
+
+      // Save the movement in case if someone wants to query it in the step
+      // callback.
+      api.lastMove = lastMove;
+
+      // Allow listeners to perform low-level actions after nodes are updated.
+      api.fire('step');
+
+      var ratio = lastMove/bodiesCount;
+      var isStableNow = ratio <= 0.01; // TODO: The number is somewhat arbitrary...
+
+      if (wasStable !== isStableNow) {
+        wasStable = isStableNow;
+        onStableChanged(isStableNow);
+        console.log(count);
+      }
+
+      return isStableNow;
     },
 
     /**
@@ -80,11 +107,9 @@ function createLayout(graph, physicsSettings) {
     },
 
     /**
-     * Iterats over each body in the layout simulator and performs a callback(body, nodeId)
+     * Iterates over each body in the layout simulator and performs a callback(body, nodeId)
      */
-    forEachBody: function(cb) {
-      Object.keys(nodeBodies).forEach(function(bodyId) { cb(nodeBodies[bodyId], bodyId); });
-    },
+    forEachBody: forEachBody,
 
     /*
      * Requests layout algorithm to pin/unpin node to its current position
@@ -108,7 +133,7 @@ function createLayout(graph, physicsSettings) {
      */
     dispose: function() {
       graph.off('changed', onGraphChanged);
-      physicsSimulator.off('stable', onStableChanged);
+      api.fire('disposed');
     },
 
     /**
@@ -130,12 +155,28 @@ function createLayout(graph, physicsSettings) {
     /**
      * [Read only] Gets current physics simulator
      */
-    simulator: physicsSimulator
+    simulator: physicsSimulator,
+
+    /**
+     * Gets the graph that was used for layout
+     */
+    graph: graph,
+
+    /**
+     * Gets amount of movement performed during last step opeartion
+     */
+    lastMove: 0
   };
 
   eventify(api);
 
   return api;
+
+  function forEachBody(cb) {
+    Object.keys(nodeBodies).forEach(function(bodyId) {
+      cb(nodeBodies[bodyId], bodyId);
+    });
+  }
 
   function getSpring(fromId, toId) {
     var linkId;
@@ -163,7 +204,6 @@ function createLayout(graph, physicsSettings) {
 
   function listenToEvents() {
     graph.on('changed', onGraphChanged);
-    physicsSimulator.on('stable', onStableChanged);
   }
 
   function onStableChanged(isStable) {
@@ -189,12 +229,17 @@ function createLayout(graph, physicsSettings) {
         }
       }
     }
+    bodiesCount = graph.getNodesCount();
   }
 
   function initPhysics() {
+    bodiesCount = 0;
+
     graph.forEachNode(function (node) {
       initBody(node.id);
+      bodiesCount += 1;
     });
+
     graph.forEachLink(initLink);
   }
 
@@ -213,6 +258,7 @@ function createLayout(graph, physicsSettings) {
       }
 
       body = physicsSimulator.addBodyAt(pos);
+      body.id = nodeId;
 
       nodeBodies[nodeId] = body;
       updateBodyMass(nodeId);

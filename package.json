@@ -28,6 +28,6 @@
   },
   "dependencies": {
     "ngraph.events": "0.0.3",
-    "ngraph.physics.simulator": "0.0.12"
+    "ngraph.physics.simulator": "^0.1.0"
   }
 }
