@@ -30,7 +30,6 @@ function createLayout(graph, physicsSettings) {
   listenToEvents();
 
   var wasStable = false;
-  var count = 0;
 
   var api = {
     /**
@@ -57,7 +56,6 @@ function createLayout(graph, physicsSettings) {
       if (wasStable !== isStableNow) {
         wasStable = isStableNow;
         onStableChanged(isStableNow);
-        console.log(count);
       }
 
       return isStableNow;
