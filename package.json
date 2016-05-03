@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "tap test/*.js",
-    "perf": "npm version && node perf/test.js"
+    "perf": "npm version && node perf/test.js",
+    "cover": "istanbul cover --dir reports/coverage node_modules/argg test/*.js"
   },
   "repository": {
     "type": "git",
@@ -21,7 +22,9 @@
     "url": "https://github.com/anvaka/ngraph.forcelayout/issues"
   },
   "devDependencies": {
+    "argg": "0.0.2",
     "benchmark": "~1.0.0",
+    "istanbul": "^0.4.3",
     "ngraph.generators": "0.0.15",
     "ngraph.graph": "~0.0.11",
     "tap": "^2.0.0"
