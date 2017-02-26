@@ -123,7 +123,8 @@ var layout = require('ngraph.forcelayout')(graph, physicsSettings);
 ```
 
 You can get current physics simulator from layout by checking `layout.simulator`
-property. This is a read only property.
+property. This is a read only property. The default physics simulator can be changed
+by supplying a `createSimulator` function in the `physicsSettings` object. 
 
 ## Space occupied by graph
 
