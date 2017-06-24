@@ -40,6 +40,23 @@ test('it returns body', function(t) {
   t.end();
 });
 
+test('it can set node mass', function(t) {
+  var g = createGraph();
+  g.addNode('anvaka');
+
+  var layout = createLayout(g, {
+    nodeMass: function (nodeId) {
+      t.equals(nodeId, 'anvaka', 'correct node is called')
+      return 78; // my mass in killos :P
+    }
+  });
+
+  var body = layout.getBody('anvaka');
+  t.equals(body.mass, 78, 'Mass is okay');
+
+  t.end();
+});
+
 test('does not tolerate bad input', function (t) {
   t.throws(missingGraph);
   t.throws(invalidNodeId);

@@ -19,6 +19,11 @@ function createLayout(graph, physicsSettings) {
   var createSimulator = require('ngraph.physics.simulator');
   var physicsSimulator = createSimulator(physicsSettings);
 
+  var nodeMass = defaultNodeMass
+  if (physicsSettings && typeof physicsSettings.nodeMass === 'function') {
+    nodeMass = physicsSettings.nodeMass
+  }
+
   var nodeBodies = Object.create(null);
   var springs = {};
   var bodiesCount = 0;
@@ -356,7 +361,7 @@ function createLayout(graph, physicsSettings) {
    * @param {String|Number} nodeId identifier of a node, for which body mass needs to be calculated
    * @returns {Number} recommended mass of the body;
    */
-  function nodeMass(nodeId) {
+  function defaultNodeMass(nodeId) {
     var links = graph.getLinks(nodeId);
     if (!links) return 1;
     return 1 + links.length / 3.0;
