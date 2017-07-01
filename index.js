@@ -332,6 +332,9 @@ function createLayout(graph, physicsSettings) {
   function updateBodyMass(nodeId) {
     var body = nodeBodies[nodeId];
     body.mass = nodeMass(nodeId);
+    if (Number.isNaN(body.mass)) {
+      throw new Error('Node mass should be a number')
+    }
   }
 
   /**
