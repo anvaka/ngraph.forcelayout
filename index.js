@@ -83,6 +83,7 @@ function createLayout(graph, physicsSettings) {
     setNodePosition: function (nodeId) {
       var body = getInitializedBody(nodeId);
       body.setPosition.apply(body, Array.prototype.slice.call(arguments, 1));
+      physicsSimulator.invalidateBBox();
     },
 
     /**

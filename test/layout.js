@@ -156,6 +156,20 @@ test('Layout can set node position', function (t) {
   t.end();
 });
 
+test('Layout updates bounding box when it sets node position', function (t) {
+  var graph = createGraph();
+  graph.addLink(1, 2);
+
+  var layout = createLayout(graph);
+  layout.setNodePosition(1, 42, 42);
+  layout.setNodePosition(2, 40, 40);
+  var rect = layout.getGraphRect();
+  t.ok(rect.x2 <= 42); t.ok(rect.y2 <= 42);
+  t.ok(rect.x1 >= 40); t.ok(rect.y1 >= 40);
+
+  t.end();
+});
+
 test('layout initializes links', function (t) {
   var graph = createGraph();
   var node1 = graph.addNode(1); node1.position = {x : -1000, y: 0};
