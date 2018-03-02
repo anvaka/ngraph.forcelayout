@@ -30,7 +30,7 @@
     "tap": "^2.0.0"
   },
   "dependencies": {
-    "ngraph.events": "0.0.3",
-    "ngraph.physics.simulator": "^0.1.1"
+    "ngraph.events": "0.0.4",
+    "ngraph.physics.simulator": "^0.3.0"
   }
 }
