@@ -40,7 +40,7 @@ function createLayout(graph, physicsSettings) {
     /**
      * Performs one step of iterative layout algorithm
      *
-     * @returns {boolean} true if the system should be considered stable; Flase otherwise.
+     * @returns {boolean} true if the system should be considered stable; False otherwise.
      * The system is stable if no further call to `step()` can improve the layout.
      */
     step: function() {
@@ -152,7 +152,7 @@ function createLayout(graph, physicsSettings) {
      * @param {string} linkId link identifer. If two arguments are passed then
      * this argument is treated as formNodeId
      * @param {string=} toId when defined this parameter denotes head of the link
-     * and first argument is trated as tail of the link (fromId)
+     * and first argument is treated as tail of the link (fromId)
      */
     getSpring: getSpring,
 
@@ -167,7 +167,7 @@ function createLayout(graph, physicsSettings) {
     graph: graph,
 
     /**
-     * Gets amount of movement performed during last step opeartion
+     * Gets amount of movement performed during last step operation
      */
     lastMove: 0
   };
@@ -340,7 +340,7 @@ function createLayout(graph, physicsSettings) {
 
   /**
    * Checks whether graph node has in its settings pinned attribute,
-   * which means layout algorithm cannot move it. Node can be preconfigured
+   * which means layout algorithm cannot move it. Node can be marked
    * as pinned, if it has "isPinned" attribute, or when node.data has it.
    *
    * @param {Object} node a graph node to check

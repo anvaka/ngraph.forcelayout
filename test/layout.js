@@ -47,7 +47,7 @@ test('it can set node mass', function(t) {
   var layout = createLayout(g, {
     nodeMass: function (nodeId) {
       t.equals(nodeId, 'anvaka', 'correct node is called')
-      return 78; // my mass in killos :P
+      return 84; // my mass in kilograms :P
     }
   });
 
@@ -208,7 +208,7 @@ test('layout respects proposed original position', function (t) {
   t.end();
 });
 
-test('layout has defined graph rectange', function (t) {
+test('layout has defined graph rectangle', function (t) {
   t.test('empty graph', function (t) {
     var graph = createGraph();
     var layout = createLayout(graph);
@@ -347,7 +347,7 @@ test('it removes removed nodes', function (t) {
   layout.step();
   graph.clear();
 
-  // since we removed evrything from graph rect should be empty:
+  // since we removed everything from graph rect should be empty:
   var rect = layout.getGraphRect();
 
   t.ok(rectangleIsEmpty(rect), 'Graph rect is empty');
