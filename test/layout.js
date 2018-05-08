@@ -52,7 +52,7 @@ test('it can set node mass', function(t) {
   });
 
   var body = layout.getBody('anvaka');
-  t.equals(body.mass, 78, 'Mass is okay');
+  t.equals(body.mass, 84, 'Mass is okay');
 
   t.end();
 });
