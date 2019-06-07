@@ -1,12 +1,11 @@
 {
   "name": "ngraph.forcelayout",
-  "version": "0.5.0",
+  "version": "1.0.0",
   "description": "Force directed graph drawing layout",
   "main": "index.js",
   "scripts": {
     "test": "tap test/*.js",
-    "perf": "npm version && node perf/test.js",
-    "cover": "istanbul cover --dir reports/coverage node_modules/argg test/*.js"
+    "perf": "npm version && node perf/test.js"
   },
   "repository": {
     "type": "git",
@@ -22,15 +21,13 @@
     "url": "https://github.com/anvaka/ngraph.forcelayout/issues"
   },
   "devDependencies": {
-    "argg": "0.0.2",
     "benchmark": "~1.0.0",
-    "istanbul": "^0.4.3",
-    "ngraph.generators": "0.0.15",
-    "ngraph.graph": "~0.0.14",
-    "tap": "^11.1.4"
+    "ngraph.generators": "^18.0.1",
+    "ngraph.graph": "^18.0.0",
+    "tap": "^14.2.2"
   },
   "dependencies": {
-    "ngraph.events": "0.0.4",
-    "ngraph.physics.simulator": "^0.3.0"
+    "ngraph.events": "^1.0.0",
+    "ngraph.physics.simulator": "^1.0.0"
   }
 }
