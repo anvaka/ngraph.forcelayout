@@ -1,19 +1,23 @@
-> ngraph.forcelayout@0.5.0 perf /Users/anvaka/projects/ngraph/modules/ngraph.forcelayout
 > npm version && node perf/test.js
 
-{ 'ngraph.forcelayout': '0.5.0',
-  npm: '3.10.10',
-  ares: '1.10.1-DEV',
-  cldr: '30.0.2',
-  http_parser: '2.7.0',
-  icu: '58.1',
-  modules: '51',
-  node: '7.2.1',
-  openssl: '1.0.2j',
-  tz: '2016g',
-  unicode: '9.0',
-  uv: '1.10.1',
-  v8: '5.4.500.44',
-  zlib: '1.2.8' }
-Run default x 51.33 ops/sec ±3.00% (68 runs sampled)
+{
+  'ngraph.forcelayout': '1.0.0',
+  npm: '6.13.1',
+  ares: '1.15.0',
+  brotli: '1.0.7',
+  cldr: '35.1',
+  icu: '64.2',
+  llhttp: '1.1.4',
+  modules: '79',
+  napi: '5',
+  nghttp2: '1.40.0',
+  node: '13.2.0',
+  openssl: '1.1.1d',
+  tz: '2019c',
+  unicode: '12.1',
+  uv: '1.33.1',
+  v8: '7.9.317.23-node.20',
+  zlib: '1.2.11'
+}
+Run default x 58.06 ops/sec ±2.20% (61 runs sampled)
 Fastest is Run default

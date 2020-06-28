@@ -24,7 +24,7 @@ function createLayout(graph, physicsSettings) {
     nodeMass = physicsSettings.nodeMass
   }
 
-  var nodeBodies = Object.create(null);
+  var nodeBodies = new Map();
   var springs = {};
   var bodiesCount = 0;
 
@@ -177,9 +177,9 @@ function createLayout(graph, physicsSettings) {
   return api;
 
   function forEachBody(cb) {
-    Object.keys(nodeBodies).forEach(function(bodyId) {
-      cb(nodeBodies[bodyId], bodyId);
-    });
+    nodeBodies.forEach(function(body, bodyId) {
+      cb(body, bodyId);
+    })
   }
 
   function getSpring(fromId, toId) {
@@ -203,7 +203,7 @@ function createLayout(graph, physicsSettings) {
   }
 
   function getBody(nodeId) {
-    return nodeBodies[nodeId];
+    return nodeBodies.get(nodeId);
   }
 
   function listenToEvents() {
@@ -248,7 +248,7 @@ function createLayout(graph, physicsSettings) {
   }
 
   function initBody(nodeId) {
-    var body = nodeBodies[nodeId];
+    var body = nodeBodies.get(nodeId);
     if (!body) {
       var node = graph.getNode(nodeId);
       if (!node) {
@@ -264,7 +264,7 @@ function createLayout(graph, physicsSettings) {
       body = physicsSimulator.addBodyAt(pos);
       body.id = nodeId;
 
-      nodeBodies[nodeId] = body;
+      nodeBodies.set(nodeId, body);
       updateBodyMass(nodeId);
 
       if (isNodeOriginallyPinned(node)) {
@@ -275,11 +275,9 @@ function createLayout(graph, physicsSettings) {
 
   function releaseNode(node) {
     var nodeId = node.id;
-    var body = nodeBodies[nodeId];
+    var body = nodeBodies.get(nodeId);
     if (body) {
-      nodeBodies[nodeId] = null;
-      delete nodeBodies[nodeId];
-
+      nodeBodies.delete(nodeId);
       physicsSimulator.removeBody(body);
     }
   }
@@ -288,8 +286,8 @@ function createLayout(graph, physicsSettings) {
     updateBodyMass(link.fromId);
     updateBodyMass(link.toId);
 
-    var fromBody = nodeBodies[link.fromId],
-        toBody  = nodeBodies[link.toId],
+    var fromBody = nodeBodies.get(link.fromId),
+        toBody  = nodeBodies.get(link.toId),
         spring = physicsSimulator.addSpring(fromBody, toBody, link.length);
 
     springTransform(link, spring);
@@ -321,7 +319,7 @@ function createLayout(graph, physicsSettings) {
     var maxNeighbors = Math.min(node.links.length, 2);
     for (var i = 0; i < maxNeighbors; ++i) {
       var link = node.links[i];
-      var otherBody = link.fromId !== node.id ? nodeBodies[link.fromId] : nodeBodies[link.toId];
+      var otherBody = link.fromId !== node.id ? nodeBodies.get(link.fromId) : nodeBodies.get(link.toId);
       if (otherBody && otherBody.pos) {
         neighbors.push(otherBody);
       }
@@ -331,7 +329,7 @@ function createLayout(graph, physicsSettings) {
   }
 
   function updateBodyMass(nodeId) {
-    var body = nodeBodies[nodeId];
+    var body = nodeBodies.get(nodeId);
     body.mass = nodeMass(nodeId);
     if (Number.isNaN(body.mass)) {
       throw new Error('Node mass should be a number')
@@ -351,10 +349,10 @@ function createLayout(graph, physicsSettings) {
   }
 
   function getInitializedBody(nodeId) {
-    var body = nodeBodies[nodeId];
+    var body = nodeBodies.get(nodeId);
     if (!body) {
       initBody(nodeId);
-      body = nodeBodies[nodeId];
+      body = nodeBodies.get(nodeId);
     }
     return body;
   }
