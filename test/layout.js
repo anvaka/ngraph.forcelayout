@@ -76,6 +76,17 @@ test('does not tolerate bad input', function (t) {
   }
 });
 
+test('it fires stable on empty graph', function(t) {
+  var graph = createGraph();
+  var layout = createLayout(graph);
+  layout.on('stable', endTest);
+  layout.step();
+
+  function endTest() {
+    t.end();
+  }
+})
+
 test('can add bodies which are standard prototype names', function (t) {
   var graph = createGraph();
   graph.addLink('constructor', 'watch');

@@ -44,7 +44,10 @@ function createLayout(graph, physicsSettings) {
      * The system is stable if no further call to `step()` can improve the layout.
      */
     step: function() {
-      if (bodiesCount === 0) return true; // TODO: This will never fire 'stable'
+      if (bodiesCount === 0) {
+        updateStableStatus(true);
+        return true;
+      }
 
       var lastMove = physicsSimulator.step();
 
@@ -57,11 +60,8 @@ function createLayout(graph, physicsSettings) {
 
       var ratio = lastMove/bodiesCount;
       var isStableNow = ratio <= 0.01; // TODO: The number is somewhat arbitrary...
+      updateStableStatus(isStableNow);
 
-      if (wasStable !== isStableNow) {
-        wasStable = isStableNow;
-        onStableChanged(isStableNow);
-      }
 
       return isStableNow;
     },
@@ -175,6 +175,13 @@ function createLayout(graph, physicsSettings) {
   eventify(api);
 
   return api;
+
+  function updateStableStatus(isStableNow) {
+    if (wasStable !== isStableNow) {
+      wasStable = isStableNow;
+      onStableChanged(isStableNow);
+    }
+  }
 
   function forEachBody(cb) {
     nodeBodies.forEach(function(body, bodyId) {
