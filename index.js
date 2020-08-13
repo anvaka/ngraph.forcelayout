@@ -1,5 +1,5 @@
 module.exports = createLayout;
-module.exports.simulator = require('ngraph.physics.simulator');
+module.exports.simulator = require('./lib/physicsSimulator');
 
 var eventify = require('ngraph.events');
 
@@ -16,7 +16,7 @@ function createLayout(graph, physicsSettings) {
     throw new Error('Graph structure cannot be undefined');
   }
 
-  var createSimulator = (physicsSettings && physicsSettings.createSimulator) || require('ngraph.physics.simulator');
+  var createSimulator = (physicsSettings && physicsSettings.createSimulator) || require('./lib/physicsSimulator');;
   var physicsSimulator = createSimulator(physicsSettings);
 
   var nodeMass = defaultNodeMass
