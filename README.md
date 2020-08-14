@@ -100,12 +100,20 @@ If you want to stop monitoring graph events, call `dispose()` method:
 layout.dispose();
 ```
 
-## Configuring physics
+## Physics Simulator
 
-Since this is force directed layout, sometimes it's desirable to adjust physics simulator.
-Please refer to [ngraph.physics.simulator](https://github.com/anvaka/ngraph.physics.simulator)
-to see source code and simulator parameters. Once you have instance of physics
-simulator you can pass it as a second argument to layout constructor:
+Simulator calculates forces acting on each body and then deduces their position via Newton's law.
+There are three major forces in the system:
+
+1. Spring force keeps connected nodes together via [Hooke's law](http://en.wikipedia.org/wiki/Hooke's_law)
+2. Each body repels each other via [Coulomb's law](http://en.wikipedia.org/wiki/Coulomb's_law)
+3. The drag force slows the entire simulation down, helping with convergence.
+
+Body forces are calculated in `n*lg(n)` time with help of Barnes-Hut algorithm implemented in 
+[quadtree module](https://github.com/anvaka/ngraph.quadtreebh). [Euler method](http://en.wikipedia.org/wiki/Euler_method) is then used to solve ordinary differential equation of Newton's law and get position of bodies.
+
+Please refer to [physicsSimulator](https://github.com/anvaka/ngraph.forcelayout/blob/master/lib/physicsSimulator.js)
+to see the source code and simulator parameters:
 
 ``` js
 // Configure
