@@ -16,10 +16,11 @@ function createLayout(graph, physicsSettings) {
     throw new Error('Graph structure cannot be undefined');
   }
 
-  var createSimulator = (physicsSettings && physicsSettings.createSimulator) || require('./lib/physicsSimulator');;
+  var createSimulator = (physicsSettings && physicsSettings.createSimulator) || require('./lib/physicsSimulator');
   var physicsSimulator = createSimulator(physicsSettings);
+  if (Array.isArray(physicsSettings)) throw new Error('Physics settings is expected to be an object');
 
-  var nodeMass = defaultNodeMass
+  var nodeMass = defaultNodeMass;
   if (physicsSettings && typeof physicsSettings.nodeMass === 'function') {
     nodeMass = physicsSettings.nodeMass
   }
@@ -157,6 +158,11 @@ function createLayout(graph, physicsSettings) {
     getSpring: getSpring,
 
     /**
+     * Returns length of cumulative force vector. The closer this to zero - the more stable the system is
+     */
+    getForceVectorLength: getForceVectorLength,
+
+    /**
      * [Read only] Gets current physics simulator
      */
     simulator: physicsSimulator,
@@ -187,6 +193,15 @@ function createLayout(graph, physicsSettings) {
     nodeBodies.forEach(function(body, bodyId) {
       cb(body, bodyId);
     })
+  }
+
+  function getForceVectorLength() {
+    let fx = 0, fy = 0;
+    forEachBody(body => {
+      fx += Math.abs(body.force.x);
+      fy += Math.abs(body.force.y);
+    });
+    return Math.sqrt(fx * fx + fy * fy);
   }
 
   function getSpring(fromId, toId) {
