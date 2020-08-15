@@ -33,7 +33,7 @@ test('Should bump bodies at same position', function (t) {
 test('Check spring force direction', function (t) {
   var springForce = createSpringForce();
 
-  t.test('Should contract two bodies when ideal length is smaler than actual', function (t) { 
+  t.test('Should contract two bodies when ideal length is smaller than actual', function (t) { 
     var body1 = new Body(-1, 0);
     var body2 = new Body(+1, 0);
     // length between two bodies is 2, while ideal length is 1. Each body
