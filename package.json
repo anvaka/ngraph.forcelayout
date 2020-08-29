@@ -30,7 +30,6 @@
     "ngraph.events": "^1.0.0",
     "ngraph.expose": "^1.0.0",
     "ngraph.merge": "^1.0.0",
-    "ngraph.quadtreebh": "^1.0.0",
     "ngraph.random": "^1.0.0"
   }
 }
