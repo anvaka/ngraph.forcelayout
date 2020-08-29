@@ -1,5 +1,5 @@
 var test = require('tap').test,
-    createSimulator = require('../lib/physicsSimulator'),
+    createSimulator = require('../lib/createPhysicsSimulator'),
     physics = require('../lib/primitives');
 
 test('Can step without bodies', function (t) {

@@ -110,9 +110,9 @@ There are three major forces in the system:
 3. The drag force slows the entire simulation down, helping with convergence.
 
 Body forces are calculated in `n*lg(n)` time with help of Barnes-Hut algorithm implemented in 
-[quadtree module](https://github.com/anvaka/ngraph.quadtreebh). [Euler method](http://en.wikipedia.org/wiki/Euler_method) is then used to solve ordinary differential equation of Newton's law and get position of bodies.
+[quadtree module](https://github.com/anvaka/ngraph.forcelayout/blob/master/lib/createQuadTree.js). [Euler method](http://en.wikipedia.org/wiki/Euler_method) is then used to solve ordinary differential equation of Newton's law and get position of bodies.
 
-Please refer to [physicsSimulator](https://github.com/anvaka/ngraph.forcelayout/blob/master/lib/physicsSimulator.js)
+Please refer to [physicsSimulator](https://github.com/anvaka/ngraph.forcelayout/blob/master/lib/createPhysicsSimulator.js)
 to see the source code and simulator parameters:
 
 ``` js
