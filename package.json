@@ -27,6 +27,7 @@
     "tap": "^14.10.7"
   },
   "dependencies": {
+    "kdbush": "^3.0.0",
     "ngraph.events": "^1.0.0",
     "ngraph.expose": "^1.0.0",
     "ngraph.merge": "^1.0.0",
