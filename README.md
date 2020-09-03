@@ -44,7 +44,7 @@ If you'd like to perform graph layout in space with more than two dimensions, ju
 argument to this line:
 
 ``` js
-let layout = createLayout('ngraph.forcelayout')(graph, {dimensions: 3}); // 3D layout
+let layout = createLayout(graph, {dimensions: 3}); // 3D layout
 let nodePosition = layout.getNodePosition(nodeId); // has {x, y, z} attributes
 ```
 
