@@ -1,9 +1,12 @@
-var harness = require('tap'),
-    createQuadTree = require('../lib/createQuadTree'),
-    Body = require('../lib/primitives').Body;
+var test = require('tap').test;
 
-harness.test('insert and update update forces', function (t) {
-  var tree = createQuadTree();
+var dimensions = 2;
+var createQuadTree = require('../lib/codeGenerators/generateQuadTree')(dimensions);
+var Body = require('../lib/codeGenerators/generateCreateBody')(dimensions);
+var random = require('ngraph.random').random(42);
+
+test('insert and update update forces', function (t) {
+  var tree = createQuadTree({}, random);
   var body = new Body();
   var clone = JSON.parse(JSON.stringify(body));
 
@@ -13,8 +16,8 @@ harness.test('insert and update update forces', function (t) {
   t.end();
 });
 
-harness.test('it can get root', function (t) {
-  var tree = createQuadTree();
+test('it can get root', function (t) {
+  var tree = createQuadTree({}, random);
   var body = new Body();
 
   tree.insertBodies([body]);
@@ -24,8 +27,8 @@ harness.test('it can get root', function (t) {
   t.end();
 });
 
-harness.test('Two bodies repel each other', function (t) {
-  var tree = createQuadTree();
+test('Two bodies repel each other', function (t) {
+  var tree = createQuadTree({}, random);
   var bodyA = new Body(); bodyA.pos.x = 1; bodyA.pos.y = 0;
   var bodyB = new Body(); bodyB.pos.x = 2; bodyB.pos.y = 0;
 
@@ -44,8 +47,8 @@ harness.test('Two bodies repel each other', function (t) {
   t.end();
 });
 
-harness.test('Can handle two bodies at the same location', function (t) {
-  var tree = createQuadTree();
+test('Can handle two bodies at the same location', function (t) {
+  var tree = createQuadTree({}, random);
   var bodyA = new Body();
   var bodyB = new Body();
 
@@ -56,7 +59,7 @@ harness.test('Can handle two bodies at the same location', function (t) {
   t.end();
 });
 
-harness.test('it does not stuck', function(t) {
+test('it does not stuck', function(t) {
   var count = 60000;
   var bodies = [];
 
@@ -64,7 +67,7 @@ harness.test('it does not stuck', function(t) {
     bodies.push(new Body(Math.random(), Math.random()));
   }
 
-  var quadTree = createQuadTree();
+  var quadTree = createQuadTree({}, random);
   quadTree.insertBodies(bodies);
 
   bodies.forEach(function(body) {

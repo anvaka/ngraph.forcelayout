@@ -1,25 +1,24 @@
-ngraph.forcelayout
-==========================
+# ngraph.forcelayout 
+
 [![Build Status](https://travis-ci.org/anvaka/ngraph.forcelayout.png?branch=master)](https://travis-ci.org/anvaka/ngraph.forcelayout)
 
-This is a [force directed](http://en.wikipedia.org/wiki/Force-directed_graph_drawing)
-graph layouter in 2d. It is using quad tree as an n-body solver. This repository
-is part of [ngraph family](https://github.com/anvaka/ngraph), and operates on
-[`ngraph.graph`](https://github.com/anvaka/ngraph.graph) data structure. If you
-want to go the 3D space, please check out [`ngraph.forcelayout3d`](https://github.com/anvaka/ngraph.forcelayout3d)
+This is a [force directed](http://en.wikipedia.org/wiki/Force-directed_graph_drawing) graph layout algorithm, 
+that works in any dimension (2D, 3D, and above).
 
-[![Gitter](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/anvaka/VivaGraphJS)
+The library uses quad tree to speed up computation of long-distance forces.
+
+This repository is part of [ngraph family](https://github.com/anvaka/ngraph), and operates on 
+[`ngraph.graph`](https://github.com/anvaka/ngraph.graph) data structure.
 
 # API
 
-First of all it's worth to mention all force directed algorithms are iterative. We need to
-perform multiple iterations of an algorithm, before graph starts looking aesthetically pleasing.
-
-With that in mind, the easiest way to make graph look nice is:
+All force directed algorithms are iterative. We need to perform multiple iterations of an algorithm, 
+before graph starts looking good:
 
 ``` js
 // graph is an instance of `ngraph.graph` object.
-var layout = require('ngraph.forcelayout')(graph);
+var crateLayout = require('ngraph.forcelayout');
+var layout = createLayout(graph);
 for (var i = 0; i < ITERATIONS_COUNT; ++i) {
   layout.step();
 }
@@ -41,9 +40,31 @@ graph.forEachLink(function(link) {
 });
 ```
 
+If you'd like to perform graph layout in space with more than two dimensions, just add one
+argument to this line:
 
-Result of `getNodePosition()`/`getLinkPosition()` will be always the same for
-the same node. This is true:
+``` js
+let layout = createLayout('ngraph.forcelayout')(graph, {dimensions: 3}); // 3D layout
+let nodePosition = layout.getNodePosition(nodeId); // has {x, y, z} attributes
+```
+
+Even higher dimensions are not a problem for this library:
+
+``` js
+let layout = createLayout(graph, {dimensions: 6}); // 6D layout
+// Every layout with more than 3 dimensions, say N, gets additional attributes:
+// c4, c5, ... cN
+let nodePosition = layout.getNodePosition(nodeId); // has {x, y, z, c4, c5, c6} 
+```
+
+Note: Higher dimensionality comes at exponential cost of memory for every added
+dimension. See a performance section below for more details.
+
+## Node position and object reuse
+
+Recently immutability became a ruling principle of javascript world. This library
+doesn't follow the rules, and results of `getNodePosition()`/`getLinkPosition()` will be
+always the same for the same node. This is true:
 
 ``` js
 layout.getNodePosition(1) === layout.getNodePosition(1);
@@ -109,21 +130,18 @@ There are three major forces in the system:
 2. Each body repels each other via [Coulomb's law](http://en.wikipedia.org/wiki/Coulomb's_law)
 3. The drag force slows the entire simulation down, helping with convergence.
 
-Body forces are calculated in `n*lg(n)` time with help of Barnes-Hut algorithm implemented in 
-[quadtree module](https://github.com/anvaka/ngraph.forcelayout/blob/master/lib/createQuadTree.js). [Euler method](http://en.wikipedia.org/wiki/Euler_method) is then used to solve ordinary differential equation of Newton's law and get position of bodies.
-
-Please refer to [physicsSimulator](https://github.com/anvaka/ngraph.forcelayout/blob/master/lib/createPhysicsSimulator.js)
-to see the source code and simulator parameters:
+Body forces are calculated in `n*lg(n)` time with help of Barnes-Hut algorithm implemented with quadtree.
 
 ``` js
 // Configure
 var physicsSettings = {
-  springLength: 30,
-  springCoeff: 0.0008,
-  gravity: -1.2,
+  springLength: 10,
+  springCoeff: 0.8,
+  gravity: -12,
   theta: 0.8,
-  dragCoeff: 0.02,
-  timeStep: 20
+  dragCoeff: 0.9,
+  timeStep: 0.5,
+  dimensions: 2
 };
 
 // pass it as second argument to layout:
@@ -131,8 +149,7 @@ var layout = require('ngraph.forcelayout')(graph, physicsSettings);
 ```
 
 You can get current physics simulator from layout by checking `layout.simulator`
-property. This is a read only property. The default physics simulator can be changed
-by supplying a `createSimulator` function in the `physicsSettings` object. 
+property. This is a read only property. 
 
 ## Space occupied by graph
 
@@ -141,8 +158,8 @@ quickly get bounding box use `getGraphRect()` method:
 
 ``` js
 var rect = layout.getGraphRect();
-// rect.x1, rect.y1 - top left coordinates of bounding box
-// rect.x2, rect.y2 - bottom right coordinates of bounding box
+// rect.min_x, rect.min_y - left top coordinates of the bounding box
+// rect.max_x, rect.max_y - right bottom coordinates of the bounding box
 ```
 
 ## Manipulating bodies
@@ -177,6 +194,23 @@ layout.forEachBody(function(body, nodeId) {
 });
 ```
 
+# Section about performance
+
+This library is focused on performance of physical simulation. We use quad tree data structure
+in 2D space to approximate long distance forces, and reduce amount of required computations.
+
+When layout is performed in higher dimensions we use analogues tree data structure. By design
+such tree requires to store `2^dimensions_count` child nodes on each node. In practice, performing
+layout in 6 dimensional software on a graph with a few thousand nodes yields decent performance
+on modern mac book (graph can be both rendered and layed out at 60FPS rate).
+
+Additionally, the vector algebra is optimized by a ad-hoc code generation. Essentially this means
+that upon first load of the library, we check the dimension of the space where you want to perform
+layout, and generate all required data structure to run fast in this space. 
+
+The code generation happens only once when dimension is requested. Any subsequent layouts in the same
+space would reuse generated codes. It is pretty fast and cool.
+
 # install
 
 With [npm](https://npmjs.org) do:
@@ -193,3 +227,6 @@ MIT
 
 I'd totally love it! Please email me, open issue here, [tweet](https://twitter.com/anvaka) to me,
 or join discussion [on gitter](https://gitter.im/anvaka/VivaGraphJS).
+
+If you love this library, please consider sponsoring it at https://github.com/sponsors/anvaka or at
+https://www.patreon.com/anvaka

@@ -1,16 +1,13 @@
-var test = require('tap').test,
-    createSpringForce = require('../lib/springForce'),
-    Body = require('../lib/primitives').Body,
-    Spring = require('../lib/spring');
+var test = require('tap').test;
 
+var dimensions = 2;
+var createSpringForce = require('../lib/codeGenerators/generateCreateSpringForce')(dimensions);
+var Body = require('../lib/codeGenerators/generateCreateBody')(dimensions);
+var Spring = require('../lib/spring');
+var random = require('ngraph.random')(42);
 
 test('Initialized with default value', function (t) {
-  var springForce = createSpringForce();
-  var springCoeff = springForce.springCoeff();
-  var springLength = springForce.springLength();
-
-  t.ok(typeof springCoeff === 'number' && typeof springLength === 'number', 'Default values are present');
-
+  t.throws(() => createSpringForce())
   t.end();
 });
 
@@ -22,7 +19,8 @@ test('Should bump bodies at same position', function (t) {
   // should start moving towards each other after force update
   var idealLength = 1;
   var spring = new Spring(body1, body2, idealLength);
-  var springForce = createSpringForce();
+  random.nex
+  var springForce = createSpringForce({springCoeff: 0.1, springLength: 1}, random);
   springForce.update(spring);
 
   t.ok(body1.force.x > 0, 'Body 1 should go right');
@@ -31,7 +29,7 @@ test('Should bump bodies at same position', function (t) {
 });
 
 test('Check spring force direction', function (t) {
-  var springForce = createSpringForce();
+  var springForce = createSpringForce({springCoeff: 0.1, springLength: 1});
 
   t.test('Should contract two bodies when ideal length is smaller than actual', function (t) { 
     var body1 = new Body(-1, 0);

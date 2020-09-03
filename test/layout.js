@@ -23,6 +23,20 @@ test('it returns spring', function(t) {
   t.end();
 });
 
+test('it returns same position', function(t) {
+  var g = createGraph();
+  var layout = createLayout(g);
+
+  var link = g.addLink(1, 2);
+
+  let firstNodePos = layout.getNodePosition(1);
+  layout.step();
+  t.ok(firstNodePos === layout.getNodePosition(1), 'Position is the same object');
+  layout.step();
+  t.ok(firstNodePos === layout.getNodePosition(1), 'Position is the same object after multiple steps');
+  t.end();
+});
+
 test('it returns body', function(t) {
   var g = createGraph();
   var layout = createLayout(g);
@@ -175,8 +189,8 @@ test('Layout updates bounding box when it sets node position', function (t) {
   layout.setNodePosition(1, 42, 42);
   layout.setNodePosition(2, 40, 40);
   var rect = layout.getGraphRect();
-  t.ok(rect.x2 <= 42); t.ok(rect.y2 <= 42);
-  t.ok(rect.x1 >= 40); t.ok(rect.y1 >= 40);
+  t.ok(rect.max_x <= 42); t.ok(rect.max_y <= 42);
+  t.ok(rect.min_x >= 40); t.ok(rect.min_y >= 40);
 
   t.end();
 });
@@ -225,7 +239,7 @@ test('layout has defined graph rectangle', function (t) {
     var layout = createLayout(graph);
 
     var rect = layout.getGraphRect();
-    var expectedProperties = ['x1', 'y1', 'x2', 'y2'];
+    var expectedProperties = ['min_x', 'min_y', 'max_x', 'max_y'];
     t.ok(rect && expectedProperties.reduce(hasProperties, true), 'Values are present before step()');
 
     layout.step();
@@ -415,5 +429,5 @@ function copy(obj) {
 }
 
 function rectangleIsEmpty(rect) {
-  return rect.x1 === 0 && rect.y1 === 0 && rect.x2 === 0 && rect.y2 === 0;
+  return rect.min_x === 0 && rect.min_y === 0 && rect.max_x === 0 && rect.max_y === 0;
 }

@@ -1,6 +1,7 @@
-var test = require('tap').test,
-    createSimulator = require('../lib/createPhysicsSimulator'),
-    physics = require('../lib/primitives');
+var test = require('tap').test;
+var dimensions = 2;
+var Body = require('../lib/codeGenerators/generateCreateBody')(dimensions);
+var createSimulator = require('../lib/createPhysicsSimulator');
 
 test('Can step without bodies', function (t) {
   var simulator = createSimulator();
@@ -19,8 +20,8 @@ test('it has settings exposed', function(t) {
 
 test('it gives amount of total movement', function(t) {
   var simulator = createSimulator();
-  var body1 = new physics.Body(-10, 0);
-  var body2 = new physics.Body(10, 0);
+  var body1 = new Body(-10, 0);
+  var body2 = new Body(10, 0);
   simulator.addBody(body1);
   simulator.addBody(body2);
   simulator.step();
@@ -51,7 +52,7 @@ test('it can add a body at given position', function(t) {
 
 test('Does not update position of one body', function (t) {
   var simulator = createSimulator();
-  var body = new physics.Body(0, 0);
+  var body = new Body(0, 0);
   simulator.addBody(body);
 
   simulator.step(1);
@@ -66,8 +67,8 @@ test('Does not update position of one body', function (t) {
 test('Can configure forces', function (t) {
   t.test('Gravity', function (t) {
     var simulator = createSimulator();
-    var body1 = new physics.Body(0, 0);
-    var body2 = new physics.Body(1, 0);
+    var body1 = new Body(0, 0);
+    var body2 = new Body(1, 0);
 
     simulator.addBody(body1);
     simulator.addBody(body2);
@@ -90,7 +91,7 @@ test('Can configure forces', function (t) {
 
   t.test('Drag', function (t) {
     var simulator = createSimulator();
-    var body1 = new physics.Body(0, 0);
+    var body1 = new Body(0, 0);
     body1.velocity.x = -1; // give it small impulse
     simulator.addBody(body1);
 
@@ -112,7 +113,7 @@ test('Can configure forces', function (t) {
 
 test('Can remove bodies', function (t) {
   var simulator = createSimulator();
-  var body = new physics.Body(0, 0);
+  var body = new Body(0, 0);
   simulator.addBody(body);
   t.equals(simulator.bodies.length, 1, 'Number of bodies is 1');
   var result = simulator.removeBody(body);
@@ -123,8 +124,8 @@ test('Can remove bodies', function (t) {
 
 test('Updates position for two bodies', function (t) {
   var simulator = createSimulator();
-  var body1 = new physics.Body(-1, 0);
-  var body2 = new physics.Body(1, 0);
+  var body1 = new Body(-1, 0);
+  var body2 = new Body(1, 0);
   simulator.addBody(body1);
   simulator.addBody(body2);
 
@@ -140,8 +141,8 @@ test('Updates position for two bodies', function (t) {
 
 test('add spring should not add bodies', function (t) {
   var simulator = createSimulator();
-  var body1 = new physics.Body(-1, 0);
-  var body2 = new physics.Body(1, 0);
+  var body1 = new Body(-1, 0);
+  var body2 = new Body(1, 0);
 
   simulator.addSpring(body1, body2, 10);
 
@@ -153,8 +154,8 @@ test('add spring should not add bodies', function (t) {
 
 test('Spring affects bodies positions', function (t) {
   var simulator = createSimulator();
-  var body1 = new physics.Body(-10, 0);
-  var body2 = new physics.Body(10, 0);
+  var body1 = new Body(-10, 0);
+  var body2 = new Body(10, 0);
   simulator.addBody(body1);
   simulator.addBody(body2);
   // If you take this out, bodies will repel each other:
@@ -170,8 +171,8 @@ test('Spring affects bodies positions', function (t) {
 
 test('Can remove springs', function (t) {
   var simulator = createSimulator();
-  var body1 = new physics.Body(-10, 0);
-  var body2 = new physics.Body(10, 0);
+  var body1 = new Body(-10, 0);
+  var body2 = new Body(10, 0);
   simulator.addBody(body1);
   simulator.addBody(body2);
   var spring = simulator.addSpring(body1, body2, 1);
@@ -187,40 +188,40 @@ test('Can remove springs', function (t) {
 
 test('Get bounding box', function (t) {
   var simulator = createSimulator();
-  var body1 = new physics.Body(0, 0);
-  var body2 = new physics.Body(10, 10);
+  var body1 = new Body(0, 0);
+  var body2 = new Body(10, 10);
   simulator.addBody(body1);
   simulator.addBody(body2);
   simulator.step(); // this will move bodies farther away
   var bbox = simulator.getBBox();
-  t.ok(bbox.x1 <= 0, 'Left is 0');
-  t.ok(bbox.y1 <= 0, 'Top is 0');
-  t.ok(bbox.x2 >= 10, 'right is 10');
-  t.ok(bbox.y2 >= 10, 'bottom is 10');
+  t.ok(bbox.min_x <= 0, 'Left is 0');
+  t.ok(bbox.min_y <= 0, 'Top is 0');
+  t.ok(bbox.max_x >= 10, 'right is 10');
+  t.ok(bbox.max_y >= 10, 'bottom is 10');
   t.end();
 });
 
 test('it updates bounding box', function (t) {
   var simulator = createSimulator();
-  var body1 = new physics.Body(0, 0);
-  var body2 = new physics.Body(10, 10);
+  var body1 = new Body(0, 0);
+  var body2 = new Body(10, 10);
   simulator.addBody(body1);
   simulator.addBody(body2);
   var bbox = simulator.getBBox();
 
-  t.ok(bbox.x1 === 0, 'Left is 0');
-  t.ok(bbox.y1 === 0, 'Top is 0');
-  t.ok(bbox.x2 === 10, 'right is 10');
-  t.ok(bbox.y2 === 10, 'bottom is 10');
+  t.ok(bbox.min_x === 0, 'Left is 0');
+  t.ok(bbox.min_y === 0, 'Top is 0');
+  t.ok(bbox.max_x === 10, 'right is 10');
+  t.ok(bbox.max_y === 10, 'bottom is 10');
 
   body1.setPosition(15, 15);
   simulator.invalidateBBox();
   bbox = simulator.getBBox();
 
-  t.ok(bbox.x1 === 10, 'Left is 10');
-  t.ok(bbox.y1 === 10, 'Top is 10');
-  t.ok(bbox.x2 === 15, 'right is 15');
-  t.ok(bbox.y2 === 15, 'bottom is 15');
+  t.ok(bbox.min_x === 10, 'Left is 10');
+  t.ok(bbox.min_y === 10, 'Top is 10');
+  t.ok(bbox.max_x === 15, 'right is 15');
+  t.ok(bbox.max_y === 15, 'bottom is 15');
   t.end();
 });
 

@@ -1,9 +1,10 @@
-var test = require('tap').test,
-    integrate = require('../lib/eulerIntegrator'),
-    physics = require('../lib/primitives');
+var test = require('tap').test;
+var dimensions = 2;
+var Body = require('../lib/codeGenerators/generateCreateBody')(dimensions);
+var integrate = require('../lib/codeGenerators/generateIntegrator')(dimensions);
 
 test('Body preserves velocity without forces', function (t) {
-  var body = new physics.Body();
+  var body = new Body();
   var timeStep = 1;
   body.mass = 1; body.velocity.x = 1;
 
@@ -17,7 +18,7 @@ test('Body preserves velocity without forces', function (t) {
 });
 
 test('Body gains velocity under force', function (t) {
-  var body = new physics.Body();
+  var body = new Body();
   var timeStep = 1;
   body.mass = 1; body.force.x = 0.1;
 
@@ -41,21 +42,21 @@ test('No bodies yield 0 movement', function (t) {
 });
 
 test('Body does not move faster than 1px', function (t) {
-  var body = new physics.Body();
+  var body = new Body();
   var timeStep = 1;
   body.mass = 1; body.force.x = 2;
 
   integrate([body], timeStep);
-  t.ok(body.velocity.x <= 1, 'Velocity should be withint speed limit');
+  t.ok(body.velocity.x <= 1, 'Velocity should be within speed limit');
 
   integrate([body], timeStep);
-  t.ok(body.velocity.x <= 1, 'Velocity should be withint speed limit');
+  t.ok(body.velocity.x <= 1, 'Velocity should be within speed limit');
 
   t.end();
 });
 
 test('Can get total system movement', function (t) {
-  var body = new physics.Body();
+  var body = new Body();
   var timeStep = 1;
   body.mass = 1; body.velocity.x = 0.2;
 
