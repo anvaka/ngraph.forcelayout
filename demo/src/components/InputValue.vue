@@ -6,6 +6,7 @@
       <input type='number' 
         :step='step' 
         v-model='inputValue' 
+        @focus="selectAll"
         autocomplete="off" 
         autocorrect="off" 
         autocapitalize="off" 
@@ -32,6 +33,11 @@ export default {
       default: '0.1',
       type: String
     },
+  },
+  methods: {
+    selectAll(e) {
+      e.target.select()
+    }
   },
   data() {
     return {
