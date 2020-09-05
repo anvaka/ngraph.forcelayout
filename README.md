@@ -201,7 +201,7 @@ in 2D space to approximate long distance forces, and reduce amount of required c
 
 When layout is performed in higher dimensions we use analogues tree data structure. By design
 such tree requires to store `2^dimensions_count` child nodes on each node. In practice, performing
-layout in 6 dimensional software on a graph with a few thousand nodes yields decent performance
+layout in 6 dimensional space on a graph with a few thousand nodes yields decent performance
 on modern mac book (graph can be both rendered and layed out at 60FPS rate).
 
 Additionally, the vector algebra is optimized by a ad-hoc code generation. Essentially this means
