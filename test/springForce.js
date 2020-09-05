@@ -20,7 +20,7 @@ test('Should bump bodies at same position', function (t) {
   var idealLength = 1;
   var spring = new Spring(body1, body2, idealLength);
   random.nex
-  var springForce = createSpringForce({springCoeff: 0.1, springLength: 1}, random);
+  var springForce = createSpringForce({springCoefficient: 0.1, springLength: 1}, random);
   springForce.update(spring);
 
   t.ok(body1.force.x > 0, 'Body 1 should go right');
@@ -29,7 +29,7 @@ test('Should bump bodies at same position', function (t) {
 });
 
 test('Check spring force direction', function (t) {
-  var springForce = createSpringForce({springCoeff: 0.1, springLength: 1});
+  var springForce = createSpringForce({springCoefficient: 0.1, springLength: 1});
 
   t.test('Should contract two bodies when ideal length is smaller than actual', function (t) { 
     var body1 = new Body(-1, 0);

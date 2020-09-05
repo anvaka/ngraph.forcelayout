@@ -103,7 +103,7 @@ test('Can configure forces', function (t) {
 
     // Restore original velocity, but now set drag force to 0
     body1.velocity.x = -1;
-    simulator.dragCoeff(0);
+    simulator.dragCoefficient(0);
     simulator.step();
     t.ok(body1.velocity.x === -1, 'Velocity should remain unchanged');
     t.end();
@@ -246,10 +246,10 @@ test('it can change settings', function(t) {
   simulator.theta(1.2);
   t.equals(simulator.theta(), 1.2, 'theta is changed');
 
-  var currentSpringCoeff = simulator.springCoeff();
-  t.ok(typeof currentSpringCoeff === 'number', 'springCoeff is here');
-  simulator.springCoeff(0.8);
-  t.equals(simulator.springCoeff(), 0.8, 'springCoeff is changed');
+  var currentSpringCoefficient = simulator.springCoefficient();
+  t.ok(typeof currentSpringCoefficient === 'number', 'springCoefficient is here');
+  simulator.springCoefficient(0.8);
+  t.equals(simulator.springCoefficient(), 0.8, 'springCoefficient is changed');
 
   var gravity = simulator.gravity();
   t.ok(typeof gravity === 'number', 'gravity is here');
@@ -261,10 +261,10 @@ test('it can change settings', function(t) {
   simulator.springLength(80);
   t.equals(simulator.springLength(), 80, 'springLength is changed');
 
-  var dragCoeff = simulator.dragCoeff();
-  t.ok(typeof dragCoeff === 'number', 'dragCoeff is here');
-  simulator.dragCoeff(0.8);
-  t.equals(simulator.dragCoeff(), 0.8, 'dragCoeff is changed');
+  var dragCoefficient = simulator.dragCoefficient();
+  t.ok(typeof dragCoefficient === 'number', 'dragCoefficient is here');
+  simulator.dragCoefficient(0.8);
+  t.equals(simulator.dragCoefficient(), 0.8, 'dragCoefficient is changed');
 
   var timeStep = simulator.timeStep();
   t.ok(typeof timeStep === 'number', 'timeStep is here');

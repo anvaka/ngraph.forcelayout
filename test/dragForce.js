@@ -8,7 +8,7 @@ test('reduces force value', function (t) {
   body.force.x = 1; body.force.y = 1;
   body.velocity.x = 1; body.velocity.y = 1;
 
-  var dragForce = createDragForce({ dragCoeff: 0.1 });
+  var dragForce = createDragForce({ dragCoefficient: 0.1 });
   dragForce.update(body);
 
   t.ok(body.force.x < 1 && body.force.y < 1, 'Force value is reduced');
