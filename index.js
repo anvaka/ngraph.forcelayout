@@ -195,8 +195,8 @@ function createLayout(graph, physicsSettings) {
   }
 
   function getForceVectorLength() {
-    let fx = 0, fy = 0;
-    forEachBody(body => {
+    var fx = 0, fy = 0;
+    forEachBody(function(body) {
       fx += Math.abs(body.force.x);
       fy += Math.abs(body.force.y);
     });

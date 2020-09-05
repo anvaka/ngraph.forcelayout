@@ -219,6 +219,14 @@ With [npm](https://npmjs.org) do:
 npm install ngraph.forcelayout
 ```
 
+Or download from CDN:
+
+``` html
+<script src='https://unpkg.com/ngraph.graph@3.0.0/dist/ngraph.forcelayout.min.js'></script>
+```
+
+If you download from CDN the library will be available under `ngraphCreateGraph` global name.
+
 # license
 
 MIT

@@ -3,9 +3,12 @@
   "version": "2.0.0",
   "description": "Force directed graph drawing layout",
   "main": "index.js",
+  "jsdelivr": "dist/ngraph.forcelayout.min.js",
+  "unpkg": "dist/ngraph.forcelayout.min.js",
   "scripts": {
     "test": "tap test/*.js",
-    "perf": "npm version && node perf/test.js"
+    "perf": "npm version && node perf/test.js",
+    "build": "browserify index.js -s ngraphCreateLayout -o dist/ngraph.forcelayout.js && terser --compress -o dist/ngraph.forcelayout.min.js -- dist/ngraph.forcelayout.js"
   },
   "repository": {
     "type": "git",
@@ -24,7 +27,8 @@
     "benchmark": "~1.0.0",
     "ngraph.generators": "^19.0.0",
     "ngraph.graph": "^19.1.0",
-    "tap": "^14.10.7"
+    "tap": "^14.10.7",
+    "terser": "^5.3.0"
   },
   "dependencies": {
     "ngraph.events": "^1.0.0",
