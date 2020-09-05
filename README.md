@@ -135,13 +135,13 @@ Body forces are calculated in `n*lg(n)` time with help of Barnes-Hut algorithm i
 ``` js
 // Configure
 var physicsSettings = {
-  springLength: 10,
-  springCoeff: 0.8,
-  gravity: -12,
-  theta: 0.8,
-  dragCoeff: 0.9,
   timeStep: 0.5,
   dimensions: 2
+  gravity: -12,
+  theta: 0.8,
+  springLength: 10,
+  springCoefficient: 0.8,
+  dragCoefficient: 0.9,
 };
 
 // pass it as second argument to layout:

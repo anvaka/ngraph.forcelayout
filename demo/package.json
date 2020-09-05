@@ -1,15 +1,37 @@
 {
-  "name": "test",
-  "version": "0.0.0",
-  "description": "",
-  "main": "index.js",
+  "name": "graph-starter",
+  "version": "0.1.0",
+  "private": true,
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "browserify -s b index.js > bundle.js && open index.html"
+    "serve": "vue-cli-service serve",
+    "start": "vue-cli-service serve",
+    "build": "vue-cli-service build",
+    "lint": "vue-cli-service lint"
   },
-  "author": "Andrei Kashcha",
-  "license": "BSD-2-Clause",
   "dependencies": {
-    "ngraph.generators": "0.0.1"
+    "core-js": "^3.4.3",
+    "d3-color": "^2.0.0",
+    "miserables": "^2.0.0",
+    "ngraph.events": "^1.0.0",
+    "ngraph.forcelayout": "^2.0.0",
+    "ngraph.fromdot": "^6.0.0",
+    "ngraph.fromjson": "^3.0.0",
+    "ngraph.generators": "^19.0.0",
+    "ngraph.graph": "^19.1.0",
+    "ngraph.hde": "^1.0.1",
+    "query-state": "^4.3.0",
+    "vue": "^2.6.12",
+    "w-gl": "^0.13.0"
+  },
+  "devDependencies": {
+    "@vue/cli-plugin-babel": "^4.5.4",
+    "@vue/cli-plugin-eslint": "^4.5.4",
+    "@vue/cli-service": "^4.5.4",
+    "babel-eslint": "^10.0.3",
+    "eslint": "^5.16.0",
+    "eslint-plugin-vue": "^5.0.0",
+    "stylus": "^0.54.7",
+    "stylus-loader": "^3.0.2",
+    "vue-template-compiler": "^2.6.10"
   }
 }

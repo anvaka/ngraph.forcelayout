@@ -19,7 +19,6 @@ test('Should bump bodies at same position', function (t) {
   // should start moving towards each other after force update
   var idealLength = 1;
   var spring = new Spring(body1, body2, idealLength);
-  random.nex
   var springForce = createSpringForce({springCoefficient: 0.1, springLength: 1}, random);
   springForce.update(spring);
 
