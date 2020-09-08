@@ -17,7 +17,7 @@ before graph starts looking good:
 
 ``` js
 // graph is an instance of `ngraph.graph` object.
-var crateLayout = require('ngraph.forcelayout');
+var createLayout = require('ngraph.forcelayout');
 var layout = createLayout(graph);
 for (var i = 0; i < ITERATIONS_COUNT; ++i) {
   layout.step();
