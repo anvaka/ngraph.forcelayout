@@ -7,12 +7,12 @@ import createForceLayout from './createForceLayout';
 import findLargestComponent from './findLargestComponent';
 import createGraph from 'ngraph.graph';
 
-export default function createGraphScene(canvas) {
+export default function createGraphScene(canvas, layoutSettings = {}) {
   let drawLinks = true;
 
   // Since graph can be loaded dynamically, we have these uninitialized
   // and captured into closure. loadGraph will do the initialization
-  let graph, layout, layoutSettings = {};
+  let graph, layout;
   let scene, nodes, lines, guide;
 
   let isRunning = false;

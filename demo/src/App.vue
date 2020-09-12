@@ -123,7 +123,7 @@ export default {
   },
   mounted() {
     const canvas = document.getElementById('cnv');
-    this.scene = createGraphScene(canvas);
+    this.scene = createGraphScene(canvas, {...this.layoutSettings});
     this.loadNewGraph(this.selectedGraph);
   },
 
