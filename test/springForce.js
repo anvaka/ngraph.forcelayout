@@ -7,7 +7,7 @@ var Spring = require('../lib/spring');
 var random = require('ngraph.random')(42);
 
 test('Initialized with default value', function (t) {
-  t.throws(() => createSpringForce())
+  t.throws(() => createSpringForce());
   t.end();
 });
 
