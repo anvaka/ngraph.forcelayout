@@ -27,9 +27,7 @@ test('it returns same position', function(t) {
   var g = createGraph();
   var layout = createLayout(g);
 
-  var link = g.addLink(1, 2);
-
-  let firstNodePos = layout.getNodePosition(1);
+  var firstNodePos = layout.getNodePosition(1);
   layout.step();
   t.ok(firstNodePos === layout.getNodePosition(1), 'Position is the same object');
   layout.step();
@@ -60,7 +58,7 @@ test('it can set node mass', function(t) {
 
   var layout = createLayout(g, {
     nodeMass: function (nodeId) {
-      t.equals(nodeId, 'anvaka', 'correct node is called')
+      t.equals(nodeId, 'anvaka', 'correct node is called');
       return 84; // my mass in kilograms :P
     }
   });
@@ -99,7 +97,7 @@ test('it fires stable on empty graph', function(t) {
   function endTest() {
     t.end();
   }
-})
+});
 
 test('can add bodies which are standard prototype names', function (t) {
   var graph = createGraph();
