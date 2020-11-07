@@ -27,6 +27,8 @@ test('it returns same position', function(t) {
   var g = createGraph();
   var layout = createLayout(g);
 
+  g.addLink(1, 2);
+
   var firstNodePos = layout.getNodePosition(1);
   layout.step();
   t.ok(firstNodePos === layout.getNodePosition(1), 'Position is the same object');
