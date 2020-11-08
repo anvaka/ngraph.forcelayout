@@ -22,7 +22,7 @@ function createLayout(graph, physicsSettings) {
 
   var nodeMass = defaultNodeMass;
   if (physicsSettings && typeof physicsSettings.nodeMass === 'function') {
-    nodeMass = physicsSettings.nodeMass
+    nodeMass = physicsSettings.nodeMass;
   }
 
   var nodeBodies = new Map();
@@ -189,9 +189,7 @@ function createLayout(graph, physicsSettings) {
   }
 
   function forEachBody(cb) {
-    nodeBodies.forEach(function(body, bodyId) {
-      cb(body, bodyId);
-    })
+    nodeBodies.forEach(cb);
   }
 
   function getForceVectorLength() {
@@ -353,7 +351,7 @@ function createLayout(graph, physicsSettings) {
     var body = nodeBodies.get(nodeId);
     body.mass = nodeMass(nodeId);
     if (Number.isNaN(body.mass)) {
-      throw new Error('Node mass should be a number')
+      throw new Error('Node mass should be a number');
     }
   }
 

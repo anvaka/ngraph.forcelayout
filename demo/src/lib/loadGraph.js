@@ -29,7 +29,7 @@ function renderGraph (edges, recordsPerEdge) {
 }
 
 function simpleCache() {
-    var supported = window.hasOwnProperty('localStorage');
+    var supported = 'localStorage' in window;
 
     return {
         get : function(key) {

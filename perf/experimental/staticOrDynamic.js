@@ -58,7 +58,7 @@ function createBody(i) {
     force: {x: i, y: i},
     velocity: {x: 0, y: 0},
     pos: {x: i, y: i}
-  }
+  };
 }
 
 function staticCompiled(bodies, timeStep, adaptiveTimeStepWeight) {
@@ -108,5 +108,3 @@ function compile(body) {
   return new Function('bodies', 'timeStep', 'adaptiveTimeStepWeight', body);
 
 }
-
-console.log()
