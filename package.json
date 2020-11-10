@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "benchmark": "~1.0.0",
+    "eslint": "^7.12.1",
     "ngraph.generators": "^19.0.0",
     "ngraph.graph": "^19.1.0",
     "tap": "^14.10.7",
