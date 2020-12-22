@@ -7,6 +7,7 @@
   "unpkg": "dist/ngraph.forcelayout.min.js",
   "scripts": {
     "test": "tap test/*.js",
+    "lint": "eslint .",
     "perf": "npm version && node perf/test.js",
     "build": "browserify index.js -s ngraphCreateLayout -o dist/ngraph.forcelayout.js && terser --compress -o dist/ngraph.forcelayout.min.js -- dist/ngraph.forcelayout.js"
   },
