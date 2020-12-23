@@ -61,26 +61,26 @@ function createBody(i) {
   };
 }
 
-function staticCompiled(bodies, timeStep, adaptiveTimeStepWeight) {
+function staticCompiled(bodyCollection, timeStep, adaptiveTimeStepWeight) {
   var dx = 0, tx = 0,
       dy = 0, ty = 0,
       i,
-      max = bodies.length;
+      max = bodyCollection.length;
 
   if (max === 0) {
     return 0;
   }
 
   for (i = 0; i < max; ++i) {
-    var body = bodies[i];
+    var body = bodyCollection[i];
     if (adaptiveTimeStepWeight && body.springCount) {
       timeStep = (adaptiveTimeStepWeight * body.springLength/body.springCount);
     }
 
-    var coeff = timeStep / body.mass;
+    var coefficient = timeStep / body.mass;
 
-    body.velocity.x += coeff * body.force.x;
-    body.velocity.y += coeff * body.force.y;
+    body.velocity.x += coefficient * body.force.x;
+    body.velocity.y += coefficient * body.force.y;
     var vx = body.velocity.x,
         vy = body.velocity.y,
         v = Math.sqrt(vx * vx + vy * vy);

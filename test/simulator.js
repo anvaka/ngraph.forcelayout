@@ -1,3 +1,4 @@
+/* eslint-disable no-shadow */
 var test = require('tap').test;
 var dimensions = 2;
 var Body = require('../lib/codeGenerators/generateCreateBody')(dimensions);

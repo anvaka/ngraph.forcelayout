@@ -12,6 +12,7 @@
     "rules": {
         "semi": "error",
         "no-undef": "error",
-        "no-unused-vars": "error"
+        "no-unused-vars": "error",
+        "no-shadow": "error"
     }
 }
