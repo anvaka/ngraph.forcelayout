@@ -42,7 +42,7 @@
 
       <input-flag label='Follow bounding box' v-model='fixedViewBox' step=1>
       Setting this to true will disable pan/zoom but will always keep the graph visible. This is not
-      part of the layout algorithm. Just a vew setting of the renderer.
+      part of the layout algorithm. Just a view setting of the renderer.
       </input-flag>
       <div v-if='loading'>Loading graph...</div>
     </div>
@@ -93,6 +93,9 @@ export default {
         bus.fire('load-graph', newGraph, this.selectedLayout);
         this.loading = false;
       });
+    },
+    onGraphLoaded() {
+      this.isRunning = false;
     }
   },
   watch: {
@@ -135,6 +138,7 @@ export default {
     const canvas = document.getElementById('cnv');
     this.scene = createGraphScene(canvas, {...this.layoutSettings});
     this.loadNewGraph(this.selectedGraph);
+    bus.on('load-graph', this.onGraphLoaded);
   },
 
   beforeDestroy() {
