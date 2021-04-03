@@ -40,6 +40,10 @@
       of dimensions.
       </input-value>
 
+      <input-flag label='Follow bounding box' v-model='fixedViewBox' step=1>
+      Setting this to true will disable pan/zoom but will always keep the graph visible. This is not
+      part of the layout algorithm. Just a vew setting of the renderer.
+      </input-flag>
       <div v-if='loading'>Loading graph...</div>
     </div>
       <div v-if='!loading' class='layout-box'>
@@ -55,6 +59,7 @@ import loadGraph from './lib/loadGraph';
 import bus from './lib/bus';
 import queryState from 'query-state';
 import InputValue from './components/InputValue';
+import InputFlag from './components/InputFlag';
 
 let appState = queryState({
   graph: 'Miserables',
@@ -70,7 +75,8 @@ let appState = queryState({
 export default {
   name: 'app',
   components: {
-    InputValue
+    InputValue,
+    InputFlag
   },
   methods: {
     toggleLayoutRun() {
@@ -97,6 +103,9 @@ export default {
         appState.set(newValue);
       }
     },
+    fixedViewBox(newValue) {
+      this.scene.setFixedViewBox(newValue);
+    },
     selectedGraph(newGraph) {
       appState.set('graph', newGraph);
       this.loadNewGraph(newGraph);
@@ -106,6 +115,7 @@ export default {
     let graphs = getAvailableGraphs();
     return {
       isRunning: false,
+      fixedViewBox: false,
       selectedGraph: appState.get('graph'),
       settingsOpen: window.innerWidth > 500,
       loading: false,

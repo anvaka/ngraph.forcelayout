@@ -15,6 +15,7 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
   let graph, layout;
   let scene, nodes, lines, guide;
 
+  let fixedViewBox = false;
   let isRunning = false;
   let rafHandle;
 
@@ -23,7 +24,8 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
   return {
     dispose,
     runLayout,
-    updateLayoutSettings
+    updateLayoutSettings,
+    setFixedViewBox,
   };
 
   function loadGraph(newGraph, desiredLayout) {
@@ -93,6 +95,10 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
     }
   }
 
+  function setFixedViewBox(isFixed) {
+    fixedViewBox = isFixed;
+  }
+
   function initScene() {
     let scene = createScene(canvas);
     scene.setClearColor(12/255, 41/255, 82/255, 1)
@@ -135,7 +141,18 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
   function frame() {
     rafHandle = requestAnimationFrame(frame);
 
-    if (isRunning) layout.step();
+    if (isRunning) {
+      layout.step();
+      if (fixedViewBox) {
+        let rect = layout.getGraphRect();
+        scene.setViewBox({
+          left:  rect.min_x,
+          top:   rect.min_y,
+          right:  rect.max_x,
+          bottom: rect.max_y,
+        });
+      }
+    }
     drawGraph();
     scene.renderFrame();
   }
