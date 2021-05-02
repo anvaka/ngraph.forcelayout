@@ -65,6 +65,33 @@ test('Does not update position of one body', function (t) {
   t.end();
 });
 
+test('throws on no body or no pos', t => {
+  var simulator = createSimulator();
+  t.throws(() => simulator.addBody(), /Body is required/);
+  t.throws(() => simulator.addBodyAt(), /Body position is required/);
+  t.end();
+});
+
+test('throws on no spring', t => {
+  var simulator = createSimulator();
+  t.throws(() => simulator.addSpring(), /Cannot add null spring to force simulator/);
+  t.end();
+});
+
+test('Can add and remove forces', function (t) {
+  var simulator = createSimulator();
+  var testForce = function () {};
+  simulator.addForce('foo', testForce);
+  t.equal(simulator.getForces().get('foo'), testForce);
+
+  simulator.removeForce('foo');
+  t.equal(simulator.getForces().get('foo'), undefined);
+
+  simulator.removeForce('foo');
+  // should still be good
+  t.end();
+});
+
 test('Can configure forces', function (t) {
   t.test('Gravity', function (t) {
     var simulator = createSimulator();

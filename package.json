@@ -6,7 +6,7 @@
   "jsdelivr": "dist/ngraph.forcelayout.min.js",
   "unpkg": "dist/ngraph.forcelayout.min.js",
   "scripts": {
-    "test": "tap test/*.js",
+    "test": "tap --branches=80 --lines=80 --statements=80 --functions=80 test/*.js",
     "lint": "eslint .",
     "perf": "npm version && node perf/test.js",
     "build": "browserify index.js -s ngraphCreateLayout -o dist/ngraph.forcelayout.js && terser --compress -o dist/ngraph.forcelayout.min.js -- dist/ngraph.forcelayout.js"
@@ -29,7 +29,7 @@
     "eslint": "^7.12.1",
     "ngraph.generators": "^19.0.0",
     "ngraph.graph": "^19.1.0",
-    "tap": "^14.10.7",
+    "tap": "^15.0.6",
     "terser": "^5.3.0"
   },
   "dependencies": {
