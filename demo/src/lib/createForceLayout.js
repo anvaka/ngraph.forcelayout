@@ -1,6 +1,7 @@
 import createLayout from '../../../';
 
 export default function createForceLayout(graph, layoutSettings) {
+  // return window.ngraphCreate2dLayout(graph, Object.assign({
   return createLayout(graph, Object.assign({
     dimensions: 2,
     timeStep: 0.5,

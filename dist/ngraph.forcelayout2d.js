@@ -1,4 +1,4 @@
-(function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.ngraphCreateLayout = f()}})(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+(function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.ngraphCreate2dLayout = f()}})(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
 module.exports = createLayout;
 module.exports.simulator = require('./lib/createPhysicsSimulator');
 
@@ -392,45 +392,14 @@ function createLayout(graph, physicsSettings) {
 
 function noop() { }
 
-},{"./lib/createPhysicsSimulator":10,"ngraph.events":12}],2:[function(require,module,exports){
-const getVariableName = require('./getVariableName');
+},{"./lib/createPhysicsSimulator":8,"ngraph.events":10}],2:[function(require,module,exports){
 
-module.exports = function createPatternBuilder(dimension) {
+module.exports = function() { return function anonymous(bodies,settings,random
+) {
 
-  return pattern;
-  
-  function pattern(template, config) {
-    let indent = (config && config.indent) || 0;
-    let join = (config && config.join !== undefined) ? config.join : '\n';
-    let indentString = Array(indent + 1).join(' ');
-    let buffer = [];
-    for (let i = 0; i < dimension; ++i) {
-      let variableName = getVariableName(i);
-      let prefix = (i === 0) ? '' : indentString;
-      buffer.push(prefix + template.replace(/{var}/g, variableName));
-    }
-    return buffer.join(join);
-  }
-};
-
-},{"./getVariableName":9}],3:[function(require,module,exports){
-
-module.exports = generateBoundsFunction;
-module.exports.generateFunctionBody = generateBoundsFunctionBody;
-
-const createPatternBuilder = require('./createPatternBuilder');
-
-function generateBoundsFunction(dimension) {
-  let code = generateBoundsFunctionBody(dimension);
-  return new Function('bodies', 'settings', 'random', code);
-}
-
-function generateBoundsFunctionBody(dimension) {
-  let pattern = createPatternBuilder(dimension);
-
-  let code = `
   var boundingBox = {
-    ${pattern('min_{var}: 0, max_{var}: 0,', {indent: 4})}
+    min_x: 0, max_x: 0,
+    min_y: 0, max_y: 0,
   };
 
   return {
@@ -441,22 +410,26 @@ function generateBoundsFunctionBody(dimension) {
     reset: resetBoundingBox,
 
     getBestNewPosition: function (neighbors) {
-      var ${pattern('base_{var} = 0', {join: ', '})};
+      var base_x = 0, base_y = 0;
 
       if (neighbors.length) {
         for (var i = 0; i < neighbors.length; ++i) {
           let neighborPos = neighbors[i].pos;
-          ${pattern('base_{var} += neighborPos.{var};', {indent: 10})}
+          base_x += neighborPos.x;
+          base_y += neighborPos.y;
         }
 
-        ${pattern('base_{var} /= neighbors.length;', {indent: 8})}
+        base_x /= neighbors.length;
+        base_y /= neighbors.length;
       } else {
-        ${pattern('base_{var} = (boundingBox.min_{var} + boundingBox.max_{var}) / 2;', {indent: 8})}
+        base_x = (boundingBox.min_x + boundingBox.max_x) / 2;
+        base_y = (boundingBox.min_y + boundingBox.max_y) / 2;
       }
 
       var springLength = settings.springLength;
       return {
-        ${pattern('{var}: base_{var} + (random.nextDouble() - 0.5) * springLength,', {indent: 8})}
+        x: base_x + (random.nextDouble() - 0.5) * springLength,
+        y: base_y + (random.nextDouble() - 0.5) * springLength,
       };
     }
   };
@@ -465,62 +438,55 @@ function generateBoundsFunctionBody(dimension) {
     var i = bodies.length;
     if (i === 0) return; // No bodies - no borders.
 
-    ${pattern('var max_{var} = -Infinity;', {indent: 4})}
-    ${pattern('var min_{var} = Infinity;', {indent: 4})}
+    var max_x = -Infinity;
+    var max_y = -Infinity;
+    var min_x = Infinity;
+    var min_y = Infinity;
 
     while(i--) {
       // this is O(n), it could be done faster with quadtree, if we check the root node bounds
       var bodyPos = bodies[i].pos;
-      ${pattern('if (bodyPos.{var} < min_{var}) min_{var} = bodyPos.{var};', {indent: 6})}
-      ${pattern('if (bodyPos.{var} > max_{var}) max_{var} = bodyPos.{var};', {indent: 6})}
+      if (bodyPos.x < min_x) min_x = bodyPos.x;
+      if (bodyPos.y < min_y) min_y = bodyPos.y;
+      if (bodyPos.x > max_x) max_x = bodyPos.x;
+      if (bodyPos.y > max_y) max_y = bodyPos.y;
     }
 
-    ${pattern('boundingBox.min_{var} = min_{var};', {indent: 4})}
-    ${pattern('boundingBox.max_{var} = max_{var};', {indent: 4})}
+    boundingBox.min_x = min_x;
+    boundingBox.min_y = min_y;
+    boundingBox.max_x = max_x;
+    boundingBox.max_y = max_y;
   }
 
   function resetBoundingBox() {
-    ${pattern('boundingBox.min_{var} = boundingBox.max_{var} = 0;', {indent: 4})}
+    boundingBox.min_x = boundingBox.max_x = 0;
+    boundingBox.min_y = boundingBox.max_y = 0;
   }
-`;
-  return code;
-}
 
-},{"./createPatternBuilder":2}],4:[function(require,module,exports){
+} }
+},{}],3:[function(require,module,exports){
+function Vector(x, y) {
+  
+    if (typeof arguments[0] === 'object') {
+      // could be another vector
+      let v = arguments[0];
+      if (!Number.isFinite(v.x)) throw new Error("Expected value is not a finite number at Vector constructor (x)");
+    if (!Number.isFinite(v.y)) throw new Error("Expected value is not a finite number at Vector constructor (y)");
+      this.x = v.x;
+    this.y = v.y;
+    } else {
+      this.x = typeof x === "number" ? x : 0;
+    this.y = typeof y === "number" ? y : 0;
+    }
+  }
+  
+  Vector.prototype.reset = function () {
+    this.x = this.y = 0;
+  };
 
-const createPatternBuilder = require('./createPatternBuilder');
-
-module.exports = generateCreateBodyFunction;
-module.exports.generateCreateBodyFunctionBody = generateCreateBodyFunctionBody;
-
-// InlineTransform: getVectorCode
-module.exports.getVectorCode = getVectorCode;
-// InlineTransform: getBodyCode
-module.exports.getBodyCode = getBodyCode;
-// InlineTransformExport: module.exports = function() { return Body; }
-
-function generateCreateBodyFunction(dimension, debugSetters) {
-  let code = generateCreateBodyFunctionBody(dimension, debugSetters);
-  let {Body} = (new Function(code))();
-  return Body;
-}
-
-function generateCreateBodyFunctionBody(dimension, debugSetters) {
-  let code = `
-${getVectorCode(dimension, debugSetters)}
-${getBodyCode(dimension, debugSetters)}
-return {Body: Body, Vector: Vector};
-`;
-  return code;
-}
-
-function getBodyCode(dimension) {
-  let pattern = createPatternBuilder(dimension);
-  let variableList = pattern('{var}', {join: ', '});
-  return `
-function Body(${variableList}) {
+function Body(x, y) {
   this.isPinned = false;
-  this.pos = new Vector(${variableList});
+  this.pos = new Vector(x, y);
   this.force = new Vector();
   this.velocity = new Vector();
   this.mass = 1;
@@ -535,82 +501,31 @@ Body.prototype.reset = function() {
   this.springLength = 0;
 }
 
-Body.prototype.setPosition = function (${variableList}) {
-  ${pattern('this.pos.{var} = {var} || 0;', {indent: 2})}
-};`;
-}
+Body.prototype.setPosition = function (x, y) {
+  this.pos.x = x || 0;
+  this.pos.y = y || 0;
+};
+module.exports = function() { return Body; }
+},{}],4:[function(require,module,exports){
 
-function getVectorCode(dimension, debugSetters) {
-  let pattern = createPatternBuilder(dimension);
-  let setters = '';
-  if (debugSetters) {
-    setters = `${pattern("\n\
-   var v{var};\n\
-Object.defineProperty(this, '{var}', {\n\
-  set: function(v) { \n\
-    if (!Number.isFinite(v)) throw new Error('Cannot set non-numbers to {var}');\n\
-    v{var} = v; \n\
-  },\n\
-  get: function() { return v{var}; }\n\
-});")}`;
-  }
+module.exports = function() { return function anonymous(options
+) {
 
-  let variableList = pattern('{var}', {join: ', '});
-  return `function Vector(${variableList}) {
-  ${setters}
-    if (typeof arguments[0] === 'object') {
-      // could be another vector
-      let v = arguments[0];
-      ${pattern('if (!Number.isFinite(v.{var})) throw new Error("Expected value is not a finite number at Vector constructor ({var})");', {indent: 4})}
-      ${pattern('this.{var} = v.{var};', {indent: 4})}
-    } else {
-      ${pattern('this.{var} = typeof {var} === "number" ? {var} : 0;', {indent: 4})}
-    }
-  }
-  
-  Vector.prototype.reset = function () {
-    ${pattern('this.{var} = ', {join: ''})}0;
-  };`;
-}
-},{"./createPatternBuilder":2}],5:[function(require,module,exports){
-const createPatternBuilder = require('./createPatternBuilder');
-
-module.exports = generateCreateDragForceFunction;
-module.exports.generateCreateDragForceFunctionBody = generateCreateDragForceFunctionBody;
-
-function generateCreateDragForceFunction(dimension) {
-  let code = generateCreateDragForceFunctionBody(dimension);
-  return new Function('options', code);
-}
-
-function generateCreateDragForceFunctionBody(dimension) {
-  let pattern = createPatternBuilder(dimension);
-  let code = `
   if (!Number.isFinite(options.dragCoefficient)) throw new Error('dragCoefficient is not a finite number');
 
   return {
     update: function(body) {
-      ${pattern('body.force.{var} -= options.dragCoefficient * body.velocity.{var};', {indent: 6})}
+      body.force.x -= options.dragCoefficient * body.velocity.x;
+      body.force.y -= options.dragCoefficient * body.velocity.y;
     }
   };
-`;
-  return code;
-}
 
-},{"./createPatternBuilder":2}],6:[function(require,module,exports){
-const createPatternBuilder = require('./createPatternBuilder');
+} }
+},{}],5:[function(require,module,exports){
 
-module.exports = generateCreateSpringForceFunction;
-module.exports.generateCreateSpringForceFunctionBody = generateCreateSpringForceFunctionBody;
+module.exports = function() { return function anonymous(options,random
+) {
 
-function generateCreateSpringForceFunction(dimension) {
-  let code = generateCreateSpringForceFunctionBody(dimension);
-  return new Function('options', 'random', code);
-}
-
-function generateCreateSpringForceFunctionBody(dimension) {
-  let pattern = createPatternBuilder(dimension);
-  let code = `
   if (!Number.isFinite(options.springCoefficient)) throw new Error('Spring coefficient is not a number');
   if (!Number.isFinite(options.springLength)) throw new Error('Spring length is not a number');
 
@@ -622,48 +537,42 @@ function generateCreateSpringForceFunctionBody(dimension) {
       var body1 = spring.from;
       var body2 = spring.to;
       var length = spring.length < 0 ? options.springLength : spring.length;
-      ${pattern('var d{var} = body2.pos.{var} - body1.pos.{var};', {indent: 6})}
-      var r = Math.sqrt(${pattern('d{var} * d{var}', {join: ' + '})});
+      var dx = body2.pos.x - body1.pos.x;
+      var dy = body2.pos.y - body1.pos.y;
+      var r = Math.sqrt(dx * dx + dy * dy);
 
       if (r === 0) {
-        ${pattern('d{var} = (random.nextDouble() - 0.5) / 50;', {indent: 8})}
-        r = Math.sqrt(${pattern('d{var} * d{var}', {join: ' + '})});
+        dx = (random.nextDouble() - 0.5) / 50;
+        dy = (random.nextDouble() - 0.5) / 50;
+        r = Math.sqrt(dx * dx + dy * dy);
       }
 
       var d = r - length;
       var coefficient = ((spring.coefficient > 0) ? spring.coefficient : options.springCoefficient) * d / r;
 
-      ${pattern('body1.force.{var} += coefficient * d{var}', {indent: 6})};
+      body1.force.x += coefficient * dx
+      body1.force.y += coefficient * dy;
       body1.springCount += 1;
       body1.springLength += r;
 
-      ${pattern('body2.force.{var} -= coefficient * d{var}', {indent: 6})};
+      body2.force.x -= coefficient * dx
+      body2.force.y -= coefficient * dy;
       body2.springCount += 1;
       body2.springLength += r;
     }
   };
-`;
-  return code;
-}
 
-},{"./createPatternBuilder":2}],7:[function(require,module,exports){
-const createPatternBuilder = require('./createPatternBuilder');
+} }
+},{}],6:[function(require,module,exports){
 
-module.exports = generateIntegratorFunction;
-module.exports.generateIntegratorFunctionBody = generateIntegratorFunctionBody;
+module.exports = function() { return function anonymous(bodies,timeStep,adaptiveTimeStepWeight
+) {
 
-function generateIntegratorFunction(dimension) {
-  let code = generateIntegratorFunctionBody(dimension);
-  return new Function('bodies', 'timeStep', 'adaptiveTimeStepWeight', code);
-}
-
-function generateIntegratorFunctionBody(dimension) {
-  let pattern = createPatternBuilder(dimension);
-  let code = `
   var length = bodies.length;
   if (length === 0) return 0;
 
-  ${pattern('var d{var} = 0, t{var} = 0;', {indent: 2})}
+  var dx = 0, tx = 0;
+  var dy = 0, ty = 0;
 
   for (var i = 0; i < length; ++i) {
     var body = bodies[i];
@@ -675,64 +584,127 @@ function generateIntegratorFunctionBody(dimension) {
 
     var coeff = timeStep / body.mass;
 
-    ${pattern('body.velocity.{var} += coeff * body.force.{var};', {indent: 4})}
-    ${pattern('var v{var} = body.velocity.{var};', {indent: 4})}
-    var v = Math.sqrt(${pattern('v{var} * v{var}', {join: ' + '})});
+    body.velocity.x += coeff * body.force.x;
+    body.velocity.y += coeff * body.force.y;
+    var vx = body.velocity.x;
+    var vy = body.velocity.y;
+    var v = Math.sqrt(vx * vx + vy * vy);
 
     if (v > 1) {
       // We normalize it so that we move within timeStep range. 
       // for the case when v <= 1 - we let velocity to fade out.
-      ${pattern('body.velocity.{var} = v{var} / v;', {indent: 6})}
+      body.velocity.x = vx / v;
+      body.velocity.y = vy / v;
     }
 
-    ${pattern('d{var} = timeStep * body.velocity.{var};', {indent: 4})}
+    dx = timeStep * body.velocity.x;
+    dy = timeStep * body.velocity.y;
 
-    ${pattern('body.pos.{var} += d{var};', {indent: 4})}
+    body.pos.x += dx;
+    body.pos.y += dy;
 
-    ${pattern('t{var} += Math.abs(d{var});', {indent: 4})}
+    tx += Math.abs(dx);
+    ty += Math.abs(dy);
   }
 
-  return (${pattern('t{var} * t{var}', {join: ' + '})})/length;
-`;
-  return code;
+  return (tx * tx + ty * ty)/length;
+
+} }
+},{}],7:[function(require,module,exports){
+
+/**
+ * Our implementation of QuadTree is non-recursive to avoid GC hit
+ * This data structure represent stack of elements
+ * which we are trying to insert into quad tree.
+ */
+function InsertStack () {
+    this.stack = [];
+    this.popIdx = 0;
 }
 
-},{"./createPatternBuilder":2}],8:[function(require,module,exports){
-const createPatternBuilder = require('./createPatternBuilder');
-const getVariableName = require('./getVariableName');
+InsertStack.prototype = {
+    isEmpty: function() {
+        return this.popIdx === 0;
+    },
+    push: function (node, body) {
+        var item = this.stack[this.popIdx];
+        if (!item) {
+            // we are trying to avoid memory pressure: create new element
+            // only when absolutely necessary
+            this.stack[this.popIdx] = new InsertStackElement(node, body);
+        } else {
+            item.node = node;
+            item.body = body;
+        }
+        ++this.popIdx;
+    },
+    pop: function () {
+        if (this.popIdx > 0) {
+            return this.stack[--this.popIdx];
+        }
+    },
+    reset: function () {
+        this.popIdx = 0;
+    }
+};
 
-module.exports = generateQuadTreeFunction;
-module.exports.generateQuadTreeFunctionBody = generateQuadTreeFunctionBody;
-
-// These exports are for InlineTransform tool.
-// InlineTransform: getInsertStackCode
-module.exports.getInsertStackCode = getInsertStackCode;
-// InlineTransform: getQuadNodeCode
-module.exports.getQuadNodeCode = getQuadNodeCode;
-// InlineTransform: isSamePosition
-module.exports.isSamePosition = isSamePosition;
-// InlineTransform: getChildBodyCode
-module.exports.getChildBodyCode = getChildBodyCode;
-// InlineTransform: setChildBodyCode
-module.exports.setChildBodyCode = setChildBodyCode;
-
-function generateQuadTreeFunction(dimension) {
-  let code = generateQuadTreeFunctionBody(dimension);
-  return (new Function(code))();
+function InsertStackElement(node, body) {
+    this.node = node; // QuadTree node
+    this.body = body; // physical body which needs to be inserted to node
 }
 
-function generateQuadTreeFunctionBody(dimension) {
-  let pattern = createPatternBuilder(dimension);
-  let quadCount = Math.pow(2, dimension);
 
-  let code = `
-${getInsertStackCode()}
-${getQuadNodeCode(dimension)}
-${isSamePosition(dimension)}
-${getChildBodyCode(dimension)}
-${setChildBodyCode(dimension)}
+function QuadNode() {
+  // body stored inside this node. In quad tree only leaf nodes (by construction)
+  // contain bodies:
+  this.body = null;
 
-function createQuadTree(options, random) {
+  // Child nodes are stored in quads. Each quad is presented by number:
+  // 0 | 1
+  // -----
+  // 2 | 3
+  this.quad0 = null;
+  this.quad1 = null;
+  this.quad2 = null;
+  this.quad3 = null;
+
+  // Total mass of current node
+  this.mass = 0;
+
+  // Center of mass coordinates
+  this.mass_x = 0;
+  this.mass_y = 0;
+
+  // bounding box coordinates
+  this.min_x = 0;
+  this.min_y = 0;
+  this.max_x = 0;
+  this.max_y = 0;
+}
+
+
+  function isSamePosition(point1, point2) {
+    var dx = Math.abs(point1.x - point2.x);
+  var dy = Math.abs(point1.y - point2.y);
+  
+    return dx < 1e-8 && dy < 1e-8;
+  }  
+
+function getChild(node, idx) {
+  if (idx === 0) return node.quad0;
+  if (idx === 1) return node.quad1;
+  if (idx === 2) return node.quad2;
+  if (idx === 3) return node.quad3;
+  return null;
+}
+
+function setChild(node, idx, child) {
+    if (idx === 0) node.quad0 = child;
+  else if (idx === 1) node.quad1 = child;
+  else if (idx === 2) node.quad2 = child;
+  else if (idx === 3) node.quad3 = child;
+}
+module.exports = function() { return function createQuadTree(options, random) {
   options = options || {};
   options.gravity = typeof options.gravity === 'number' ? options.gravity : -1;
   options.theta = typeof options.theta === 'number' ? options.theta : 0.8;
@@ -781,10 +753,13 @@ function createQuadTree(options, random) {
     // To avoid pressure on GC we reuse nodes.
     var node = nodesCache[currentInCache];
     if (node) {
-${assignQuads('      node.')}
+      node.quad0 = null;
+      node.quad1 = null;
+      node.quad2 = null;
+      node.quad3 = null;
       node.body = null;
-      node.mass = ${pattern('node.mass_{var} = ', {join: ''})}0;
-      ${pattern('node.min_{var} = node.max_{var} = ', {join: ''})}0;
+      node.mass = node.mass_x = node.mass_y = 0;
+      node.min_x = node.max_x = node.min_y = node.max_y = 0;
     } else {
       node = new QuadNode();
       nodesCache[currentInCache] = node;
@@ -797,9 +772,11 @@ ${assignQuads('      node.')}
   function update(sourceBody) {
     var queue = updateQueue;
     var v;
-    ${pattern('var d{var};', {indent: 4})}
+    var dx;
+    var dy;
     var r; 
-    ${pattern('var f{var} = 0;', {indent: 4})}
+    var fx = 0;
+    var fy = 0;
     var queueLength = 1;
     var shiftIdx = 0;
     var pushIdx = 1;
@@ -817,72 +794,105 @@ ${assignQuads('      node.')}
         // If the current node is a leaf node (and it is not source body),
         // calculate the force exerted by the current node on body, and add this
         // amount to body's net force.
-        ${pattern('d{var} = body.pos.{var} - sourceBody.pos.{var};', {indent: 8})}
-        r = Math.sqrt(${pattern('d{var} * d{var}', {join: ' + '})});
+        dx = body.pos.x - sourceBody.pos.x;
+        dy = body.pos.y - sourceBody.pos.y;
+        r = Math.sqrt(dx * dx + dy * dy);
 
         if (r === 0) {
           // Poor man's protection against zero distance.
-          ${pattern('d{var} = (random.nextDouble() - 0.5) / 50;', {indent: 10})}
-          r = Math.sqrt(${pattern('d{var} * d{var}', {join: ' + '})});
+          dx = (random.nextDouble() - 0.5) / 50;
+          dy = (random.nextDouble() - 0.5) / 50;
+          r = Math.sqrt(dx * dx + dy * dy);
         }
 
         // This is standard gravitation force calculation but we divide
         // by r^3 to save two operations when normalizing force vector.
         v = gravity * body.mass * sourceBody.mass / (r * r * r);
-        ${pattern('f{var} += v * d{var};', {indent: 8})}
+        fx += v * dx;
+        fy += v * dy;
       } else if (differentBody) {
         // Otherwise, calculate the ratio s / r,  where s is the width of the region
         // represented by the internal node, and r is the distance between the body
         // and the node's center-of-mass
-        ${pattern('d{var} = node.mass_{var} / node.mass - sourceBody.pos.{var};', {indent: 8})}
-        r = Math.sqrt(${pattern('d{var} * d{var}', {join: ' + '})});
+        dx = node.mass_x / node.mass - sourceBody.pos.x;
+        dy = node.mass_y / node.mass - sourceBody.pos.y;
+        r = Math.sqrt(dx * dx + dy * dy);
 
         if (r === 0) {
           // Sorry about code duplication. I don't want to create many functions
           // right away. Just want to see performance first.
-          ${pattern('d{var} = (random.nextDouble() - 0.5) / 50;', {indent: 10})}
-          r = Math.sqrt(${pattern('d{var} * d{var}', {join: ' + '})});
+          dx = (random.nextDouble() - 0.5) / 50;
+          dy = (random.nextDouble() - 0.5) / 50;
+          r = Math.sqrt(dx * dx + dy * dy);
         }
         // If s / r < θ, treat this internal node as a single body, and calculate the
         // force it exerts on sourceBody, and add this amount to sourceBody's net force.
-        if ((node.max_${getVariableName(0)} - node.min_${getVariableName(0)}) / r < theta) {
+        if ((node.max_x - node.min_x) / r < theta) {
           // in the if statement above we consider node's width only
           // because the region was made into square during tree creation.
           // Thus there is no difference between using width or height.
           v = gravity * node.mass * sourceBody.mass / (r * r * r);
-          ${pattern('f{var} += v * d{var};', {indent: 10})}
+          fx += v * dx;
+          fy += v * dy;
         } else {
           // Otherwise, run the procedure recursively on each of the current node's children.
 
           // I intentionally unfolded this loop, to save several CPU cycles.
-${runRecursiveOnChildren()}
+          if (node.quad0) {
+            queue[pushIdx] = node.quad0;
+            queueLength += 1;
+            pushIdx += 1;
+          }
+          if (node.quad1) {
+            queue[pushIdx] = node.quad1;
+            queueLength += 1;
+            pushIdx += 1;
+          }
+          if (node.quad2) {
+            queue[pushIdx] = node.quad2;
+            queueLength += 1;
+            pushIdx += 1;
+          }
+          if (node.quad3) {
+            queue[pushIdx] = node.quad3;
+            queueLength += 1;
+            pushIdx += 1;
+          }
         }
       }
     }
 
-    ${pattern('sourceBody.force.{var} += f{var};', {indent: 4})}
+    sourceBody.force.x += fx;
+    sourceBody.force.y += fy;
   }
 
   function insertBodies(bodies) {
-    ${pattern('var {var}min = Number.MAX_VALUE;', {indent: 4})}
-    ${pattern('var {var}max = Number.MIN_VALUE;', {indent: 4})}
+    var xmin = Number.MAX_VALUE;
+    var ymin = Number.MAX_VALUE;
+    var xmax = Number.MIN_VALUE;
+    var ymax = Number.MIN_VALUE;
     var i = bodies.length;
 
     // To reduce quad tree depth we are looking for exact bounding box of all particles.
     while (i--) {
       var pos = bodies[i].pos;
-      ${pattern('if (pos.{var} < {var}min) {var}min = pos.{var};', {indent: 6})}
-      ${pattern('if (pos.{var} > {var}max) {var}max = pos.{var};', {indent: 6})}
+      if (pos.x < xmin) xmin = pos.x;
+      if (pos.y < ymin) ymin = pos.y;
+      if (pos.x > xmax) xmax = pos.x;
+      if (pos.y > ymax) ymax = pos.y;
     }
 
     // Makes the bounds square.
     var maxSideLength = -Infinity;
-    ${pattern('if ({var}max - {var}min > maxSideLength) maxSideLength = {var}max - {var}min ;', {indent: 4})}
+    if (xmax - xmin > maxSideLength) maxSideLength = xmax - xmin ;
+    if (ymax - ymin > maxSideLength) maxSideLength = ymax - ymin ;
 
     currentInCache = 0;
     root = newNode();
-    ${pattern('root.min_{var} = {var}min;', {indent: 4})}
-    ${pattern('root.max_{var} = {var}min + maxSideLength;', {indent: 4})}
+    root.min_x = xmin;
+    root.min_y = ymin;
+    root.max_x = xmin + maxSideLength;
+    root.max_y = ymin + maxSideLength;
 
     i = bodies.length - 1;
     if (i >= 0) {
@@ -904,17 +914,30 @@ ${runRecursiveOnChildren()}
 
       if (!node.body) {
         // This is internal node. Update the total mass of the node and center-of-mass.
-        ${pattern('var {var} = body.pos.{var};', {indent: 8})}
+        var x = body.pos.x;
+        var y = body.pos.y;
         node.mass += body.mass;
-        ${pattern('node.mass_{var} += body.mass * {var};', {indent: 8})}
+        node.mass_x += body.mass * x;
+        node.mass_y += body.mass * y;
 
         // Recursively insert the body in the appropriate quadrant.
         // But first find the appropriate quadrant.
         var quadIdx = 0; // Assume we are in the 0's quad.
-        ${pattern('var min_{var} = node.min_{var};', {indent: 8})}
-        ${pattern('var max_{var} = (min_{var} + node.max_{var}) / 2;', {indent: 8})}
+        var min_x = node.min_x;
+        var min_y = node.min_y;
+        var max_x = (min_x + node.max_x) / 2;
+        var max_y = (min_y + node.max_y) / 2;
 
-${assignInsertionQuadIndex(8)}
+        if (x > max_x) {
+          quadIdx = quadIdx + 1;
+          min_x = max_x;
+          max_x = node.max_x;
+        }
+        if (y > max_y) {
+          quadIdx = quadIdx + 2;
+          min_y = max_y;
+          max_y = node.max_y;
+        }
 
         var child = getChild(node, quadIdx);
 
@@ -922,8 +945,10 @@ ${assignInsertionQuadIndex(8)}
           // The node is internal but this quadrant is not taken. Add
           // subnode to it.
           child = newNode();
-          ${pattern('child.min_{var} = min_{var};', {indent: 10})}
-          ${pattern('child.max_{var} = max_{var};', {indent: 10})}
+          child.min_x = min_x;
+          child.min_y = min_y;
+          child.max_x = max_x;
+          child.max_y = max_y;
           child.body = body;
 
           setChild(node, quadIdx, child);
@@ -944,9 +969,11 @@ ${assignInsertionQuadIndex(8)}
           var retriesCount = 3;
           do {
             var offset = random.nextDouble();
-            ${pattern('var d{var} = (node.max_{var} - node.min_{var}) * offset;', {indent: 12})}
+            var dx = (node.max_x - node.min_x) * offset;
+            var dy = (node.max_y - node.min_y) * offset;
 
-            ${pattern('oldBody.pos.{var} = node.min_{var} + d{var};', {indent: 12})}
+            oldBody.pos.x = node.min_x + dx;
+            oldBody.pos.y = node.min_y + dy;
             retriesCount -= 1;
             // Make sure we don't bump it out of the box. If we do, next iteration should fix it
           } while (retriesCount > 0 && isSamePosition(oldBody.pos, body.pos));
@@ -965,208 +992,8 @@ ${assignInsertionQuadIndex(8)}
       }
     }
   }
-}
-return createQuadTree;
-
-`;
-  return code;
-
-
-  function assignInsertionQuadIndex(indentCount) {
-    let insertionCode = [];
-    let indent = Array(indentCount + 1).join(' ');
-    for (let i = 0; i < dimension; ++i) {
-      insertionCode.push(indent + `if (${getVariableName(i)} > max_${getVariableName(i)}) {`);
-      insertionCode.push(indent + `  quadIdx = quadIdx + ${Math.pow(2, i)};`);
-      insertionCode.push(indent + `  min_${getVariableName(i)} = max_${getVariableName(i)};`);
-      insertionCode.push(indent + `  max_${getVariableName(i)} = node.max_${getVariableName(i)};`);
-      insertionCode.push(indent + `}`);
-    }
-    return insertionCode.join('\n');
-    // if (x > max_x) { // somewhere in the eastern part.
-    //   quadIdx = quadIdx + 1;
-    //   left = right;
-    //   right = node.right;
-    // }
-  }
-
-  function runRecursiveOnChildren() {
-    let indent = Array(11).join(' ');
-    let recursiveCode = [];
-    for (let i = 0; i < quadCount; ++i) {
-      recursiveCode.push(indent + `if (node.quad${i}) {`);
-      recursiveCode.push(indent + `  queue[pushIdx] = node.quad${i};`);
-      recursiveCode.push(indent + `  queueLength += 1;`);
-      recursiveCode.push(indent + `  pushIdx += 1;`);
-      recursiveCode.push(indent + `}`);
-    }
-    return recursiveCode.join('\n');
-    // if (node.quad0) {
-    //   queue[pushIdx] = node.quad0;
-    //   queueLength += 1;
-    //   pushIdx += 1;
-    // }
-  }
-
-  function assignQuads(indent) {
-    // this.quad0 = null;
-    // this.quad1 = null;
-    // this.quad2 = null;
-    // this.quad3 = null;
-    let quads = [];
-    for (let i = 0; i < quadCount; ++i) {
-      quads.push(`${indent}quad${i} = null;`);
-    }
-    return quads.join('\n');
-  }
-}
-
-function isSamePosition(dimension) {
-  let pattern = createPatternBuilder(dimension);
-  return `
-  function isSamePosition(point1, point2) {
-    ${pattern('var d{var} = Math.abs(point1.{var} - point2.{var});', {indent: 2})}
-  
-    return ${pattern('d{var} < 1e-8', {join: ' && '})};
-  }  
-`;
-}
-
-function setChildBodyCode(dimension) {
-  var quadCount = Math.pow(2, dimension);
-  return `
-function setChild(node, idx, child) {
-  ${setChildBody()}
-}`;
-  function setChildBody() {
-    let childBody = [];
-    for (let i = 0; i < quadCount; ++i) {
-      let prefix = (i === 0) ? '  ' : '  else ';
-      childBody.push(`${prefix}if (idx === ${i}) node.quad${i} = child;`);
-    }
-
-    return childBody.join('\n');
-    // if (idx === 0) node.quad0 = child;
-    // else if (idx === 1) node.quad1 = child;
-    // else if (idx === 2) node.quad2 = child;
-    // else if (idx === 3) node.quad3 = child;
-  }
-}
-
-function getChildBodyCode(dimension) {
-  return `function getChild(node, idx) {
-${getChildBody()}
-  return null;
-}`;
-
-  function getChildBody() {
-    let childBody = [];
-    let quadCount = Math.pow(2, dimension);
-    for (let i = 0; i < quadCount; ++i) {
-      childBody.push(`  if (idx === ${i}) return node.quad${i};`);
-    }
-
-    return childBody.join('\n');
-    // if (idx === 0) return node.quad0;
-    // if (idx === 1) return node.quad1;
-    // if (idx === 2) return node.quad2;
-    // if (idx === 3) return node.quad3;
-  }
-}
-
-function getQuadNodeCode(dimension) {
-  let pattern = createPatternBuilder(dimension);
-  let quadCount = Math.pow(2, dimension);
-  var quadNodeCode = `
-function QuadNode() {
-  // body stored inside this node. In quad tree only leaf nodes (by construction)
-  // contain bodies:
-  this.body = null;
-
-  // Child nodes are stored in quads. Each quad is presented by number:
-  // 0 | 1
-  // -----
-  // 2 | 3
-${assignQuads('  this.')}
-
-  // Total mass of current node
-  this.mass = 0;
-
-  // Center of mass coordinates
-  ${pattern('this.mass_{var} = 0;', {indent: 2})}
-
-  // bounding box coordinates
-  ${pattern('this.min_{var} = 0;', {indent: 2})}
-  ${pattern('this.max_{var} = 0;', {indent: 2})}
-}
-`;
-  return quadNodeCode;
-
-  function assignQuads(indent) {
-    // this.quad0 = null;
-    // this.quad1 = null;
-    // this.quad2 = null;
-    // this.quad3 = null;
-    let quads = [];
-    for (let i = 0; i < quadCount; ++i) {
-      quads.push(`${indent}quad${i} = null;`);
-    }
-    return quads.join('\n');
-  }
-}
-
-function getInsertStackCode() {
-  return `
-/**
- * Our implementation of QuadTree is non-recursive to avoid GC hit
- * This data structure represent stack of elements
- * which we are trying to insert into quad tree.
- */
-function InsertStack () {
-    this.stack = [];
-    this.popIdx = 0;
-}
-
-InsertStack.prototype = {
-    isEmpty: function() {
-        return this.popIdx === 0;
-    },
-    push: function (node, body) {
-        var item = this.stack[this.popIdx];
-        if (!item) {
-            // we are trying to avoid memory pressure: create new element
-            // only when absolutely necessary
-            this.stack[this.popIdx] = new InsertStackElement(node, body);
-        } else {
-            item.node = node;
-            item.body = body;
-        }
-        ++this.popIdx;
-    },
-    pop: function () {
-        if (this.popIdx > 0) {
-            return this.stack[--this.popIdx];
-        }
-    },
-    reset: function () {
-        this.popIdx = 0;
-    }
-};
-
-function InsertStackElement(node, body) {
-    this.node = node; // QuadTree node
-    this.body = body; // physical body which needs to be inserted to node
-}
-`;
-}
-},{"./createPatternBuilder":2,"./getVariableName":9}],9:[function(require,module,exports){
-module.exports = function getVariableName(index) {
-  if (index === 0) return 'x';
-  if (index === 1) return 'y';
-  if (index === 2) return 'z';
-  return 'c' + (index + 1);
-};
-},{}],10:[function(require,module,exports){
+} }
+},{}],8:[function(require,module,exports){
 /**
  * Manages a simulation of physical forces acting on bodies and springs.
  */
@@ -1567,7 +1394,7 @@ function augment(source, target, key) {
   }
 }
 
-},{"./codeGenerators/generateBounds":3,"./codeGenerators/generateCreateBody":4,"./codeGenerators/generateCreateDragForce":5,"./codeGenerators/generateCreateSpringForce":6,"./codeGenerators/generateIntegrator":7,"./codeGenerators/generateQuadTree":8,"./spring":11,"ngraph.events":12,"ngraph.merge":13,"ngraph.random":14}],11:[function(require,module,exports){
+},{"./codeGenerators/generateBounds":2,"./codeGenerators/generateCreateBody":3,"./codeGenerators/generateCreateDragForce":4,"./codeGenerators/generateCreateSpringForce":5,"./codeGenerators/generateIntegrator":6,"./codeGenerators/generateQuadTree":7,"./spring":9,"ngraph.events":10,"ngraph.merge":11,"ngraph.random":12}],9:[function(require,module,exports){
 module.exports = Spring;
 
 /**
@@ -1581,7 +1408,7 @@ function Spring(fromBody, toBody, length, springCoefficient) {
     this.coefficient = springCoefficient;
 }
 
-},{}],12:[function(require,module,exports){
+},{}],10:[function(require,module,exports){
 module.exports = function eventify(subject) {
   validateSubject(subject);
 
@@ -1671,7 +1498,7 @@ function validateSubject(subject) {
   }
 }
 
-},{}],13:[function(require,module,exports){
+},{}],11:[function(require,module,exports){
 module.exports = merge;
 
 /**
@@ -1704,7 +1531,7 @@ function merge(target, options) {
   return target;
 }
 
-},{}],14:[function(require,module,exports){
+},{}],12:[function(require,module,exports){
 module.exports = random;
 
 // TODO: Deprecate?
