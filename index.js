@@ -20,7 +20,7 @@ function createLayout(graph, physicsSettings) {
   var physicsSimulator = createSimulator(physicsSettings);
   if (Array.isArray(physicsSettings)) throw new Error('Physics settings is expected to be an object');
 
-  var nodeMass = defaultNodeMass;
+  var nodeMass = graph.version > 19 ? defaultSetNodeMass : defaultArrayNodeMass;
   if (physicsSettings && typeof physicsSettings.nodeMass === 'function') {
     nodeMass = physicsSettings.nodeMass;
   }
@@ -382,10 +382,17 @@ function createLayout(graph, physicsSettings) {
    * @param {String|Number} nodeId identifier of a node, for which body mass needs to be calculated
    * @returns {Number} recommended mass of the body;
    */
-  function defaultNodeMass(nodeId) {
+  function defaultArrayNodeMass(nodeId) {
+    // This function is for older versions of ngraph.graph.
     var links = graph.getLinks(nodeId);
     if (!links) return 1;
     return 1 + links.length / 3.0;
+  }
+
+  function defaultSetNodeMass(nodeId) {
+    var links = graph.getLinks(nodeId);
+    if (!links) return 1;
+    return 1 + links.size / 3.0;
   }
 }
 
