@@ -41,6 +41,9 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
 
     graph = findLargestComponent(newGraph, 1)[0];
 
+    // Let them play on console with it!
+    window.graph = graph;
+
     guide = createGuide(scene, {showGrid: true, lineColor: 0xffffff10, maxAlpha: 0x10, showCursor: false});
     // this is a standard force layout
     layout = createForceLayout(graph, layoutSettings);
