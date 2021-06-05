@@ -39,7 +39,7 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
     // newGraph = createGraph(); newGraph.addLink(1, 2)
     scene = initScene();
 
-    graph = findLargestComponent(newGraph, 1)[0];
+    graph = newGraph; //findLargestComponent(newGraph, 1)[0];
 
     // Let them play on console with it!
     window.graph = graph;
