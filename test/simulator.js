@@ -6,8 +6,8 @@ var createSimulator = require('../lib/createPhysicsSimulator');
 
 test('Can step without bodies', function (t) {
   var simulator = createSimulator();
-  t.equals(simulator.bodies.length, 0, 'There should be no bodies');
-  t.equals(simulator.springs.length, 0, 'There should be no springs');
+  t.equal(simulator.bodies.length, 0, 'There should be no bodies');
+  t.equal(simulator.springs.length, 0, 'There should be no springs');
   simulator.step();
   t.end();
 });
@@ -39,15 +39,15 @@ test('it can add a body at given position', function(t) {
   simulator.addBodyAt(pos1);
   simulator.addBodyAt(pos2);
 
-  t.equals(simulator.bodies.length, 2, 'All bodies are added');
+  t.equal(simulator.bodies.length, 2, 'All bodies are added');
   var body1 = simulator.bodies[0];
 
-  t.equals(body1.pos.x, -10, 'X is there');
-  t.equals(body1.pos.y, 0, 'Y is there');
+  t.equal(body1.pos.x, -10, 'X is there');
+  t.equal(body1.pos.y, 0, 'Y is there');
 
   var body2 = simulator.bodies[1];
-  t.equals(body2.pos.x, 10, 'X is there');
-  t.equals(body2.pos.y, 0, 'Y is there');
+  t.equal(body2.pos.x, 10, 'X is there');
+  t.equal(body2.pos.y, 0, 'Y is there');
   t.end();
 });
 
@@ -57,11 +57,11 @@ test('Does not update position of one body', function (t) {
   simulator.addBody(body);
 
   simulator.step(1);
-  t.equals(simulator.bodies.length, 1, 'Number of bodies is 1');
-  t.equals(simulator.springs.length, 0, 'Number of springs is 0');
-  t.equals(simulator.bodies[0], body, 'Body points to actual object');
-  t.equals(body.pos.x, 0, 'X is not changed');
-  t.equals(body.pos.y, 0, 'Y is not changed');
+  t.equal(simulator.bodies.length, 1, 'Number of bodies is 1');
+  t.equal(simulator.springs.length, 0, 'Number of springs is 0');
+  t.equal(simulator.bodies[0], body, 'Body points to actual object');
+  t.equal(body.pos.x, 0, 'X is not changed');
+  t.equal(body.pos.y, 0, 'Y is not changed');
   t.end();
 });
 
@@ -143,10 +143,10 @@ test('Can remove bodies', function (t) {
   var simulator = createSimulator();
   var body = new Body(0, 0);
   simulator.addBody(body);
-  t.equals(simulator.bodies.length, 1, 'Number of bodies is 1');
+  t.equal(simulator.bodies.length, 1, 'Number of bodies is 1');
   var result = simulator.removeBody(body);
-  t.equals(result, true, 'body successfully removed');
-  t.equals(simulator.bodies.length, 0, 'Number of bodies is 0');
+  t.equal(result, true, 'body successfully removed');
+  t.equal(simulator.bodies.length, 0, 'Number of bodies is 0');
   t.end();
 });
 
@@ -158,12 +158,12 @@ test('Updates position for two bodies', function (t) {
   simulator.addBody(body2);
 
   simulator.step();
-  t.equals(simulator.bodies.length, 2, 'Number of bodies is 2');
+  t.equal(simulator.bodies.length, 2, 'Number of bodies is 2');
   t.ok(body1.pos.x !== 0, 'Body1.X has changed');
   t.ok(body2.pos.x !== 0, 'Body2.X has changed');
 
-  t.equals(body1.pos.y, 0, 'Body1.Y has not changed');
-  t.equals(body2.pos.y, 0, 'Body2.Y has not changed');
+  t.equal(body1.pos.y, 0, 'Body1.Y has not changed');
+  t.equal(body2.pos.y, 0, 'Body2.Y has not changed');
   t.end();
 });
 
@@ -174,9 +174,9 @@ test('add spring should not add bodies', function (t) {
 
   simulator.addSpring(body1, body2, 10);
 
-  t.equals(simulator.bodies.length, 0, 'Should not add two bodies');
-  t.equals(simulator.bodies.length, 0, 'Should not add two bodies');
-  t.equals(simulator.springs.length, 1, 'Should have a spring');
+  t.equal(simulator.bodies.length, 0, 'Should not add two bodies');
+  t.equal(simulator.bodies.length, 0, 'Should not add two bodies');
+  t.equal(simulator.springs.length, 1, 'Should have a spring');
   t.end();
 });
 
@@ -272,32 +272,32 @@ test('it can change settings', function(t) {
   var currentTheta = simulator.theta();
   t.ok(typeof currentTheta === 'number', 'theta is here');
   simulator.theta(1.2);
-  t.equals(simulator.theta(), 1.2, 'theta is changed');
+  t.equal(simulator.theta(), 1.2, 'theta is changed');
 
   var currentSpringCoefficient = simulator.springCoefficient();
   t.ok(typeof currentSpringCoefficient === 'number', 'springCoefficient is here');
   simulator.springCoefficient(0.8);
-  t.equals(simulator.springCoefficient(), 0.8, 'springCoefficient is changed');
+  t.equal(simulator.springCoefficient(), 0.8, 'springCoefficient is changed');
 
   var gravity = simulator.gravity();
   t.ok(typeof gravity === 'number', 'gravity is here');
   simulator.gravity(-0.8);
-  t.equals(simulator.gravity(), -0.8, 'gravity is changed');
+  t.equal(simulator.gravity(), -0.8, 'gravity is changed');
 
   var springLength = simulator.springLength();
   t.ok(typeof springLength === 'number', 'springLength is here');
   simulator.springLength(80);
-  t.equals(simulator.springLength(), 80, 'springLength is changed');
+  t.equal(simulator.springLength(), 80, 'springLength is changed');
 
   var dragCoefficient = simulator.dragCoefficient();
   t.ok(typeof dragCoefficient === 'number', 'dragCoefficient is here');
   simulator.dragCoefficient(0.8);
-  t.equals(simulator.dragCoefficient(), 0.8, 'dragCoefficient is changed');
+  t.equal(simulator.dragCoefficient(), 0.8, 'dragCoefficient is changed');
 
   var timeStep = simulator.timeStep();
   t.ok(typeof timeStep === 'number', 'timeStep is here');
   simulator.timeStep(8);
-  t.equals(simulator.timeStep(), 8, 'timeStep is changed');
+  t.equal(simulator.timeStep(), 8, 'timeStep is changed');
 
   t.end();
 });

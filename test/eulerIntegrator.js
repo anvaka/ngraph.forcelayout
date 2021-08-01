@@ -37,7 +37,7 @@ test('Body gains velocity under force', function (t) {
 
 test('No bodies yield 0 movement', function (t) {
   var movement = integrate([], 2);
-  t.equals(movement, 0, 'Nothing has moved');
+  t.equal(movement, 0, 'Nothing has moved');
   t.end();
 });
 

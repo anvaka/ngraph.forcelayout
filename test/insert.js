@@ -12,7 +12,7 @@ test('insert and update update forces', function (t) {
 
   tree.insertBodies([body]);
   tree.updateBodyForce(body);
-  t.equivalent(body, clone, 'The body should not be changed - there are no forces acting on it');
+  t.same(body, clone, 'The body should not be changed - there are no forces acting on it');
   t.end();
 });
 
@@ -23,7 +23,7 @@ test('it can get root', function (t) {
   tree.insertBodies([body]);
   var root = tree.getRoot();
   t.ok(root, 'Root is present');
-  t.equals(root.body, body, 'Body is initialized');
+  t.equal(root.body, body, 'Body is initialized');
   t.end();
 });
 
@@ -37,7 +37,7 @@ test('Two bodies repel each other', function (t) {
   tree.updateBodyForce(bodyB);
   // based on our physical model construction forces should be equivalent, with
   // opposite sign:
-  t.ok(bodyA.force.x + bodyB.force.x === 0, 'Forces should be equivalent, with opposite sign');
+  t.ok(bodyA.force.x + bodyB.force.x === 0, 'Forces should be same, with opposite sign');
   t.ok(bodyA.force.x !== 0, 'X-force for body A should not be zero');
   t.ok(bodyB.force.x !== 0, 'X-force for body B should not be zero');
   // On the other hand, our bodies should not move by Y axis:

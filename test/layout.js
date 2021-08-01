@@ -61,13 +61,13 @@ test('it can set node mass', function(t) {
 
   var layout = createLayout(g, {
     nodeMass: function (nodeId) {
-      t.equals(nodeId, 'anvaka', 'correct node is called');
+      t.equal(nodeId, 'anvaka', 'correct node is called');
       return 84; // my mass in kilograms :P
     }
   });
 
   var body = layout.getBody('anvaka');
-  t.equals(body.mass, 84, 'Mass is okay');
+  t.equal(body.mass, 84, 'Mass is okay');
 
   t.end();
 });
@@ -176,8 +176,8 @@ test('Layout can set node position', function (t) {
 
   // and make sure node 1 was not moved:
   var actualPosition = layout.getNodePosition(1);
-  t.equals(actualPosition.x, 42, 'X has not changed');
-  t.equals(actualPosition.y, 42, 'Y has not changed');
+  t.equal(actualPosition.x, 42, 'X has not changed');
+  t.equal(actualPosition.y, 42, 'Y has not changed');
 
   t.end();
 });
@@ -229,7 +229,7 @@ test('layout respects proposed original position', function (t) {
   var layout = createLayout(graph);
   layout.step();
 
-  t.deepEqual(layout.getNodePosition(node.id), initialPosition, 'original position preserved');
+  t.same(layout.getNodePosition(node.id), initialPosition, 'original position preserved');
 
   t.end();
 });
@@ -358,7 +358,7 @@ test('physics simulator', function (t) {
     var layout = createLayout(graph, {
       theta: 1.5
     });
-    t.equals(layout.simulator.theta(), 1.5, 'Simulator settings are overridden');
+    t.equal(layout.simulator.theta(), 1.5, 'Simulator settings are overridden');
     t.end();
   });
 
@@ -392,7 +392,7 @@ test('it can iterate over bodies', function(t) {
     calledCount += 1;
   });
 
-  t.equals(calledCount, 2, 'Both bodies are visited');
+  t.equal(calledCount, 2, 'Both bodies are visited');
   t.end();
 });
 
