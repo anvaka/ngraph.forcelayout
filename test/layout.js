@@ -420,6 +420,21 @@ test('it handles large graphs', function (t) {
   t.end();
 });
 
+test('it can create high dimensional layout', function(t) {
+  var graph = createGraph();
+  graph.addLink(1, 2);
+  var layout = createLayout(graph, {dimensions: 6});
+  layout.step();
+
+  var pos = layout.getNodePosition(1);
+  t.ok(pos.x !== undefined, 'Position has x');
+  t.ok(pos.y !== undefined, 'Position has y');
+  t.ok(pos.z !== undefined, 'Position has z');
+  t.ok(pos.c4 !== undefined, 'Position has c4');
+  t.ok(pos.c5 !== undefined, 'Position has c5');
+  t.ok(pos.c6 !== undefined, 'Position has c6');
+  t.end();
+});
 
 function positionChanged(pos1, pos2) {
   return (pos1.x !== pos2.x) || (pos1.y !== pos2.y);
