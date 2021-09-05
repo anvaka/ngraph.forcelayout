@@ -301,3 +301,36 @@ test('it can change settings', function(t) {
 
   t.end();
 });
+
+test('it can augment string setter values', function (t) {
+  var simulator = createSimulator({
+    name: 'John'
+  });
+
+  simulator.name('Alisa');
+  t.equal(simulator.name(), 'Alisa', 'name is Alisa');
+  t.end();
+});
+
+test('it ignores body that does not exist', function(t) {
+  var simulator = createSimulator();
+  var body = new Body(0, 0);
+  simulator.addBody(body);
+  simulator.removeBody({});
+  t.equal(simulator.bodies.length, 1, 'Should ignore body that does not exist');
+  t.end();
+});
+
+test('it throws on springCoeff', function (t) {
+  t.throws(function () {
+    createSimulator({springCoeff: 1});
+  }, 'springCoeff was renamed to springCoefficient');
+  t.end();
+});
+
+test('it throws on dragCoeff', function (t) {
+  t.throws(function () {
+    createSimulator({dragCoeff: 1});
+  }, 'dragCoeff was renamed to dragCoefficient');
+  t.end();
+});
