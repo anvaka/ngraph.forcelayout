@@ -5,6 +5,10 @@
   "main": "index.js",
   "jsdelivr": "dist/ngraph.forcelayout.min.js",
   "unpkg": "dist/ngraph.forcelayout.min.js",
+  "types": "./index.d.ts",
+  "typesVersions": {
+    "<=4.3": {"index.d.ts": ["index.v43.d.ts"]}
+  },
   "scripts": {
     "test": "tap --branches=80 --lines=80 --statements=80 --functions=80 test/*.js",
     "lint": "eslint .",
