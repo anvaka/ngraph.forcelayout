@@ -21,7 +21,8 @@ function createLayout(graph, physicsSettings) {
   var physicsSimulator = createSimulator(physicsSettings);
   if (Array.isArray(physicsSettings)) throw new Error('Physics settings is expected to be an object');
 
-  var nodeMass = defaultNodeMass;
+  // Starting from v20 of ngraph we use `Set` instead of `Array` for `node.links`
+  var nodeMass = if (graph.version !== undefined && graph.version >= 20) ? defaultNodeMassWithSet : defaultNodeMass;
   if (physicsSettings && typeof physicsSettings.nodeMass === 'function') {
     nodeMass = physicsSettings.nodeMass;
   }
@@ -387,6 +388,12 @@ function createLayout(graph, physicsSettings) {
     var links = graph.getLinks(nodeId);
     if (!links) return 1;
     return 1 + links.length / 3.0;
+  }
+
+  function defaultNodeMassWithSet(nodeId) {
+    var links = graph.getLinks(nodeId);
+    if (!links) return 1;
+    return 1 + links.size / 3.0;
   }
 }
 

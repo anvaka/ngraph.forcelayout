@@ -12,7 +12,7 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
 
   // Since graph can be loaded dynamically, we have these uninitialized
   // and captured into closure. loadGraph will do the initialization
-  let graph, layout;
+  let graph, layout, step = 0;
   let scene, nodes, lines, guide;
 
   let fixedViewBox = false;
@@ -47,7 +47,9 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
     guide = createGuide(scene, {showGrid: true, lineColor: 0xffffff10, maxAlpha: 0x10, showCursor: false});
     // this is a standard force layout
     layout = createForceLayout(graph, layoutSettings);
+    step = 0;
 
+    //standardizePositions(layout)
     let minX = -42, minY = -42;
     let maxX = 42, maxY =42 
 
@@ -79,6 +81,7 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
     if (layoutSettings.dimensions !== previousDimensions) {
       let prevLayout = layout;
       layout = createForceLayout(graph, layoutSettings)
+      step = 0;
       graph.forEachNode(node => {
         let prevPos = prevLayout.getNodePosition(node.id);
         let positions = Object.keys(prevPos).map(name => prevPos[name]);
@@ -145,15 +148,17 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
     rafHandle = requestAnimationFrame(frame);
 
     if (isRunning) {
-      layout.step();
-      if (fixedViewBox) {
-        let rect = layout.getGraphRect();
-        scene.setViewBox({
-          left:  rect.min_x,
-          top:   rect.min_y,
-          right:  rect.max_x,
-          bottom: rect.max_y,
-        });
+      if (step++ < 100) {
+        layout.step();
+        if (fixedViewBox) {
+          let rect = layout.getGraphRect();
+          scene.setViewBox({
+            left:  rect.min_x,
+            top:   rect.min_y,
+            right:  rect.max_x,
+            bottom: rect.max_y,
+          });
+        }
       }
     }
     drawGraph();
@@ -232,4 +237,27 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
     scene.dispose();
     bus.off('load-graph', loadGraph);
   }
+}
+
+function standardizePositions(layout) {
+  let arr = [];
+  let avgX = 0, avgY = 0;
+  layout.forEachBody(body => {
+    arr.push(body.pos);
+    avgX += body.pos.x;
+    avgY += body.pos.y;
+  });
+  let meanX = avgX / arr.length;
+  let meanY = avgY / arr.length;
+  let varX = 0, varY = 0;
+  arr.forEach(pos => {
+    varX += Math.pow(pos.x - meanX, 2);
+    varY += Math.pow(pos.y - meanY, 2);
+  });
+  varX = Math.sqrt(varX / arr.length);
+  varY = Math.sqrt(varY / arr.length);
+  arr.forEach(pos => {
+    pos.x = 10 * (pos.x - meanX) / varX;
+    pos.y = 10 * (pos.y - meanY) / varY;
+  });
 }
