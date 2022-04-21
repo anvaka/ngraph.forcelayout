@@ -12,7 +12,7 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
 
   // Since graph can be loaded dynamically, we have these uninitialized
   // and captured into closure. loadGraph will do the initialization
-  let graph, layout, step = 0;
+  let graph, layout;
   let scene, nodes, lines, guide;
 
   let fixedViewBox = false;
@@ -47,7 +47,6 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
     guide = createGuide(scene, {showGrid: true, lineColor: 0xffffff10, maxAlpha: 0x10, showCursor: false});
     // this is a standard force layout
     layout = createForceLayout(graph, layoutSettings);
-    step = 0;
 
     //standardizePositions(layout)
     let minX = -42, minY = -42;
@@ -81,7 +80,6 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
     if (layoutSettings.dimensions !== previousDimensions) {
       let prevLayout = layout;
       layout = createForceLayout(graph, layoutSettings)
-      step = 0;
       graph.forEachNode(node => {
         let prevPos = prevLayout.getNodePosition(node.id);
         let positions = Object.keys(prevPos).map(name => prevPos[name]);
@@ -148,17 +146,15 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
     rafHandle = requestAnimationFrame(frame);
 
     if (isRunning) {
-      if (step++ < 100) {
-        layout.step();
-        if (fixedViewBox) {
-          let rect = layout.getGraphRect();
-          scene.setViewBox({
-            left:  rect.min_x,
-            top:   rect.min_y,
-            right:  rect.max_x,
-            bottom: rect.max_y,
-          });
-        }
+      layout.step();
+      if (fixedViewBox) {
+        let rect = layout.getGraphRect();
+        scene.setViewBox({
+          left:  rect.min_x,
+          top:   rect.min_y,
+          right:  rect.max_x,
+          bottom: rect.max_y,
+        });
       }
     }
     drawGraph();
