@@ -225,7 +225,7 @@ Or download from CDN:
 <script src='https://unpkg.com/ngraph.forcelayout@3.0.0/dist/ngraph.forcelayout.min.js'></script>
 ```
 
-If you download from CDN the library will be available under `ngraphCreateGraph` global name.
+If you download from CDN the library will be available under `ngraphCreateLayout` global name.
 
 # license
 
