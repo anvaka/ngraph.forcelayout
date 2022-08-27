@@ -436,6 +436,20 @@ test('it can create high dimensional layout', function(t) {
   t.end();
 });
 
+test('it can layout two graphs independently', function(t) {
+  var graph1 = createGraph();
+  var graph2 = createGraph();
+  var layout1 = createLayout(graph1);
+  var layout2 = createLayout(graph2);
+  graph1.addLink(1, 2);
+  graph2.addLink(1, 2);
+  layout1.step();
+  layout2.step();
+  layout2.step();
+  t.ok(layout1.getNodePosition(1).x !== layout2.getNodePosition(1).x, 'Positions are different');
+  t.end();
+});
+
 function positionChanged(pos1, pos2) {
   return (pos1.x !== pos2.x) || (pos1.y !== pos2.y);
 }
