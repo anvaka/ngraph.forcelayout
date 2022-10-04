@@ -1,5 +1,6 @@
 declare module "ngraph.forcelayout" {
   import { Graph, NodeId, LinkId, Node, Link } from "ngraph.graph";
+  import { EventedType } from "ngraph.events";
 
   export type ForceFunction = (iterationNumber: number) => void;
 
@@ -369,5 +370,5 @@ declare module "ngraph.forcelayout" {
   export default function createLayout<T extends Graph>(
     graph: T,
     physicsSettings?: Partial<PhysicsSettings>
-  ): Layout<T>;
+  ): Layout<T> & EventedType;
 }
