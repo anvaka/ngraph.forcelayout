@@ -149,7 +149,7 @@ function createLayout(graph, physicsSettings) {
     /**
      * Gets spring for a given edge.
      *
-     * @param {string} linkId link identifer. If two arguments are passed then
+     * @param {string} linkId link identifier. If two arguments are passed then
      * this argument is treated as formNodeId
      * @param {string=} toId when defined this parameter denotes head of the link
      * and first argument is treated as tail of the link (fromId)
