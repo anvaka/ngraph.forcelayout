@@ -1,5 +1,5 @@
-(function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.ngraphCreateLayout = f()}})(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
-module.exports = createLayout;
+(function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.ngraphCreateLayout = f()}})(function(){var define,module,exports;return (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){
+module.exports = createGraphologyLayout;
 module.exports.simulator = require('./lib/createPhysicsSimulator');
 
 var eventify = require('ngraph.events');
@@ -7,12 +7,12 @@ var eventify = require('ngraph.events');
 /**
  * Creates force based layout for a given graph.
  *
- * @param {ngraph.graph} graph which needs to be laid out
+ * @param {graphology.Graph} graph which needs to be laid out
  * @param {object} physicsSettings if you need custom settings
  * for physics simulator you can pass your own settings here. If it's not passed
  * a default one will be created.
  */
-function createLayout(graph, physicsSettings) {
+function createGraphologyLayout(graph, physicsSettings) {
   if (!graph) {
     throw new Error('Graph structure cannot be undefined');
   }
@@ -21,17 +21,22 @@ function createLayout(graph, physicsSettings) {
   var physicsSimulator = createSimulator(physicsSettings);
   if (Array.isArray(physicsSettings)) throw new Error('Physics settings is expected to be an object');
 
-  // Starting from v20 of ngraph we use `Set` instead of `Array` for `node.links`
-  var nodeMass = if (graph.version !== undefined && graph.version >= 20) ? defaultNodeMassWithSet : defaultNodeMass;
+  var nodeMass = defaultArrayNodeMass;
   if (physicsSettings && typeof physicsSettings.nodeMass === 'function') {
     nodeMass = physicsSettings.nodeMass;
   }
 
   var nodeBodies = new Map();
   var springs = {};
-  var bodiesCount = 0;
 
   var springTransform = physicsSimulator.settings.springTransform || noop;
+
+  // Define event handlers
+  const nodeAddedHandler = ({key, attributes}) => initBody(key, attributes);
+  const edgeAddedHandler = ({key, source, target, attributes}) => initLink(key, attributes, source, target);
+  const nodeDroppedHandler = ({key, attributes}) => releaseNode(key, attributes);
+  const edgeDroppedHandler = ({key, source, target, attributes}) => releaseLink(key, attributes, source, target);
+  const nodeAttributesUpdatedHandler = ({type, key, attributes, name, data}) => handleNodeUpdates(type, key, attributes, name, data);
 
   // Initialize physics with what we have in the graph:
   initPhysics();
@@ -47,7 +52,7 @@ function createLayout(graph, physicsSettings) {
      * The system is stable if no further call to `step()` can improve the layout.
      */
     step: function() {
-      if (bodiesCount === 0) {
+      if (nodeBodies.size === 0) {
         updateStableStatus(true);
         return true;
       }
@@ -61,7 +66,7 @@ function createLayout(graph, physicsSettings) {
       // Allow listeners to perform low-level actions after nodes are updated.
       api.fire('step');
 
-      var ratio = lastMove/bodiesCount;
+      var ratio = lastMove/nodeBodies.size;
       var isStableNow = ratio <= 0.01; // TODO: The number is somewhat arbitrary...
       updateStableStatus(isStableNow);
 
@@ -122,23 +127,25 @@ function createLayout(graph, physicsSettings) {
      * Pinned nodes should not be affected by layout algorithm and always
      * remain at their position
      */
-    pinNode: function (node, isPinned) {
-      var body = getInitializedBody(node.id);
-       body.isPinned = !!isPinned;
-    },
+    pinNode: pinNode,
 
     /**
      * Checks whether given graph's node is currently pinned
      */
-    isNodePinned: function (node) {
-      return getInitializedBody(node.id).isPinned;
+    isNodePinned: function (nodeId) {
+      return getInitializedBody(nodeId).isPinned;
     },
 
     /**
      * Request to release all resources
      */
     dispose: function() {
-      graph.off('changed', onGraphChanged);
+      graph.off('nodeAdded', nodeAddedHandler);
+      graph.off('edgeAdded', edgeAddedHandler);
+      graph.off('nodeDropped', nodeDroppedHandler);
+      graph.off('edgeDropped', edgeDroppedHandler);
+      graph.off('nodeAttributesUpdated', nodeAttributesUpdatedHandler);
+      graph.off('cleared', handleCleared);
       api.fire('disposed');
     },
 
@@ -150,11 +157,7 @@ function createLayout(graph, physicsSettings) {
 
     /**
      * Gets spring for a given edge.
-     *
-     * @param {string} linkId link identifer. If two arguments are passed then
-     * this argument is treated as formNodeId
-     * @param {string=} toId when defined this parameter denotes head of the link
-     * and first argument is treated as tail of the link (fromId)
+     * @param {string} linkId link identifier.
      */
     getSpring: getSpring,
 
@@ -176,25 +179,31 @@ function createLayout(graph, physicsSettings) {
     /**
      * Gets amount of movement performed during last step operation
      */
-    lastMove: 0
+    lastMove: 0,
+
+    getDimensions: getDimensions
   };
 
   eventify(api);
 
   return api;
 
-  function updateStableStatus(isStableNow) {
+  function getDimensions() {
+    return physicsSimulator.getDimensions();
+  }
+
+  function updateStableStatus(isStableNow) { // untouched
     if (wasStable !== isStableNow) {
       wasStable = isStableNow;
       onStableChanged(isStableNow);
     }
   }
 
-  function forEachBody(cb) {
+  function forEachBody(cb) { // untouched
     nodeBodies.forEach(cb);
   }
 
-  function getForceVectorLength() {
+  function getForceVectorLength() { // untouched
     var fx = 0, fy = 0;
     forEachBody(function(body) {
       fx += Math.abs(body.force.x);
@@ -203,82 +212,65 @@ function createLayout(graph, physicsSettings) {
     return Math.sqrt(fx * fx + fy * fy);
   }
 
-  function getSpring(fromId, toId) {
-    var linkId;
-    if (toId === undefined) {
-      if (typeof fromId !== 'object') {
-        // assume fromId as a linkId:
-        linkId = fromId;
-      } else {
-        // assume fromId to be a link object:
-        linkId = fromId.id;
-      }
-    } else {
-      // toId is defined, should grab link:
-      var link = graph.hasLink(fromId, toId);
-      if (!link) return;
-      linkId = link.id;
-    }
-
+  function getSpring(linkId) { // graphology
     return springs[linkId];
   }
 
-  function getBody(nodeId) {
+  function getBody(nodeId) { // untouched
     return nodeBodies.get(nodeId);
   }
 
-  function listenToEvents() {
-    graph.on('changed', onGraphChanged);
+  function pinNode(nodeId, isPinned) {
+    var body = getInitializedBody(nodeId);
+     body.isPinned = !!isPinned;
   }
 
-  function onStableChanged(isStable) {
+  function listenToEvents() { // graphology
+    graph.on('nodeAdded', nodeAddedHandler);
+    graph.on('edgeAdded', edgeAddedHandler);
+    graph.on('nodeDropped', nodeDroppedHandler);
+    graph.on('edgeDropped', edgeDroppedHandler);
+    graph.on('nodeAttributesUpdated', nodeAttributesUpdatedHandler);
+    graph.on('cleared', handleCleared);
+  }
+
+  function handleNodeUpdates(type, nodeId, attributes, name, data) {
+    if (type == 'set') {
+      if (name == 'isPinned') {
+        pinNode(nodeId, attributes.isPinned)
+      }
+    }
+  }
+
+  function handleCleared() {
+    physicsSimulator = createSimulator(physicsSettings);
+    nodeBodies = new Map();
+    springs = {};
+    initPhysics();
+  }
+
+  function onStableChanged(isStable) { // untouched
     api.fire('stable', isStable);
   }
 
-  function onGraphChanged(changes) {
-    for (var i = 0; i < changes.length; ++i) {
-      var change = changes[i];
-      if (change.changeType === 'add') {
-        if (change.node) {
-          initBody(change.node.id);
-        }
-        if (change.link) {
-          initLink(change.link);
-        }
-      } else if (change.changeType === 'remove') {
-        if (change.node) {
-          releaseNode(change.node);
-        }
-        if (change.link) {
-          releaseLink(change.link);
-        }
-      }
-    }
-    bodiesCount = graph.getNodesCount();
-  }
-
-  function initPhysics() {
-    bodiesCount = 0;
-
-    graph.forEachNode(function (node) {
-      initBody(node.id);
-      bodiesCount += 1;
+  function initPhysics() { // graphology
+    graph.forEachNode((node, attributes) => {
+      initBody(node, attributes);
     });
 
-    graph.forEachLink(initLink);
+    graph.forEachEdge(initLink);
   }
 
-  function initBody(nodeId) {
+  function initBody(nodeId, nodeAttrs) { // graphology
     var body = nodeBodies.get(nodeId);
     if (!body) {
-      var node = graph.getNode(nodeId);
-      if (!node) {
+      if (!graph.hasNode(nodeId)) {
         throw new Error('initBody() was called with unknown node id');
       }
 
-      var pos = node.position;
+      var pos = nodeAttrs.position;
       if (!pos) {
-        var neighbors = getNeighborBodies(node);
+        var neighbors = getNeighborBodies(nodeId);
         pos = physicsSimulator.getBestNewBodyPosition(neighbors);
       }
 
@@ -288,14 +280,13 @@ function createLayout(graph, physicsSettings) {
       nodeBodies.set(nodeId, body);
       updateBodyMass(nodeId);
 
-      if (isNodeOriginallyPinned(node)) {
+      if (isNodeOriginallyPinned(nodeAttrs)) {
         body.isPinned = true;
       }
     }
   }
 
-  function releaseNode(node) {
-    var nodeId = node.id;
+  function releaseNode(nodeId) { // graphology
     var body = nodeBodies.get(nodeId);
     if (body) {
       nodeBodies.delete(nodeId);
@@ -303,53 +294,44 @@ function createLayout(graph, physicsSettings) {
     }
   }
 
-  function initLink(link) {
-    updateBodyMass(link.fromId);
-    updateBodyMass(link.toId);
+  function initLink(link, attributes, source, target) { // graphology
+    updateBodyMass(source);
+    updateBodyMass(target);
 
-    var fromBody = nodeBodies.get(link.fromId),
-        toBody  = nodeBodies.get(link.toId),
-        spring = physicsSimulator.addSpring(fromBody, toBody, link.length);
+    var fromBody = nodeBodies.get(source),
+        toBody  = nodeBodies.get(target),
+        spring = physicsSimulator.addSpring(fromBody, toBody, attributes.length);
 
-    springTransform(link, spring);
+    springTransform(link, spring); // noop, far as I can tell
 
-    springs[link.id] = spring;
+    springs[link] = spring;
   }
 
-  function releaseLink(link) {
-    var spring = springs[link.id];
+  function releaseLink(link, source, target) { // graphology
+    var spring = springs[link];
     if (spring) {
-      var from = graph.getNode(link.fromId),
-          to = graph.getNode(link.toId);
+      if (source) updateBodyMass(source);
+      if (target) updateBodyMass(target);
 
-      if (from) updateBodyMass(from.id);
-      if (to) updateBodyMass(to.id);
-
-      delete springs[link.id];
+      delete springs[link];
 
       physicsSimulator.removeSpring(spring);
     }
   }
 
-  function getNeighborBodies(node) {
-    // TODO: Could probably be done better on memory
-    var neighbors = [];
-    if (!node.links) {
-      return neighbors;
+  function getNeighborBodies(nodeId) { // graphology
+    if (!graph.hasNode(nodeId)) {
+        throw new Error('getNeighborBodies() was called with unknown node id');
     }
-    var maxNeighbors = Math.min(node.links.length, 2);
-    for (var i = 0; i < maxNeighbors; ++i) {
-      var link = node.links[i];
-      var otherBody = link.fromId !== node.id ? nodeBodies.get(link.fromId) : nodeBodies.get(link.toId);
-      if (otherBody && otherBody.pos) {
-        neighbors.push(otherBody);
-      }
-    }
+    const neighbors = graph.mapNeighbors(nodeId, (neighbor) => {
+        return nodeBodies.get(neighbor);
+    })
+    var maxNeighbors = Math.min(neighbors.length, 2); // Not sure why we're capping the neighbors, but that's how the old code worked
 
-    return neighbors;
+    return neighbors.slice(0, maxNeighbors);
   }
 
-  function updateBodyMass(nodeId) {
+  function updateBodyMass(nodeId) { // untouched
     var body = nodeBodies.get(nodeId);
     body.mass = nodeMass(nodeId);
     if (Number.isNaN(body.mass)) {
@@ -365,11 +347,11 @@ function createLayout(graph, physicsSettings) {
    * @param {Object} node a graph node to check
    * @return {Boolean} true if node should be treated as pinned; false otherwise.
    */
-  function isNodeOriginallyPinned(node) {
+  function isNodeOriginallyPinned(node) { // untouched
     return (node && (node.isPinned || (node.data && node.data.isPinned)));
   }
 
-  function getInitializedBody(nodeId) {
+  function getInitializedBody(nodeId) { // untouched
     var body = nodeBodies.get(nodeId);
     if (!body) {
       initBody(nodeId);
@@ -384,16 +366,10 @@ function createLayout(graph, physicsSettings) {
    * @param {String|Number} nodeId identifier of a node, for which body mass needs to be calculated
    * @returns {Number} recommended mass of the body;
    */
-  function defaultNodeMass(nodeId) {
-    var links = graph.getLinks(nodeId);
+  function defaultArrayNodeMass(nodeId) { // graphology
+    var links = graph.edges(nodeId);
     if (!links) return 1;
     return 1 + links.length / 3.0;
-  }
-
-  function defaultNodeMassWithSet(nodeId) {
-    var links = graph.getLinks(nodeId);
-    if (!links) return 1;
-    return 1 + links.size / 3.0;
   }
 }
 
@@ -452,6 +428,11 @@ function generateBoundsFunctionBody(dimension) {
 
       if (neighbors.length) {
         for (var i = 0; i < neighbors.length; ++i) {
+          if (!neighbors[i]) {
+            neighbors[i] = new Map();
+            neighbors[i]["pos"] = new Map();
+            ${pattern('neighbors[i]["pos"]["{var}"] = boundingBox["min_{var}"]', {indent: 12})}
+          }
           let neighborPos = neighbors[i].pos;
           ${pattern('base_{var} += neighborPos.{var};', {indent: 10})}
         }
@@ -505,11 +486,18 @@ module.exports.getVectorCode = getVectorCode;
 // InlineTransform: getBodyCode
 module.exports.getBodyCode = getBodyCode;
 // InlineTransformExport: module.exports = function() { return Body; }
+module.exports.generateCreateVectorFunction = generateCreateVectorFunction;
 
 function generateCreateBodyFunction(dimension, debugSetters) {
   let code = generateCreateBodyFunctionBody(dimension, debugSetters);
   let {Body} = (new Function(code))();
   return Body;
+}
+
+function generateCreateVectorFunction(dimension, debugSetters) {
+  let code = generateCreateBodyFunctionBody(dimension, debugSetters);
+  let {Vector} = (new Function(code))();
+  return Vector;
 }
 
 function generateCreateBodyFunctionBody(dimension, debugSetters) {
@@ -568,10 +556,10 @@ Object.defineProperty(this, '{var}', {\n\
     if (typeof arguments[0] === 'object') {
       // could be another vector
       let v = arguments[0];
-      ${pattern('if (!Number.isFinite(v.{var})) throw new Error("Expected value is not a finite number at Vector constructor ({var})");', {indent: 4})}
-      ${pattern('this.{var} = v.{var};', {indent: 4})}
+      ${pattern('if (!Number.isFinite(v.{var}) && v.{var} !== undefined) throw new Error("Expected value is not a finite number at Vector constructor ({var})");', {indent: 6})}
+      ${pattern('this.{var} = v.{var} !== undefined ? v.{var}: 1;', {indent: 6})}
     } else {
-      ${pattern('this.{var} = typeof {var} === "number" ? {var} : 0;', {indent: 4})}
+      ${pattern('this.{var} = typeof {var} === "number" ? {var} : 0;', {indent: 6})}
     }
   }
   
@@ -1179,19 +1167,20 @@ module.exports = function getVariableName(index) {
  */
 module.exports = createPhysicsSimulator;
 
-var generateCreateBodyFunction = require('./codeGenerators/generateCreateBody');
-var generateQuadTreeFunction = require('./codeGenerators/generateQuadTree');
-var generateBoundsFunction = require('./codeGenerators/generateBounds');
-var generateCreateDragForceFunction = require('./codeGenerators/generateCreateDragForce');
-var generateCreateSpringForceFunction = require('./codeGenerators/generateCreateSpringForce');
-var generateIntegratorFunction = require('./codeGenerators/generateIntegrator');
+const generateCreateBodyFunction = require('./codeGenerators/generateCreateBody');
+const generateQuadTreeFunction = require('./codeGenerators/generateQuadTree');
+const generateBoundsFunction = require('./codeGenerators/generateBounds');
+const generateCreateDragForceFunction = require('./codeGenerators/generateCreateDragForce');
+const generateCreateSpringForceFunction = require('./codeGenerators/generateCreateSpringForce');
+const generateIntegratorFunction = require('./codeGenerators/generateIntegrator');
+const generateCreateVectorFunction = generateCreateBodyFunction.generateCreateVectorFunction;
 
 var dimensionalCache = {};
 
 function createPhysicsSimulator(settings) {
-  var Spring = require('./spring');
-  var merge = require('ngraph.merge');
-  var eventify = require('ngraph.events');
+  const Spring = require('./spring');
+  const merge = require('ngraph.merge');
+  const eventify = require('ngraph.events');
   if (settings) {
     // Check for names from older versions of the layout
     if (settings.springCoeff !== undefined) throw new Error('springCoeff was renamed to springCoefficient');
@@ -1254,41 +1243,21 @@ function createPhysicsSimulator(settings) {
       debug: false
   });
 
-  var factory = dimensionalCache[settings.dimensions];
-  if (!factory) {
-    var dimensions = settings.dimensions;
-    factory = {
-      Body: generateCreateBodyFunction(dimensions, settings.debug),
-      createQuadTree: generateQuadTreeFunction(dimensions),
-      createBounds: generateBoundsFunction(dimensions),
-      createDragForce: generateCreateDragForceFunction(dimensions),
-      createSpringForce: generateCreateSpringForceFunction(dimensions),
-      integrate: generateIntegratorFunction(dimensions),
-    };
-    dimensionalCache[dimensions] = factory;
-  }
+  const random = require('ngraph.random').random(42);
+  let bodies = []; // Bodies in this simulation.
+  const springs = []; // Springs in this simulation.
 
-  var Body = factory.Body;
-  var createQuadTree = factory.createQuadTree;
-  var createBounds = factory.createBounds;
-  var createDragForce = factory.createDragForce;
-  var createSpringForce = factory.createSpringForce;
-  var integrate = factory.integrate;
-  var createBody = pos => new Body(pos);
+  let factory = getFactory(settings.dimensions, settings.debug);
 
-  var random = require('ngraph.random').random(42);
-  var bodies = []; // Bodies in this simulation.
-  var springs = []; // Springs in this simulation.
+  let quadTree = factory.createQuadTree(settings, random);
+  let bounds = factory.createBounds(bodies, settings, random);
+  let springForce = factory.createSpringForce(settings, random);
+  let dragForce = factory.createDragForce(settings);
 
-  var quadTree = createQuadTree(settings, random);
-  var bounds = createBounds(bodies, settings, random);
-  var springForce = createSpringForce(settings, random);
-  var dragForce = createDragForce(settings);
-
-  var totalMovement = 0; // how much movement we made on last step
-  var forces = [];
-  var forceMap = new Map();
-  var iterationNumber = 0;
+  const totalMovement = 0; // how much movement we made on last step
+  const forces = [];
+  const forceMap = new Map();
+  let iterationNumber = 0;
  
   addForce('nbody', nbodyForce);
   addForce('spring', updateSpringForce);
@@ -1341,7 +1310,7 @@ function createPhysicsSimulator(settings) {
       for (var i = 0; i < forces.length; ++i) {
         forces[i](iterationNumber);
       }
-      var movement = integrate(bodies, settings.timeStep, settings.adaptiveTimeStepWeight);
+      var movement = getFactory(settings.dimensions, settings.debug).integrate(bodies, settings.timeStep, settings.adaptiveTimeStepWeight);
       iterationNumber += 1;
       return movement;
     },
@@ -1373,7 +1342,7 @@ function createPhysicsSimulator(settings) {
       if (!pos) {
         throw new Error('Body position is required');
       }
-      var body = createBody(pos);
+      var body = getFactory(settings.dimensions, settings.debug).createBody(pos);
       bodies.push(body);
 
       return body;
@@ -1482,7 +1451,11 @@ function createPhysicsSimulator(settings) {
     /**
      * Returns pseudo-random number generator instance.
      */
-    random: random
+    random: random,
+
+    getDimensions: getDimensions,
+    
+    setDimensions: setDimensions
   };
 
   // allow settings modification via public API:
@@ -1492,6 +1465,57 @@ function createPhysicsSimulator(settings) {
 
   return publicApi;
 
+  function getFactory(dimensions, debug) {
+    let factory = dimensionalCache[dimensions];
+    if (!factory) {
+      const Body = generateCreateBodyFunction(dimensions, debug);
+      const Vector = generateCreateVectorFunction(dimensions, debug)
+      factory = {
+        Body: Body,
+        createQuadTree: generateQuadTreeFunction(dimensions),
+        createBounds: generateBoundsFunction(dimensions),
+        createDragForce: generateCreateDragForceFunction(dimensions),
+        createSpringForce: generateCreateSpringForceFunction(dimensions),
+        integrate: generateIntegratorFunction(dimensions),
+        createBody: pos => new Body(pos),
+        createVector: coords => new Vector(coords)
+      };
+      dimensionalCache[dimensions] = factory;
+    }
+    return factory
+  }
+
+  function setDimensions(dimensions) {
+    if (!Number.isInteger(dimensions) || dimensions < 1 ) {
+      throw new Error('Dimensions must be set to integer greater than zero');
+    }
+    settings.dimensions = dimensions;
+    factory = getFactory(dimensions, settings.debug);
+
+    quadTree = factory.createQuadTree(settings, random);
+    bounds = factory.createBounds(bodies, settings, random);
+    springForce = factory.createSpringForce(settings, random);
+    dragForce = factory.createDragForce(settings);
+
+    bodies = bodies.map((body) => {
+      const pos = factory.createVector(body.pos);
+      body.pos = pos;
+      const force = factory.createVector(body.force);
+      body.force = force;
+      const velocity = factory.createVector(body.velocity);
+      body.velocity = velocity;
+      return body;
+    });
+  }
+
+  function staggerVec(vec) {
+    
+  }
+
+  function getDimensions() {
+    return settings.dimensions;
+  }
+  
   function getBoundingBox() {
     bounds.update();
     return bounds.box;
@@ -1745,10 +1769,14 @@ Generator.prototype.next = next;
 Generator.prototype.nextDouble = nextDouble;
 
 /**
- * Returns a random real number uniformly in [0, 1)
+ * Returns a random real number from uniform distribution in [0, 1)
  */
 Generator.prototype.uniform = nextDouble;
 
+/**
+ * Returns a random real number from a Gaussian distribution
+ * with 0 as a mean, and 1 as standard deviation u ~ N(0,1)
+ */
 Generator.prototype.gaussian = gaussian;
 
 function gaussian() {
@@ -1762,6 +1790,26 @@ function gaussian() {
   } while (r >= 1 || r === 0);
 
   return x * Math.sqrt(-2 * Math.log(r)/r);
+}
+
+/**
+ * See https://twitter.com/anvaka/status/1296182534150135808
+ */
+Generator.prototype.levy = levy;
+
+function levy() {
+  var beta = 3 / 2;
+  var sigma = Math.pow(
+      gamma( 1 + beta ) * Math.sin(Math.PI * beta / 2) / 
+        (gamma((1 + beta) / 2) * beta * Math.pow(2, (beta - 1) / 2)),
+      1/beta
+  );
+  return this.gaussian() * sigma / Math.pow(Math.abs(this.gaussian()), 1/beta);
+}
+
+// gamma function approximation
+function gamma(z) {
+  return Math.sqrt(2 * Math.PI / z) * Math.pow((1 / Math.E) * (z + 1 / (12 * z - 1 / (10 * z))), z);
 }
 
 function nextDouble() {

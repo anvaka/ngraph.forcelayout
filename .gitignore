@@ -10,7 +10,8 @@ lib-cov
 pids
 logs
 results
-.nyc_output
+.tap
+.vscode
 
 npm-debug.log
 node_modules
