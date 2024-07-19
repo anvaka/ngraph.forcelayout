@@ -15,7 +15,7 @@
   },
   "scripts": {
     "test": "tap test/*.js",
-    "lint": "eslint .",
+    "lint": "eslint ./lib",
     "perf": "npm version && node perf/test.js",
     "build": "browserify index.js -s ngraphCreateLayout -o dist/graphology.forcelayout.js && terser --compress -o dist/graphology.forcelayout.min.js -- dist/graphology.forcelayout.js",
     "build2d": "browserify index.js -t ./inline-transform.js -s ngraphCreate2dLayout > dist/graphology.forcelayout2d.js && terser --compress -o dist/graphology.forcelayout2d.min.js -- dist/graphology.forcelayout2d.js"
