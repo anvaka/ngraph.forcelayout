@@ -16,4 +16,4 @@ test('can debug setters in Vector', function (t) {
   t.throws(() => v.x = 'foo', /Cannot set non-numbers to x/);
   t.throws(() => v.y = 'foo', /Cannot set non-numbers to y/);
   t.end();
-})
+});

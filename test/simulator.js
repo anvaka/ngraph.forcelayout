@@ -1,6 +1,6 @@
 /* eslint-disable no-shadow */
 const test = require('tap').test;
-const generateCreateBodyFunction = require('../lib/codeGenerators/generateCreateBody')
+const generateCreateBodyFunction = require('../lib/codeGenerators/generateCreateBody');
 const createSimulator = require('../lib/createPhysicsSimulator');
 
 const dimensions2 = 2;
@@ -408,16 +408,16 @@ test('it can change number of dimensions', function (t) {
     t.equal(body, body3, 'bodies persist E2E');
 
     t.end();
-  })
+  });
   t.test('it can remove a dimension', function (t) {
     const simulator = createSimulator({dimensions: 3});
-    const Body3 = generateCreateBodyFunction(3)
+    const Body3 = generateCreateBodyFunction(3);
     const body = new Body3(-10, 10, 10);
     simulator.addBody(body);
   
     const body3 = simulator.bodies[0];
   
-    t.equal(body, body3, '3D bodies persist after sim insertion')
+    t.equal(body, body3, '3D bodies persist after sim insertion');
     t.equal(body3.pos.x, -10, 'X is there');
     t.equal(body3.pos.y, 10, 'Y is there');
     t.equal(body3.pos.z, 10, "Z is there");
@@ -433,7 +433,7 @@ test('it can change number of dimensions', function (t) {
     t.equal(body, body2, 'bodies persist E2E');
 
     t.end();
-  })
+  });
   t.test('it can add two dimensions', function (t) {
     const simulator = createSimulator({dimensions: 3});
     const Body3 = generateCreateBodyFunction(3);

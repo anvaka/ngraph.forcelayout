@@ -35,7 +35,7 @@ function createLayout(graph, physicsSettings) {
   const edgeAddedHandler = ({key, source, target, attributes}) => initLink(key, attributes, source, target);
   const nodeDroppedHandler = ({key, attributes}) => releaseNode(key, attributes);
   const edgeDroppedHandler = ({key, source, target, attributes}) => releaseLink(key, attributes, source, target);
-  const nodeAttributesUpdatedHandler = ({type, key, attributes, name, data}) => handleNodeUpdates(type, key, attributes, name, data);
+  const nodeAttributesUpdatedHandler = ({type, key, attributes, name}) => handleNodeUpdates(type, key, attributes, name); // Could pass 'data' if we wanted
 
   // Initialize physics with what we have in the graph:
   initPhysics();
@@ -233,10 +233,10 @@ function createLayout(graph, physicsSettings) {
     graph.on('cleared', handleCleared);
   }
 
-  function handleNodeUpdates(type, nodeId, attributes, name, data) {
+  function handleNodeUpdates(type, nodeId, attributes, name) {
     if (type == 'set') {
       if (name == 'isPinned') {
-        pinNode(nodeId, attributes.isPinned)
+        pinNode(nodeId, attributes.isPinned);
       }
     }
   }
@@ -324,7 +324,7 @@ function createLayout(graph, physicsSettings) {
     }
     const neighbors = graph.mapNeighbors(nodeId, (neighbor) => {
         return nodeBodies.get(neighbor);
-    })
+    });
     var maxNeighbors = Math.min(neighbors.length, 2); // Not sure why we're capping the neighbors, but that's how the old code worked
 
     return neighbors.slice(0, maxNeighbors);

@@ -25,7 +25,7 @@ test('it creates a layout from a prepopulated graph', (t) => {
 
   t.ok(1 == g.size, 'graph has one node');
   t.ok('1->2' == edge, 'edge key is constant');
-  t.ok(layout, 'Layout exists.')
+  t.ok(layout, 'Layout exists.');
   t.end();
 });
 
