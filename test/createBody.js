@@ -1,10 +1,19 @@
 
-var test = require('tap').test;
-var dimensions = 2;
+const test = require('tap').test;
+const dimensions = 2;
 
-test('can debug setters', function (t) {
-  var Body = require('../lib/codeGenerators/generateCreateBody')(dimensions, true);
-  let b = new Body();
+test('can debug setters in Body', function (t) {
+  const Body = require('../lib/codeGenerators/generateCreateBody')(dimensions, true);
+  const b = new Body();
   t.throws(() => b.pos.x = 'foo', /Cannot set non-numbers to x/);
+  t.throws(() => b.pos.y = 'foo', /Cannot set non-numbers to y/);
   t.end();
 });
+
+test('can debug setters in Vector', function (t) {
+  const Vector = require('../lib/codeGenerators/generateCreateBody').generateCreateVectorFunction(dimensions, true);
+  const v = new Vector();
+  t.throws(() => v.x = 'foo', /Cannot set non-numbers to x/);
+  t.throws(() => v.y = 'foo', /Cannot set non-numbers to y/);
+  t.end();
+})

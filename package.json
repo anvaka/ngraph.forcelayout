@@ -39,11 +39,12 @@
     "eslint": "^7.12.1",
     "ngraph.generators": "^20.0.0",
     "ngraph.graph": "^20.0.0",
-    "tap": "^16.3.0",
+    "tap": "^20.0.3",
     "terser": "^5.3.0",
     "through2": "^4.0.2"
   },
   "dependencies": {
+    "graphology": "^0.25.4",
     "ngraph.events": "^1.0.0",
     "ngraph.merge": "^1.0.0",
     "ngraph.random": "^1.0.0"
