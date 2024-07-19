@@ -1,4 +1,4 @@
-module.exports = createGraphologyLayout;
+module.exports = createLayout;
 module.exports.simulator = require('./lib/createPhysicsSimulator');
 
 var eventify = require('ngraph.events');
@@ -11,7 +11,7 @@ var eventify = require('ngraph.events');
  * for physics simulator you can pass your own settings here. If it's not passed
  * a default one will be created.
  */
-function createGraphologyLayout(graph, physicsSettings) {
+function createLayout(graph, physicsSettings) {
   if (!graph) {
     throw new Error('Graph structure cannot be undefined');
   }
