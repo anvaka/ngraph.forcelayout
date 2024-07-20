@@ -7,7 +7,7 @@
   "unpkg": "dist/graphology.forcelayout.min.js",
   "scripts": {
     "test": "tap run",
-    "github-test": "tap run -Rmin --allow-incomplete-coverage",
+    "github-test": "tap run -Rmin",
     "lint": "eslint .",
     "perf": "npm version && node perf/test.js"
   },
