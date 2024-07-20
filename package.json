@@ -5,20 +5,11 @@
   "main": "index.js",
   "jsdelivr": "dist/graphology.forcelayout.min.js",
   "unpkg": "dist/graphology.forcelayout.min.js",
-  "types": "./index.d.ts",
-  "typesVersions": {
-    "<=4.3": {
-      "index.d.ts": [
-        "index.v43.d.ts"
-      ]
-    }
-  },
   "scripts": {
-    "test": "tap test/*.js",
+    "test": "tap run",
+    "github-test": "tap run -Rmin",
     "lint": "eslint .",
-    "perf": "npm version && node perf/test.js",
-    "build": "browserify index.js -s ngraphCreateLayout -o dist/graphology.forcelayout.js && terser --compress -o dist/graphology.forcelayout.min.js -- dist/graphology.forcelayout.js",
-    "build2d": "browserify index.js -t ./inline-transform.js -s ngraphCreate2dLayout > dist/graphology.forcelayout2d.js && terser --compress -o dist/graphology.forcelayout2d.min.js -- dist/graphology.forcelayout2d.js"
+    "perf": "npm version && node perf/test.js"
   },
   "repository": {
     "type": "git",
@@ -36,8 +27,8 @@
   },
   "devDependencies": {
     "benchmark": "~1.0.0",
-    "browserify": "^17.0.0",
-    "eslint": "^7.12.1",
+    "eslint": "^9.7.0",
+    "globals": "^15.8.0",
     "ngraph.generators": "^20.0.0",
     "tap": "^20.0.3",
     "terser": "^5.3.0",
