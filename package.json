@@ -6,7 +6,8 @@
   "jsdelivr": "dist/graphology.forcelayout.min.js",
   "unpkg": "dist/graphology.forcelayout.min.js",
   "scripts": {
-    "test": "tap test/*.js",
+    "test": "tap run",
+    "github-test": "tap run -Rmin --allow-incomplete-coverage",
     "lint": "eslint .",
     "perf": "npm version && node perf/test.js"
   },
