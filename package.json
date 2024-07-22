@@ -9,7 +9,8 @@
     "test": "tap run",
     "github-test": "tap run -Rmin",
     "lint": "eslint .",
-    "perf": "npm version && node perf/test.js"
+    "perf": "npm version && node perf/test.js",
+    "sod": "node perf/experimental/staticOrDynamic.js"
   },
   "repository": {
     "type": "git",
