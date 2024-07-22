@@ -2,6 +2,7 @@
 const test = require("tap").test;
 const generateCreateBodyFunction = require("../lib/codeGenerators/generateCreateBody");
 const createSimulator = require("../lib/createPhysicsSimulator");
+const Spring = require("../lib/spring");
 const augment = createSimulator.augment;
 
 const dimensions2 = 2;
@@ -11,7 +12,7 @@ const Body3 = generateCreateBodyFunction(3);
 test("Can step without bodies", function (t) {
   const simulator = createSimulator();
   t.equal(simulator.bodies.length, 0, "There should be no bodies");
-  t.equal(simulator.springs.length, 0, "There should be no springs");
+  t.equal(simulator.springs.size, 0, "There should be no springs");
   simulator.step();
   t.end();
 });
@@ -78,7 +79,7 @@ test("Does not update position of one body", function (t) {
 
   simulator.step(1);
   t.equal(simulator.bodies.length, 1, "Number of bodies is 1");
-  t.equal(simulator.springs.length, 0, "Number of springs is 0");
+  t.equal(simulator.springs.size, 0, "Number of springs is 0");
   t.equal(simulator.bodies[0], body, "Body points to actual object");
   t.equal(body.pos.x, 0, "X is not changed");
   t.equal(body.pos.y, 0, "Y is not changed");
@@ -95,7 +96,7 @@ test("throws on no body or no pos", (t) => {
 test("throws on no spring", (t) => {
   const simulator = createSimulator();
   t.throws(
-    () => simulator.addSpring(),
+    () => simulator.addSpringWithKey(),
     /Cannot add null spring to force simulator/,
   );
   t.end();
@@ -211,30 +212,43 @@ test("Updates position for two bodies", function (t) {
   t.end();
 });
 
-test("add spring should not add bodies", function (t) {
+test("addSpringWithKey should not add bodies", function (t) {
   const simulator = createSimulator();
   const body1 = new Body2(-1, 0);
   const body2 = new Body2(1, 0);
 
-  simulator.addSpring(body1, body2, 10, 2);
+  const spring = new Spring(body1, body2, 10, 2);
+  simulator.addSpringWithKey("test", spring);
 
   t.equal(simulator.bodies.length, 0, "Should not add two bodies");
   t.equal(simulator.bodies.length, 0, "Should not add two bodies");
-  t.equal(simulator.springs.length, 1, "Should have a spring");
-  t.equal(simulator.springs[0].coefficient, 2, "Spring coefficient is 2");
+  t.equal(simulator.springs.size, 1, "Should have a spring");
+  t.equal(
+    simulator.getSpring("test").coefficient,
+    2,
+    "Spring coefficient is 2",
+  );
+  t.end();
+});
+
+test("throws when adding spring with duplicate key", function (t) {
+  const simulator = createSimulator();
+  const body1 = new Body2(-1, 0);
+  const body2 = new Body2(1, 0);
+  const spring = new Spring(body1, body2, 10, 2);
+  simulator.addSpringWithKey("test", spring);
+  t.throws(
+    () => simulator.addSpringWithKey("test", spring),
+    "Spring test is already added",
+  );
   t.end();
 });
 
 test("negative spring coefficients must be -1", function (t) {
-  const simulator = createSimulator();
   const body1 = new Body2(-1, 0);
   const body2 = new Body2(1, 0);
-  simulator.addSpring(body1, body2, 1, -10);
-  t.equal(
-    simulator.springs[0].coefficient,
-    -1,
-    "non-negative value should be set to -1",
-  );
+  const spring = new Spring(body1, body2, 1, -10);
+  t.equal(spring.coefficient, -1, "non-negative value should be set to -1");
   t.end();
 });
 
@@ -245,12 +259,12 @@ test("Spring affects bodies positions", function (t) {
   simulator.addBody(body1);
   simulator.addBody(body2);
   // If you take this out, bodies will repel each other:
-  simulator.addSpring(body1, body2, 1);
+  const spring = new Spring(body1, body2, 1);
+  simulator.addSpringWithKey("test", spring);
 
   simulator.step();
-
-  t.ok(body1.pos.x > -10, "Body 1 should move towards body 2");
-  t.ok(body2.pos.x < 10, "Body 2 should move towards body 1");
+  t.ok(simulator.bodies[0].pos.x > -10, "Body 1 should move towards body 2");
+  t.ok(simulator.bodies[1].pos.x < 10, "Body 2 should move towards body 1");
 
   t.end();
 });
@@ -283,8 +297,9 @@ test("If bodies do not start using a dimension, that dimension will never be use
   const body2 = new Body3(-1100000, 0, 1);
   simulator.addBody(body1);
   simulator.addBody(body2);
+  const spring = new Spring(body1, body2, 1);
   // If you take this out, bodies will repel each other:
-  simulator.addSpring(body1, body2, 1);
+  simulator.addSpringWithKey("test", spring);
 
   t.ok(body1.pos.z == 1, "Body 1 should start at z=1");
   t.ok(body2.pos.z == 1, "Body 2 should start at z=1");
@@ -296,14 +311,16 @@ test("If bodies do not start using a dimension, that dimension will never be use
 
   t.end();
 });
+
 test("Can remove springs", function (t) {
   const simulator = createSimulator();
   const body1 = new Body2(-10, 0);
   const body2 = new Body2(10, 0);
+  const spring = new Spring(body1, body2, 1);
   simulator.addBody(body1);
   simulator.addBody(body2);
-  const spring = simulator.addSpring(body1, body2, 1);
-  simulator.removeSpring(spring);
+  simulator.addSpringWithKey("test", spring);
+  simulator.removeSpring("test");
 
   simulator.step();
 
@@ -319,7 +336,8 @@ test("removeSpring requires spring", function (t) {
   const body2 = new Body2(10, 0);
   simulator.addBody(body1);
   simulator.addBody(body2);
-  const spring = simulator.addSpring(body1, body2, 1);
+  const spring = new Spring(body1, body2, 1);
+  simulator.addSpringWithKey("test", spring);
 
   t.notOk(simulator.removeSpring(null), "returns falsey if spring is falsey");
   t.end();
