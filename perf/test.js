@@ -1,12 +1,13 @@
-var graph = require('ngraph.generators').grid(20, 20);
+const Graph = require('graphology');
+const completeGraph = require('graphology-generators/classic/complete')(Graph, 100);
 
-var Benchmark = require('benchmark');
-var suite = new Benchmark.Suite;
+const Benchmark = require('benchmark');
+const suite = new Benchmark.Suite;
 
 // add tests
 suite.add('Run default', function() {
-  var layout = require('../')(graph);
-  for (var i = 0; i < 20; ++i) {
+  const layout = require('../')(completeGraph);
+  for (let i = 0; i < 20; ++i) {
     layout.step();
   }
 })

@@ -635,11 +635,6 @@ test("getNeighborBodies throws if node is not found", function (t) {
   t.end();
 });
 
-test("noop does nothing", function (t) {
-  createLayout.noop();
-  t.end();
-});
-
 test("physicsSettings must not be an array", function (t) {
   const graph = new Graph();
   t.throws(() => createLayout(graph, []), "Throws if settings is array");

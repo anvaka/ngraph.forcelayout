@@ -1,11 +1,11 @@
-var test = require('tap').test;
-var dimensions = 2;
-var Body = require('../lib/codeGenerators/generateCreateBody')(dimensions);
-var integrate = require('../lib/codeGenerators/generateIntegrator')(dimensions);
+const test = require('tap').test;
+const dimensions = 2;
+const Body = require('../lib/codeGenerators/generateCreateBody')(dimensions);
+const integrate = require('../lib/codeGenerators/generateIntegrator')(dimensions);
 
 test('Body preserves velocity without forces', function (t) {
-  var body = new Body();
-  var timeStep = 1;
+  const body = new Body();
+  let timeStep = 1;
   body.mass = 1; body.velocity.x = 1;
 
   integrate([body], timeStep);
@@ -18,8 +18,8 @@ test('Body preserves velocity without forces', function (t) {
 });
 
 test('Body gains velocity under force', function (t) {
-  var body = new Body();
-  var timeStep = 1;
+  const body = new Body();
+  const timeStep = 1;
   body.mass = 1; body.force.x = 0.1;
 
   // F = m * a;
@@ -36,14 +36,14 @@ test('Body gains velocity under force', function (t) {
 });
 
 test('No bodies yield 0 movement', function (t) {
-  var movement = integrate([], 2);
+  const movement = integrate([], 2);
   t.equal(movement, 0, 'Nothing has moved');
   t.end();
 });
 
 test('Body does not move faster than 1px', function (t) {
-  var body = new Body();
-  var timeStep = 1;
+  const body = new Body();
+  const timeStep = 1;
   body.mass = 1; body.force.x = 2;
 
   integrate([body], timeStep);
@@ -56,11 +56,11 @@ test('Body does not move faster than 1px', function (t) {
 });
 
 test('Can get total system movement', function (t) {
-  var body = new Body();
-  var timeStep = 1;
+  const body = new Body();
+  const timeStep = 1;
   body.mass = 1; body.velocity.x = 0.2;
 
-  var movement = integrate([body], timeStep);
+  const movement = integrate([body], timeStep);
   // to improve performance, integrator does not take square root, thus
   // total movement is .2 * .2 = 0.04;
   t.ok(0.04 <= movement && movement <= 0.041, 'System should travel by 0.2 pixels');
