@@ -1,14 +1,14 @@
-var test = require('tap').test;
+const test = require('tap').test;
 
-var dimensions = 2;
-var createQuadTree = require('../lib/codeGenerators/generateQuadTree')(dimensions);
-var Body = require('../lib/codeGenerators/generateCreateBody')(dimensions);
-var random = require('ngraph.random').random(42);
+const dimensions = 2;
+const createQuadTree = require('../lib/codeGenerators/generateQuadTree')(dimensions);
+const Body = require('../lib/codeGenerators/generateCreateBody')(dimensions);
+const random = require('ngraph.random').random(42);
 
 test('insert and update update forces', function (t) {
-  var tree = createQuadTree({}, random);
-  var body = new Body();
-  var clone = JSON.parse(JSON.stringify(body));
+  const tree = createQuadTree({}, random);
+  const body = new Body();
+  const clone = JSON.parse(JSON.stringify(body));
 
   tree.insertBodies([body]);
   tree.updateBodyForce(body);
@@ -17,20 +17,20 @@ test('insert and update update forces', function (t) {
 });
 
 test('it can get root', function (t) {
-  var tree = createQuadTree({}, random);
-  var body = new Body();
+  const tree = createQuadTree({}, random);
+  const body = new Body();
 
   tree.insertBodies([body]);
-  var root = tree.getRoot();
+  const root = tree.getRoot();
   t.ok(root, 'Root is present');
   t.equal(root.body, body, 'Body is initialized');
   t.end();
 });
 
 test('Two bodies repel each other', function (t) {
-  var tree = createQuadTree({}, random);
-  var bodyA = new Body(); bodyA.pos.x = 1; bodyA.pos.y = 0;
-  var bodyB = new Body(); bodyB.pos.x = 2; bodyB.pos.y = 0;
+  const tree = createQuadTree({}, random);
+  const bodyA = new Body(); bodyA.pos.x = 1; bodyA.pos.y = 0;
+  const bodyB = new Body(); bodyB.pos.x = 2; bodyB.pos.y = 0;
 
   tree.insertBodies([bodyA, bodyB]);
   tree.updateBodyForce(bodyA);
@@ -48,9 +48,9 @@ test('Two bodies repel each other', function (t) {
 });
 
 test('Can handle two bodies at the same location', function (t) {
-  var tree = createQuadTree({}, random);
-  var bodyA = new Body();
-  var bodyB = new Body();
+  const tree = createQuadTree({}, random);
+  const bodyA = new Body();
+  const bodyB = new Body();
 
   tree.insertBodies([bodyA, bodyB]);
   tree.updateBodyForce(bodyA);
@@ -60,14 +60,14 @@ test('Can handle two bodies at the same location', function (t) {
 });
 
 test('it does not stuck', function(t) {
-  var count = 60000;
-  var bodies = [];
+  let count = 60000;
+  const bodies = [];
 
-  for (var i = 0; i < count; ++i) {
+  for (let i = 0; i < count; ++i) {
     bodies.push(new Body(Math.random(), Math.random()));
   }
 
-  var quadTree = createQuadTree({}, random);
+  const quadTree = createQuadTree({}, random);
   quadTree.insertBodies(bodies);
 
   bodies.forEach(function(body) {
