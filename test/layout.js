@@ -30,7 +30,6 @@ test("it creates a layout from a prepopulated graph", (t) => {
 });
 
 test("it returns spring", (t) => {
-  // stones after this
   const g = new Graph();
   const layout = createLayout(g);
 
@@ -41,6 +40,14 @@ test("it returns spring", (t) => {
   const springForLink = layout.getSpring(link);
 
   t.ok(springForLink, "spring is here");
+  t.end();
+});
+
+test("initLink throws if source or target bodies are not found", (t) => {
+  const g = new Graph();
+  const layout = createLayout(g, { debug: true });
+
+  t.throws(() => layout.initLink("test", {length: 1}, "src", "dst"), "Throws if source body is missing");
   t.end();
 });
 
@@ -136,8 +143,58 @@ test("getForceVectorLength implements pythagorean theorem", function (t) {
   const graph = new Graph();
   graph.addNode("node1");
   graph.addNode("node2");
-  const layout = createLayout(graph);
-  t.equal(layout.getForceVectorLength(), 0, "vector is zero when no force");
+  const layout = createLayout(graph, { debug: true });
+  layout.nodeBodies.get("node1").force.x = 3;
+  layout.nodeBodies.get("node2").force.y = 4;
+  t.equal(layout.getForceVectorLength(), 5, "force vector is 3 4 5 triangle");
+  t.end();
+});
+
+test("handleNodeUpdates pins nodes appropriately", function (t) {
+  const graph = new Graph();
+  graph.addNode("node1");
+  const layout = createLayout(graph, { debug: true });
+  t.notOk(layout.nodeBodies.get("node1").isPinned, "node1 is not pinned");
+  layout.handleNodeUpdates("set", "node1", { isPinned: true }, "isPinned");
+  t.ok(layout.nodeBodies.get("node1").isPinned, "node1 is pinned");
+  t.end();
+});
+
+test("releaseNode deletes node", function (t) {
+  const graph = new Graph();
+  graph.addNode("node1");
+  const layout = createLayout(graph, { debug: true });
+  t.ok(layout.nodeBodies.has("node1"), "node1 exists");
+  t.equal(layout.simulator.bodies.length, 1, "simulator has 1 body");
+  layout.releaseNode("node1");
+  t.notOk(layout.nodeBodies.has("node1"), "node1 is gone");
+  t.equal(layout.simulator.bodies.length, 0, "simulator has no bodies");
+  t.end();
+});
+
+test("releaseLink deletes spring", function (t) {
+  const graph = new Graph();
+  graph.addNode("node1");
+  graph.addNode("node2");
+  graph.addEdgeWithKey("test", "node1", "node2");
+  const layout = createLayout(graph, { debug: true });
+  t.ok(layout.getSpring("test"), "spring exists");
+  t.equal(layout.simulator.springs.size, 1, "simulator has 1 spring");
+  t.equal(layout.nodeBodies.get("node1").mass, 1 + 1 / 3.0, "body mass is 2/3");
+  t.equal(layout.nodeBodies.get("node2").mass, 1 + 1 / 3.0, "body mass is 2/3");
+
+  graph.dropEdge("test");
+  t.notOk(layout.getSpring("test"), "spring is gone");
+  t.equal(layout.simulator.springs.size, 0, "simulator has no springs");
+  t.equal(layout.nodeBodies.get("node1").mass, 1, "body mass is 1");
+  t.equal(layout.nodeBodies.get("node2").mass, 1, "body mass is 1");
+  t.end();
+});
+
+test("releaseLink throws when called with unknown link", function (t) {
+  const graph = new Graph();
+  const layout = createLayout(graph, { debug: true });
+  t.throws(() => layout.releaseLink("test"), "throws when link is unknown");
   t.end();
 });
 
@@ -567,6 +624,75 @@ test("it can layout two graphs independently", function (t) {
     layout1.getNodePosition("1").x !== layout2.getNodePosition("1").x,
     "Positions are different",
   );
+  t.end();
+});
+
+test("getNeighborBodies throws if node is not found", function (t) {
+  const graph = new Graph();
+  const layout = createLayout(graph, { debug: true });
+
+  t.throws(() => layout.getNeighborBodies("test"), "Throws if node is unknown");
+  t.end();
+});
+
+test("noop does nothing", function (t) {
+  createLayout.noop();
+  t.end();
+});
+
+test("physicsSettings must not be an array", function (t) {
+  const graph = new Graph();
+  t.throws(() => createLayout(graph, []), "Throws if settings is array");
+  t.end();
+});
+
+test("isNodeOriginallyPinned", function (t) {
+  t.test("returns true if node is pinned", function (t) {
+    const graph = new Graph();
+    graph.addNode("test", { isPinned: true });
+    const layout = createLayout(graph, { debug: true });
+    t.ok(layout.isNodeOriginallyPinned("test"), "Node is pinned");
+    t.end();
+  });
+
+  t.test("returns false if node is not pinned", function (t) {
+    const graph = new Graph();
+    graph.addNode("test", { isPinned: false });
+    const layout = createLayout(graph, { debug: true });
+    t.notOk(layout.isNodeOriginallyPinned("test"), "Node is not pinned");
+    t.end();
+  });
+
+  t.test("returns undefined if isPinned is not defined", function (t) {
+    const graph = new Graph();
+    graph.addNode("test");
+    const layout = createLayout(graph, { debug: true });
+    t.notOk(layout.isNodeOriginallyPinned("test"), "Node is not pinned");
+    t.end();
+  });
+
+  t.end();
+});
+
+test("defaultNodeMass", function (t) {
+  t.test("when no links", function (t) {
+    const graph = new Graph();
+    graph.addNode("test");
+    const tmp = graph.edges("test");
+    const layout = createLayout(graph, { debug: true });
+    t.equal(layout.defaultNodeMass("test"), 1, "Default mass is 1");
+    t.end();
+  });
+  t.test("when one link is present", function (t) {
+    const graph = new Graph();
+    graph.addNode("test");
+    graph.addNode("test2");
+    graph.addEdge("test", "test2");
+    const layout = createLayout(graph, { debug: true });
+    t.equal(layout.defaultNodeMass("test"), 1 + 1 / 3.0, "Default mass is 4/3");
+    t.end();
+  });
+
   t.end();
 });
 
