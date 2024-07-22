@@ -1,9 +1,8 @@
 module.exports = createLayout;
 module.exports.simulator = require("./lib/createPhysicsSimulator");
-module.exports.noop = noop;
 
 const Spring = require("./lib/spring");
-var eventify = require("ngraph.events");
+const eventify = require("ngraph.events");
 
 /**
  * Creates force based layout for a given graph.
@@ -18,10 +17,10 @@ function createLayout(graph, physicsSettings) {
     throw new Error("Graph structure cannot be undefined");
   }
 
-  var createSimulator =
+  const createSimulator =
     (physicsSettings && physicsSettings.createSimulator) ||
     require("./lib/createPhysicsSimulator");
-  var physicsSimulator = createSimulator(physicsSettings);
+  let physicsSimulator = createSimulator(physicsSettings);
   if (Array.isArray(physicsSettings))
     throw new Error("Physics settings is expected to be an object");
 
@@ -30,9 +29,7 @@ function createLayout(graph, physicsSettings) {
     nodeMass = physicsSettings.nodeMass;
   }
 
-  var nodeBodies = new Map();
-
-  var springTransform = physicsSimulator.settings.springTransform || noop;
+  let nodeBodies = new Map();
 
   // Define event handlers
   const nodeAddedHandler = ({ key, attributes }) => initBody(key, attributes);
@@ -49,9 +46,9 @@ function createLayout(graph, physicsSettings) {
   initPhysics();
   listenToEvents();
 
-  var wasStable = false;
+  let wasStable = false;
 
-  var api = {
+  const api = {
     /**
      * Performs one step of iterative layout algorithm
      *
@@ -64,7 +61,7 @@ function createLayout(graph, physicsSettings) {
         return true;
       }
 
-      var lastMove = physicsSimulator.step();
+      const lastMove = physicsSimulator.step();
 
       // Save the movement in case if someone wants to query it in the step
       // callback.
@@ -73,8 +70,8 @@ function createLayout(graph, physicsSettings) {
       // Allow listeners to perform low-level actions after nodes are updated.
       api.fire("step");
 
-      var ratio = lastMove / nodeBodies.size;
-      var isStableNow = ratio <= 0.01; // TODO: The number is somewhat arbitrary...
+      const ratio = lastMove / nodeBodies.size;
+      const isStableNow = ratio <= 0.01; // TODO: The number is somewhat arbitrary...
       updateStableStatus(isStableNow);
 
       return isStableNow;
@@ -95,7 +92,7 @@ function createLayout(graph, physicsSettings) {
      * @param {number=} z position of node (only if applicable to body)
      */
     setNodePosition: function (nodeId) {
-      var body = getInitializedBody(nodeId);
+      const body = getInitializedBody(nodeId);
       body.setPosition.apply(body, Array.prototype.slice.call(arguments, 1));
     },
 
@@ -234,8 +231,8 @@ function createLayout(graph, physicsSettings) {
 
   function getForceVectorLength() {
     // untouched
-    var fx = 0,
-      fy = 0;
+    let fx = 0;
+    let fy = 0;
     forEachBody(function (body) {
       fx += Math.abs(body.force.x);
       fy += Math.abs(body.force.y);
@@ -254,7 +251,7 @@ function createLayout(graph, physicsSettings) {
   }
 
   function pinNode(nodeId, isPinned) {
-    var body = getInitializedBody(nodeId);
+    const body = getInitializedBody(nodeId);
     body.isPinned = !!isPinned;
   }
 
@@ -295,33 +292,33 @@ function createLayout(graph, physicsSettings) {
 
   function initBody(nodeId, nodeAttrs) {
     // graphology
-    var body = nodeBodies.get(nodeId);
-    if (!body) {
+    const initBody = nodeBodies.get(nodeId);
+    if (!initBody) {
       if (!graph.hasNode(nodeId)) {
         throw new Error("initBody() was called with unknown node id");
       }
 
-      var pos = nodeAttrs.position;
+      let pos = nodeAttrs.position;
       if (!pos) {
-        var neighbors = getNeighborBodies(nodeId);
+        const neighbors = getNeighborBodies(nodeId);
         pos = physicsSimulator.getBestNewBodyPosition(neighbors);
       }
 
-      body = physicsSimulator.addBodyAt(pos);
-      body.id = nodeId;
+      const simBody = physicsSimulator.addBodyAt(pos);
+      simBody.id = nodeId;
 
-      nodeBodies.set(nodeId, body);
+      nodeBodies.set(nodeId, simBody);
       updateBodyMass(nodeId);
 
       if (isNodeOriginallyPinned(nodeId)) {
-        body.isPinned = true;
+        simBody.isPinned = true;
       }
     }
   }
 
   function releaseNode(nodeId) {
     // graphology
-    var body = nodeBodies.get(nodeId);
+    const body = nodeBodies.get(nodeId);
     if (body) {
       nodeBodies.delete(nodeId);
       physicsSimulator.removeBody(body);
@@ -389,7 +386,7 @@ function createLayout(graph, physicsSettings) {
 
   function getInitializedBody(nodeId) {
     // untouched
-    var body = nodeBodies.get(nodeId);
+    let body = nodeBodies.get(nodeId);
     if (!body) {
       initBody(nodeId);
       body = nodeBodies.get(nodeId);
@@ -410,5 +407,3 @@ function createLayout(graph, physicsSettings) {
     return 1 + links.length / 3.0;
   }
 }
-
-function noop() {}
