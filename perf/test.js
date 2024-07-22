@@ -1,11 +1,12 @@
-const graph = require('ngraph.generators').grid(20, 20);
+const Graph = require('graphology');
+const completeGraph = require('graphology-generators/classic/complete')(Graph, 20);
 
 const Benchmark = require('benchmark');
 const suite = new Benchmark.Suite;
 
 // add tests
 suite.add('Run default', function() {
-  const layout = require('../')(graph);
+  const layout = require('../')(completeGraph);
   for (let i = 0; i < 20; ++i) {
     layout.step();
   }
