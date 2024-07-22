@@ -1,5 +1,5 @@
 const Graph = require('graphology');
-const completeGraph = require('graphology-generators/classic/complete')(Graph, 20);
+const completeGraph = require('graphology-generators/classic/complete')(Graph, 100);
 
 const Benchmark = require('benchmark');
 const suite = new Benchmark.Suite;
