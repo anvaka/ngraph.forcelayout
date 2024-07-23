@@ -1,9 +1,12 @@
-const test = require('tap').test;
-const dimensions = 2;
-const createDragForce = require('../lib/codeGenerators/generateCreateDragForce')(dimensions);
-const Body = require('../lib/codeGenerators/generateCreateBody')(dimensions);
+import t from 'tap';
+import generateCreateDragForceFunction from '../lib/codeGenerators/generateCreateDragForce';
+import generateCreateBodyFunction from '../lib/codeGenerators/generateCreateBody';
 
-test('reduces force value', function (t) {
+const dimensions = 2;
+const createDragForce = generateCreateBodyFunction(dimensions);
+const Body = generateCreateDragForceFunction(dimensions);
+
+t.test('reduces force value', function (t) {
   const body = new Body();
   body.force.x = 1; body.force.y = 1;
   body.velocity.x = 1; body.velocity.y = 1;
@@ -15,7 +18,7 @@ test('reduces force value', function (t) {
   t.end();
 });
 
-test('Initialized with default value', function (t) {
+t.test('Initialized with default value', function (t) {
   t.throws(() => createDragForce());
   t.end();
 });
