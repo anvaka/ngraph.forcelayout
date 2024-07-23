@@ -1,6 +1,6 @@
 import t from 'tap';
-import generateCreateDragForceFunction from '../lib/codeGenerators/generateCreateDragForce';
-import generateCreateBodyFunction from '../lib/codeGenerators/generateCreateBody';
+import generateCreateDragForceFunction from '../lib/codeGenerators/generateCreateDragForce.js';
+import generateCreateBodyFunction from '../lib/codeGenerators/generateCreateBody.js';
 
 const dimensions = 2;
 const createDragForce = generateCreateBodyFunction(dimensions);
