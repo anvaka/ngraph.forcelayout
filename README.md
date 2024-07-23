@@ -1,6 +1,6 @@
 # ngraph.forcelayout 
 
-[![build status](https://github.com/anvaka/ngraph.forcelayout/actions/workflows/tests.yaml/badge.svg)](https://github.com/anvaka/ngraph.forcelayout/actions/workflows/tests.yaml)
+[![build status](https://github.com/AddingBurritos/graphology.forcelayout/actions/workflows/tests.yaml/badge.svg)](https://github.com/AddingBurritos/graphology.forcelayout/actions/workflows/tests.yaml)
 
 This is a [force directed](http://en.wikipedia.org/wiki/Force-directed_graph_drawing) graph layout algorithm, 
 that works in any dimension (2D, 3D, and above).
