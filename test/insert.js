@@ -1,11 +1,14 @@
-const test = require('tap').test;
+import t from 'tap';
+import generateQuadTreeFunction from '../lib/codeGenerators/generateQuadTree.js';
+import generateCreateBodyFunction from '../lib/codeGenerators/generateCreateBody.js';
+import ngraphRandom from "ngraph.random";
 
 const dimensions = 2;
-const createQuadTree = require('../lib/codeGenerators/generateQuadTree')(dimensions);
-const Body = require('../lib/codeGenerators/generateCreateBody')(dimensions);
-const random = require('ngraph.random').random(42);
+const createQuadTree = generateQuadTreeFunction(dimensions);
+const Body = generateCreateBodyFunction(dimensions);
+const random = ngraphRandom.random(42);
 
-test('insert and update update forces', function (t) {
+t.test('insert and update update forces', function (t) {
   const tree = createQuadTree({}, random);
   const body = new Body();
   const clone = JSON.parse(JSON.stringify(body));
@@ -16,7 +19,7 @@ test('insert and update update forces', function (t) {
   t.end();
 });
 
-test('it can get root', function (t) {
+t.test('it can get root', function (t) {
   const tree = createQuadTree({}, random);
   const body = new Body();
 
@@ -27,7 +30,7 @@ test('it can get root', function (t) {
   t.end();
 });
 
-test('Two bodies repel each other', function (t) {
+t.test('Two bodies repel each other', function (t) {
   const tree = createQuadTree({}, random);
   const bodyA = new Body(); bodyA.pos.x = 1; bodyA.pos.y = 0;
   const bodyB = new Body(); bodyB.pos.x = 2; bodyB.pos.y = 0;
@@ -47,7 +50,7 @@ test('Two bodies repel each other', function (t) {
   t.end();
 });
 
-test('Can handle two bodies at the same location', function (t) {
+t.test('Can handle two bodies at the same location', function (t) {
   const tree = createQuadTree({}, random);
   const bodyA = new Body();
   const bodyB = new Body();
@@ -59,7 +62,7 @@ test('Can handle two bodies at the same location', function (t) {
   t.end();
 });
 
-test('it does not stuck', function(t) {
+t.test('it does not stuck', function(t) {
   let count = 60000;
   const bodies = [];
 
