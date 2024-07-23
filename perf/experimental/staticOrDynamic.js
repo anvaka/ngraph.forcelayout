@@ -1,7 +1,8 @@
 // Comparing the difference of compiled adhoc vs compiled in runtime function execution
 // This should let build functions specific to dimension, without affecting performance.
 
-const Benchmark = require('benchmark');
+import Benchmark from 'benchmark';
+
 const suite = new Benchmark.Suite;
 let bodies;
 let total = 0;
