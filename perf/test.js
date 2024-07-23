@@ -1,12 +1,14 @@
-const Graph = require('graphology');
-const completeGraph = require('graphology-generators/classic/complete')(Graph, 100);
+import Graph from 'graphology';
+import completeGraph from 'graphology-generators/classic/complete';
+import createLayout from '../index.js';
 
-const Benchmark = require('benchmark');
+import Benchmark from 'benchmark';
 const suite = new Benchmark.Suite;
 
 // add tests
 suite.add('Run default', function() {
-  const layout = require('../')(completeGraph);
+  const graph = completeGraph(Graph, 100);
+  const layout = createLayout(graph);
   for (let i = 0; i < 20; ++i) {
     layout.step();
   }
