@@ -11,7 +11,7 @@ export default [
         ...globals.node,
       },
 
-      ecmaVersion: 14,
+      ecmaVersion: "latest",
       sourceType: "module",
     },
 

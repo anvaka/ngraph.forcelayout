@@ -1,9 +1,12 @@
-const test = require('tap').test;
-const dimensions = 2;
-const Body = require('../lib/codeGenerators/generateCreateBody')(dimensions);
-const integrate = require('../lib/codeGenerators/generateIntegrator')(dimensions);
+import t from 'tap';
+import generateCreateBodyFunction from '../lib/codeGenerators/generateCreateBody.js';
+import generateIntegratorFunction from '../lib/codeGenerators/generateIntegrator.js';
 
-test('Body preserves velocity without forces', function (t) {
+const dimensions = 2;
+const Body = generateCreateBodyFunction(dimensions);
+const integrate = generateIntegratorFunction(dimensions);
+
+t.test('Body preserves velocity without forces', function (t) {
   const body = new Body();
   let timeStep = 1;
   body.mass = 1; body.velocity.x = 1;
@@ -17,7 +20,7 @@ test('Body preserves velocity without forces', function (t) {
   t.end();
 });
 
-test('Body gains velocity under force', function (t) {
+t.test('Body gains velocity under force', function (t) {
   const body = new Body();
   const timeStep = 1;
   body.mass = 1; body.force.x = 0.1;
@@ -35,13 +38,13 @@ test('Body gains velocity under force', function (t) {
   t.end();
 });
 
-test('No bodies yield 0 movement', function (t) {
+t.test('No bodies yield 0 movement', function (t) {
   const movement = integrate([], 2);
   t.equal(movement, 0, 'Nothing has moved');
   t.end();
 });
 
-test('Body does not move faster than 1px', function (t) {
+t.test('Body does not move faster than 1px', function (t) {
   const body = new Body();
   const timeStep = 1;
   body.mass = 1; body.force.x = 2;
@@ -55,7 +58,7 @@ test('Body does not move faster than 1px', function (t) {
   t.end();
 });
 
-test('Can get total system movement', function (t) {
+t.test('Can get total system movement', function (t) {
   const body = new Body();
   const timeStep = 1;
   body.mass = 1; body.velocity.x = 0.2;

@@ -2,12 +2,13 @@
   "name": "graphology.forcelayout",
   "version": "3.3.1",
   "description": "Force directed graph drawing layout",
-  "main": "index.js",
+  "exports": "./index.js",
   "jsdelivr": "dist/graphology.forcelayout.min.js",
   "unpkg": "dist/graphology.forcelayout.min.js",
+  "type": "module",
   "scripts": {
     "test": "tap run",
-    "github-test": "tap run -Rmin",
+    "github-test": "tap run -Rmin --allow-incomplete-coverage",
     "lint": "eslint .",
     "perf": "npm version && node perf/test.js",
     "sod": "node perf/experimental/staticOrDynamic.js"

@@ -1,14 +1,15 @@
 /* eslint-disable no-shadow */
-const test = require("tap").test,
-  Graph = require("graphology"),
-  createLayout = require("../index.js");
+import t from 'tap';
+import Graph from 'graphology';
+import createLayout from '../index.js';
+import { simulator } from '../index.js';
 
-test("it exposes simulator", (t) => {
-  t.ok(typeof createLayout.simulator === "function", "Simulator is exposed");
+t.test("it exposes simulator", (t) => {
+  t.ok(typeof simulator === "function", "Simulator is exposed");
   t.end();
 });
 
-test("it adds a node", (t) => {
+t.test("it adds a node", (t) => {
   const g = new Graph();
   g.addNode(1);
   t.ok(1 == g.order, "graph has the number of expected nodes");
@@ -16,7 +17,7 @@ test("it adds a node", (t) => {
   t.end();
 });
 
-test("it creates a layout from a prepopulated graph", (t) => {
+t.test("it creates a layout from a prepopulated graph", (t) => {
   const g = new Graph();
   g.addNode(1);
   g.addNode(2);
@@ -29,7 +30,7 @@ test("it creates a layout from a prepopulated graph", (t) => {
   t.end();
 });
 
-test("it returns spring", (t) => {
+t.test("it returns spring", (t) => {
   const g = new Graph();
   const layout = createLayout(g);
 
@@ -43,7 +44,7 @@ test("it returns spring", (t) => {
   t.end();
 });
 
-test("initLink throws if source or target bodies are not found", (t) => {
+t.test("initLink throws if source or target bodies are not found", (t) => {
   const g = new Graph();
   const layout = createLayout(g, { debug: true });
 
@@ -51,7 +52,7 @@ test("initLink throws if source or target bodies are not found", (t) => {
   t.end();
 });
 
-test("it returns same position", function (t) {
+t.test("it returns same position", function (t) {
   const g = new Graph();
   const layout = createLayout(g);
 
@@ -73,7 +74,7 @@ test("it returns same position", function (t) {
   t.end();
 });
 
-test("it returns body", function (t) {
+t.test("it returns body", function (t) {
   const g = new Graph();
   const layout = createLayout(g);
 
@@ -92,7 +93,7 @@ test("it returns body", function (t) {
   t.end();
 });
 
-test("it can set node mass", function (t) {
+t.test("it can set node mass", function (t) {
   const g = new Graph();
   g.addNode("anvaka");
 
@@ -109,7 +110,7 @@ test("it can set node mass", function (t) {
   t.end();
 });
 
-test("does not tolerate bad input", function (t) {
+t.test("does not tolerate bad input", function (t) {
   t.throws(missingGraph);
   t.throws(invalidNodeId);
   t.end();
@@ -128,7 +129,7 @@ test("does not tolerate bad input", function (t) {
   }
 });
 
-test("it fires stable on empty graph", function (t) {
+t.test("it fires stable on empty graph", function (t) {
   const graph = new Graph();
   const layout = createLayout(graph);
   layout.on("stable", endTest);
@@ -139,7 +140,7 @@ test("it fires stable on empty graph", function (t) {
   }
 });
 
-test("getForceVectorLength implements pythagorean theorem", function (t) {
+t.test("getForceVectorLength implements pythagorean theorem", function (t) {
   const graph = new Graph();
   graph.addNode("node1");
   graph.addNode("node2");
@@ -150,7 +151,7 @@ test("getForceVectorLength implements pythagorean theorem", function (t) {
   t.end();
 });
 
-test("handleNodeUpdates pins nodes appropriately", function (t) {
+t.test("handleNodeUpdates pins nodes appropriately", function (t) {
   const graph = new Graph();
   graph.addNode("node1");
   const layout = createLayout(graph, { debug: true });
@@ -160,7 +161,7 @@ test("handleNodeUpdates pins nodes appropriately", function (t) {
   t.end();
 });
 
-test("releaseNode deletes node", function (t) {
+t.test("releaseNode deletes node", function (t) {
   const graph = new Graph();
   graph.addNode("node1");
   const layout = createLayout(graph, { debug: true });
@@ -172,7 +173,7 @@ test("releaseNode deletes node", function (t) {
   t.end();
 });
 
-test("releaseLink deletes spring", function (t) {
+t.test("releaseLink deletes spring", function (t) {
   const graph = new Graph();
   graph.addNode("node1");
   graph.addNode("node2");
@@ -191,14 +192,14 @@ test("releaseLink deletes spring", function (t) {
   t.end();
 });
 
-test("releaseLink throws when called with unknown link", function (t) {
+t.test("releaseLink throws when called with unknown link", function (t) {
   const graph = new Graph();
   const layout = createLayout(graph, { debug: true });
   t.throws(() => layout.releaseLink("test"), "throws when link is unknown");
   t.end();
 });
 
-test("can add bodies which are standard prototype names", function (t) {
+t.test("can add bodies which are standard prototype names", function (t) {
   const graph = new Graph();
   graph.addNode("constructor");
   graph.addNode("watch");
@@ -218,7 +219,7 @@ test("can add bodies which are standard prototype names", function (t) {
   t.end();
 });
 
-test("it can step when no links present", function (t) {
+t.test("it can step when no links present", function (t) {
   const graph = new Graph();
   graph.addNode("constructor");
   graph.addNode("watch");
@@ -237,7 +238,7 @@ test("it can step when no links present", function (t) {
   t.end();
 });
 
-test("layout initializes nodes positions", function (t) {
+t.test("layout initializes nodes positions", function (t) {
   const graph = new Graph();
   graph.addNode(1);
   graph.addNode(2);
@@ -271,7 +272,7 @@ test("layout initializes nodes positions", function (t) {
   t.end();
 });
 
-test("Layout can set node position", function (t) {
+t.test("Layout can set node position", function (t) {
   const graph = new Graph();
   graph.addNode(1);
   graph.addNode(2);
@@ -293,7 +294,7 @@ test("Layout can set node position", function (t) {
   t.end();
 });
 
-test("Layout updates bounding box when it sets node position", function (t) {
+t.test("Layout updates bounding box when it sets node position", function (t) {
   const graph = new Graph();
   graph.addNode(1);
   graph.addNode(2);
@@ -311,14 +312,12 @@ test("Layout updates bounding box when it sets node position", function (t) {
   t.end();
 });
 
-test("layout initializes links", function (t) {
+t.test("layout initializes links", function (t) {
   const graph = new Graph();
-  const node1 = graph.addNode(1);
-  node1.position = { x: -1000, y: 0 };
-  const node2 = graph.addNode(2);
-  node2.position = { x: 1000, y: 0 };
+  const node1 = graph.addNode("src", { position: { x: -1000, y: 0 }});
+  const node2 = graph.addNode("dst", { position: { x: 1000, y: 0 }});
 
-  graph.addEdge(1, 2);
+  graph.addEdge(node1, node2);
 
   const layout = createLayout(graph);
 
@@ -327,8 +326,8 @@ test("layout initializes links", function (t) {
 
   // since both nodes are connected by spring and distance is too large between
   // them, they should start attracting each other
-  const pos1 = layout.getNodePosition("1");
-  const pos2 = layout.getNodePosition("2");
+  const pos1 = layout.getNodePosition(node1);
+  const pos2 = layout.getNodePosition(node2);
 
   t.ok(pos1.x > -1000, "Node 1 moves towards node 2");
   t.ok(pos2.x < 1000, "Node 1 moves towards node 2");
@@ -336,7 +335,7 @@ test("layout initializes links", function (t) {
   t.end();
 });
 
-test("layout respects proposed original position", function (t) {
+t.test("layout respects proposed original position", function (t) {
   const graph = new Graph();
 
   const position = { x: 100, y: 100 };
@@ -352,7 +351,7 @@ test("layout respects proposed original position", function (t) {
   t.end();
 });
 
-test("layout has defined graph rectangle", function (t) {
+t.test("layout has defined graph rectangle", function (t) {
   t.test("empty graph", function (t) {
     const graph = new Graph();
     const layout = createLayout(graph);
@@ -394,7 +393,7 @@ test("layout has defined graph rectangle", function (t) {
   t.end();
 });
 
-test("it does not move pinned nodes", function (t) {
+t.test("it does not move pinned nodes", function (t) {
   t.test("respects original data.isPinned attribute", function (t) {
     const graph = new Graph();
     const testNode = graph.addNode(1, { isPinned: true });
@@ -448,7 +447,7 @@ test("it does not move pinned nodes", function (t) {
   t.end();
 });
 
-test("it listens to graph events", function (t) {
+t.test("it listens to graph events", function (t) {
   // we first initialize with empty graph:
   const graph = new Graph();
   const layout = createLayout(graph);
@@ -471,7 +470,7 @@ test("it listens to graph events", function (t) {
   t.end();
 });
 
-test("can stop listen to events", function (t) {
+t.test("can stop listen to events", function (t) {
   // we first initialize with empty graph:
   const graph = new Graph();
   const layout = createLayout(graph);
@@ -486,7 +485,7 @@ test("can stop listen to events", function (t) {
   t.end();
 });
 
-test("physics simulator", function (t) {
+t.test("physics simulator", function (t) {
   t.test("has default simulator", function (t) {
     const graph = new Graph();
     const layout = createLayout(graph);
@@ -529,7 +528,7 @@ test("physics simulator", function (t) {
   t.end();
 });
 
-test("it removes removed nodes", function (t) {
+t.test("it removes removed nodes", function (t) {
   const graph = new Graph();
   const layout = createLayout(graph);
   graph.addNode(1);
@@ -546,7 +545,7 @@ test("it removes removed nodes", function (t) {
   t.end();
 });
 
-test("it can iterate over bodies", function (t) {
+t.test("it can iterate over bodies", function (t) {
   const graph = new Graph();
   const layout = createLayout(graph);
   graph.addNode(1);
@@ -564,7 +563,7 @@ test("it can iterate over bodies", function (t) {
   t.end();
 });
 
-test("it handles large graphs", function (t) {
+t.test("it handles large graphs", function (t) {
   const graph = new Graph({ multi: true }); // Multigraph in case random edges create parallels
   const layout = createLayout(graph);
 
@@ -588,7 +587,7 @@ test("it handles large graphs", function (t) {
   t.end();
 });
 
-test("it can create high dimensional layout", function (t) {
+t.test("it can create high dimensional layout", function (t) {
   const graph = new Graph();
   graph.addNode(1);
   graph.addNode(2);
@@ -606,7 +605,7 @@ test("it can create high dimensional layout", function (t) {
   t.end();
 });
 
-test("it can layout two graphs independently", function (t) {
+t.test("it can layout two graphs independently", function (t) {
   const graph1 = new Graph();
   const graph2 = new Graph();
   const layout1 = createLayout(graph1);
@@ -627,7 +626,7 @@ test("it can layout two graphs independently", function (t) {
   t.end();
 });
 
-test("getNeighborBodies throws if node is not found", function (t) {
+t.test("getNeighborBodies throws if node is not found", function (t) {
   const graph = new Graph();
   const layout = createLayout(graph, { debug: true });
 
@@ -635,13 +634,13 @@ test("getNeighborBodies throws if node is not found", function (t) {
   t.end();
 });
 
-test("physicsSettings must not be an array", function (t) {
+t.test("physicsSettings must not be an array", function (t) {
   const graph = new Graph();
   t.throws(() => createLayout(graph, []), "Throws if settings is array");
   t.end();
 });
 
-test("isNodeOriginallyPinned", function (t) {
+t.test("isNodeOriginallyPinned", function (t) {
   t.test("returns true if node is pinned", function (t) {
     const graph = new Graph();
     graph.addNode("test", { isPinned: true });
@@ -669,7 +668,7 @@ test("isNodeOriginallyPinned", function (t) {
   t.end();
 });
 
-test("defaultNodeMass", function (t) {
+t.test("defaultNodeMass", function (t) {
   t.test("when no links", function (t) {
     const graph = new Graph();
     graph.addNode("test");

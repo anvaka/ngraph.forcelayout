@@ -1,8 +1,8 @@
-module.exports = createLayout;
-module.exports.simulator = require("./lib/createPhysicsSimulator");
+import createPhysicsSimulator from "./lib/createPhysicsSimulator.js";
+export const simulator = createPhysicsSimulator;
 
-const Spring = require("./lib/spring");
-const eventify = require("ngraph.events");
+import Spring from "./lib/spring.js";
+import eventify from "ngraph.events";
 
 /**
  * Creates force based layout for a given graph.
@@ -12,14 +12,12 @@ const eventify = require("ngraph.events");
  * for physics simulator you can pass your own settings here. If it's not passed
  * a default one will be created.
  */
-function createLayout(graph, physicsSettings) {
+export default function createLayout(graph, physicsSettings) {
   if (!graph) {
     throw new Error("Graph structure cannot be undefined");
   }
 
-  const createSimulator =
-    (physicsSettings && physicsSettings.createSimulator) ||
-    require("./lib/createPhysicsSimulator");
+  const createSimulator = (physicsSettings && physicsSettings.createSimulator) || createPhysicsSimulator;
   let physicsSimulator = createSimulator(physicsSettings);
   if (Array.isArray(physicsSettings))
     throw new Error("Physics settings is expected to be an object");
