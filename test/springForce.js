@@ -1,19 +1,22 @@
 /* eslint-disable no-shadow */
-const test = require('tap').test;
+import t from 'tap';
+import generateCreateSpringForceFunction from '../lib/codeGenerators/generateCreateSpringForce.js';
+import generateCreateBodyFunction from '../lib/codeGenerators/generateCreateBody.js';
+import Spring from '../lib/spring.js';
+import ngraphRandom from 'ngraph.random';
 
 const dimensions = 2;
-const createSpringForce = require('../lib/codeGenerators/generateCreateSpringForce')(dimensions);
-const Body = require('../lib/codeGenerators/generateCreateBody')(dimensions);
-const Spring = require('../lib/spring');
-const random = require('ngraph.random')(42);
+const createSpringForce = generateCreateSpringForceFunction(dimensions);
+const Body = generateCreateBodyFunction(dimensions);
+const random = ngraphRandom(42);
 
-test('Initialized with default value', function (t) {
+t.test('Initialized with default value', function (t) {
   t.throws(() => createSpringForce());
   t.end();
 });
 
 
-test('Should bump bodies at same position', function (t) { 
+t.test('Should bump bodies at same position', function (t) { 
   const body1 = new Body(0, 0);
   const body2 = new Body(0, 0);
   // length between two bodies is 2, while ideal length is 1. Each body
@@ -28,7 +31,7 @@ test('Should bump bodies at same position', function (t) {
   t.end();
 });
 
-test('Check spring force direction', function (t) {
+t.test('Check spring force direction', function (t) {
   const springForce = createSpringForce({springCoefficient: 0.1, springLength: 1});
 
   t.test('Should contract two bodies when ideal length is smaller than actual', function (t) { 
