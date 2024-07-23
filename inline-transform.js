@@ -1,6 +1,6 @@
-const through = require('through2');
+import through from 'through2';
 
-module.exports = function (file) {
+export default function (file) {
     return through(function (buf, enc, next) {
       let originalContent = buf.toString('utf8');
       let dimensions = 2; // change this if you need different number of dimensions
@@ -13,7 +13,7 @@ module.exports = function (file) {
         }).join('\n') : '';
         let exportCodeMatch = originalContent.match(/^\/\/ InlineTransformExport: (.+)$/m);
         let codeExport = exportCodeMatch ?  exportCodeMatch[1] :
-          `module.exports = function() { return ${content(dimensions).toString()} }`;
+          `export default function() { return ${content(dimensions).toString()} }`;
         this.push(`${additionalTransform}\n${codeExport}`);
       } else {
         this.push(originalContent);

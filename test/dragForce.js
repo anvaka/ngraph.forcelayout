@@ -3,8 +3,8 @@ import generateCreateDragForceFunction from '../lib/codeGenerators/generateCreat
 import generateCreateBodyFunction from '../lib/codeGenerators/generateCreateBody.js';
 
 const dimensions = 2;
-const createDragForce = generateCreateBodyFunction(dimensions);
-const Body = generateCreateDragForceFunction(dimensions);
+const Body = generateCreateBodyFunction(dimensions);
+const createDragForce = generateCreateDragForceFunction(dimensions);
 
 t.test('reduces force value', function (t) {
   const body = new Body();

@@ -1,5 +1,5 @@
 import Graph from 'graphology';
-import completeGraph from 'graphology-generators/classic/complete';
+import complete from 'graphology-generators/classic/complete.js';
 import createLayout from '../index.js';
 
 import Benchmark from 'benchmark';
@@ -7,7 +7,7 @@ const suite = new Benchmark.Suite;
 
 // add tests
 suite.add('Run default', function() {
-  const graph = completeGraph(Graph, 100);
+  const graph = complete(Graph, 100);
   const layout = createLayout(graph);
   for (let i = 0; i < 20; ++i) {
     layout.step();

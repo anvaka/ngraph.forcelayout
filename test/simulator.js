@@ -1,7 +1,8 @@
 /* eslint-disable no-shadow */
 import t from 'tap';
 import generateCreateBodyFunction from '../lib/codeGenerators/generateCreateBody.js';
-import {createPhysicsSimulator, augment} from '../lib/createPhysicsSimulator.js';
+import createPhysicsSimulator from '../lib/createPhysicsSimulator.js';
+import {augment} from '../lib/createPhysicsSimulator.js';
 import Spring from '../lib/spring.js';
 
 const dimensions2 = 2;

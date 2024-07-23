@@ -2,9 +2,10 @@
 import t from 'tap';
 import Graph from 'graphology';
 import createLayout from '../index.js';
+import { simulator } from '../index.js';
 
 t.test("it exposes simulator", (t) => {
-  t.ok(typeof createLayout.simulator === "function", "Simulator is exposed");
+  t.ok(typeof simulator === "function", "Simulator is exposed");
   t.end();
 });
 
@@ -313,12 +314,10 @@ t.test("Layout updates bounding box when it sets node position", function (t) {
 
 t.test("layout initializes links", function (t) {
   const graph = new Graph();
-  const node1 = graph.addNode(1);
-  node1.position = { x: -1000, y: 0 };
-  const node2 = graph.addNode(2);
-  node2.position = { x: 1000, y: 0 };
+  const node1 = graph.addNode("src", { position: { x: -1000, y: 0 }});
+  const node2 = graph.addNode("dst", { position: { x: 1000, y: 0 }});
 
-  graph.addEdge(1, 2);
+  graph.addEdge(node1, node2);
 
   const layout = createLayout(graph);
 
@@ -327,8 +326,8 @@ t.test("layout initializes links", function (t) {
 
   // since both nodes are connected by spring and distance is too large between
   // them, they should start attracting each other
-  const pos1 = layout.getNodePosition("1");
-  const pos2 = layout.getNodePosition("2");
+  const pos1 = layout.getNodePosition(node1);
+  const pos2 = layout.getNodePosition(node2);
 
   t.ok(pos1.x > -1000, "Node 1 moves towards node 2");
   t.ok(pos2.x < 1000, "Node 1 moves towards node 2");
