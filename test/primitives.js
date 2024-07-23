@@ -1,12 +1,12 @@
-const test = require('tap').test;
-const {generateCreateBodyFunctionBody} = require('../lib/codeGenerators/generateCreateBody');
+import t from 'tap';
+import {generateCreateBodyFunctionBody} from '../lib/codeGenerators/generateCreateBody.js';
 
 function primitive(dimension) {
   let res = (new Function(generateCreateBodyFunctionBody(dimension)))();
   return res;
 }
 
-test('Body has properties force, pos and mass', function(t) {
+t.test('Body has properties force, pos and mass', function(t) {
   debugger;
   const body = new (primitive(2).Body)();
   t.ok(body.force, 'Force attribute is missing on body');
@@ -16,7 +16,7 @@ test('Body has properties force, pos and mass', function(t) {
   t.end();
 });
 
-test('Vector has x and y', function(t) {
+t.test('Vector has x and y', function(t) {
   const vector = new (primitive(2).Vector)();
   t.ok(typeof vector.x === 'number', 'Vector has x coordinates');
   t.ok(typeof vector.y === 'number', 'Vector has y coordinates');
@@ -31,7 +31,7 @@ test('Vector has x and y', function(t) {
   t.end();
 });
 
-test('Body3d has properties force, pos and mass', function(t) {
+t.test('Body3d has properties force, pos and mass', function(t) {
   const body = new (primitive(3).Body)();
   t.ok(body.force, 'Force attribute is missing on body');
   t.ok(body.pos, 'Pos attribute is missing on body');
@@ -40,7 +40,7 @@ test('Body3d has properties force, pos and mass', function(t) {
   t.end();
 });
 
-test('Vector3d has x and y and z', function(t) {
+t.test('Vector3d has x and y and z', function(t) {
   const vector = new (primitive(3).Vector)();
   t.ok(typeof vector.x === 'number', 'Vector has x coordinates');
   t.ok(typeof vector.y === 'number', 'Vector has y coordinates');
@@ -58,7 +58,7 @@ test('Vector3d has x and y and z', function(t) {
   t.end();
 });
 
-test('reset vector', function(t) {
+t.test('reset vector', function(t) {
   const v3 = new (primitive(3).Vector)(1, 2, 3);
   v3.reset();
   t.equal(v3.x, 0, 'Reset to 0');
@@ -71,7 +71,7 @@ test('reset vector', function(t) {
   t.end();
 });
 
-test('vector can use copy constructor', function(t) {
+t.test('vector can use copy constructor', function(t) {
   const a = new (primitive(3).Vector)(1, 2, 3);
   const b = new (primitive(3).Vector)(a);
   t.equal(b.x, a.x, 'Value copied');
@@ -80,7 +80,7 @@ test('vector can use copy constructor', function(t) {
   t.end();
 });
 
-test('Body3d can set position', function(t) {
+t.test('Body3d can set position', function(t) {
   const body = new (primitive(3).Body)();
   body.setPosition(10, 11, 12);
   t.equal(body.pos.x, 10, 'x is correct');
@@ -90,7 +90,7 @@ test('Body3d can set position', function(t) {
   t.end();
 });
 
-test('Body can set position', function(t) {
+t.test('Body can set position', function(t) {
   const body = new (primitive(2).Body)();
   body.setPosition(10, 11);
   t.equal(body.pos.x, 10, 'x is correct');
