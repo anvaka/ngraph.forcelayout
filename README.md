@@ -1,4 +1,4 @@
-# ngraph.forcelayout 
+# graphology.forcelayout 
 
 [![build status](https://github.com/AddingBurritos/graphology.forcelayout/actions/workflows/tests.yaml/badge.svg)](https://github.com/AddingBurritos/graphology.forcelayout/actions/workflows/tests.yaml)
 
@@ -7,8 +7,8 @@ that works in any dimension (2D, 3D, and above).
 
 The library uses quad tree to speed up computation of long-distance forces.
 
-This repository is part of [ngraph family](https://github.com/anvaka/ngraph), and operates on 
-[`ngraph.graph`](https://github.com/anvaka/ngraph.graph) data structure.
+This repository is inspired by [ngraph family](https://github.com/anvaka/ngraph), and operates on 
+[`graphology`](https://github.com/graphology/graphology) data structure.
 
 # API
 
@@ -16,23 +16,23 @@ All force directed algorithms are iterative. We need to perform multiple iterati
 before graph starts looking good:
 
 ``` js
-// graph is an instance of `ngraph.graph` object.
-var createLayout = require('ngraph.forcelayout');
-var layout = createLayout(graph);
-for (var i = 0; i < ITERATIONS_COUNT; ++i) {
+// graph is an instance of `graphology` object.
+import createLayout from 'graphology.forcelayout';
+const layout = createLayout(graph);
+for (let i = 0; i < ITERATIONS_COUNT; ++i) {
   layout.step();
 }
 
-// now we can ask layout where each node/link is best positioned:
-graph.forEachNode(function(node) {
-  console.log(layout.getNodePosition(node.id));
+// now we can ask layout where each node/edge is best positioned:
+graph.forEachNode(function(nodeId) {
+  console.log(layout.getNodePosition(nodeId));
   // Node position is pair of x,y coordinates:
   // {x: ... , y: ... }
 });
 
-graph.forEachLink(function(link) {
-  console.log(layout.getLinkPosition(link.id));
-  // link position is a pair of two positions:
+graph.forEachEdge(function(edgeId) {
+  console.log(layout.getLinkPosition(edgeId));
+  // edge position is a pair of two positions:
   // {
   //   from: {x: ..., y: ...},
   //   to: {x: ..., y: ...}
@@ -44,17 +44,17 @@ If you'd like to perform graph layout in space with more than two dimensions, ju
 argument to this line:
 
 ``` js
-let layout = createLayout(graph, {dimensions: 3}); // 3D layout
-let nodePosition = layout.getNodePosition(nodeId); // has {x, y, z} attributes
+const layout = createLayout(graph, {dimensions: 3}); // 3D layout
+const nodePosition = layout.getNodePosition(nodeId); // has {x, y, z} attributes
 ```
 
 Even higher dimensions are not a problem for this library:
 
 ``` js
-let layout = createLayout(graph, {dimensions: 6}); // 6D layout
+const layout = createLayout(graph, {dimensions: 6}); // 6D layout
 // Every layout with more than 3 dimensions, say N, gets additional attributes:
 // c4, c5, ... cN
-let nodePosition = layout.getNodePosition(nodeId); // has {x, y, z, c4, c5, c6} 
+const nodePosition = layout.getNodePosition(nodeId); // has {x, y, z, c4, c5, c6} 
 ```
 
 Note: Higher dimensionality comes at exponential cost of memory for every added
@@ -80,7 +80,6 @@ Sometimes it's desirable to tell layout algorithm not to move certain nodes.
 This can be done with `pinNode()` method:
 
 ``` js
-var nodeToPin = graph.getNode(nodeId);
 layout.pinNode(nodeToPin, true); // now layout will not move this node
 ```
 
@@ -89,7 +88,6 @@ method. Here is an example how to toggle node pinning, without knowing it's
 original state:
 
 ``` js
-var node = graph.getNode(nodeId);
 layout.pinNode(node, !layout.isNodePinned(node)); // toggle it
 ```
 
@@ -104,15 +102,17 @@ layout.setNodePosition(nodeId, x, y);
 ## Monitoring changes
 
 Like many other algorithms in `ngraph` family, force layout monitors graph changes
-via [graph events](https://github.com/anvaka/ngraph.graph#listening-to-events).
+via [graphology events](https://graphology.github.io/events.html).
 It keeps layout up to date whenever graph changes:
 
 ``` js
-var graph = require('ngraph.graph')(); // empty graph
-var layout = require('ngraph.layout')(graph); // layout of empty graph
+import Graph from 'graphology';
+import createLayout from 'graphology.forcelayout';
+const graph = new Graph(); // empty graph
+const layout = createLayout(graph); // layout of empty graph
 
-graph.addLink(1, 2); // create node 1 and 2, and make link between them
-layout.getNodePosition(1); // returns position.
+graph.addNode("test"); // create test node
+layout.getNodePosition("test"); // returns position.
 ```
 
 If you want to stop monitoring graph events, call `dispose()` method:
@@ -134,7 +134,7 @@ Body forces are calculated in `n*lg(n)` time with help of Barnes-Hut algorithm i
 
 ``` js
 // Configure
-var physicsSettings = {
+const physicsSettings = {
   timeStep: 0.5,
   dimensions: 2,
   gravity: -12,
@@ -145,7 +145,7 @@ var physicsSettings = {
 };
 
 // pass it as second argument to layout:
-var layout = require('ngraph.forcelayout')(graph, physicsSettings);
+const layout = createLayout(graph, physicsSettings);
 ```
 
 You can get current physics simulator from layout by checking `layout.simulator`
@@ -157,7 +157,7 @@ Finally, it's often desirable to know how much space does our graph occupy. To
 quickly get bounding box use `getGraphRect()` method:
 
 ``` js
-var rect = layout.getGraphRect();
+const rect = layout.getGraphRect();
 // rect.min_x, rect.min_y - left top coordinates of the bounding box
 // rect.max_x, rect.max_y - right bottom coordinates of the bounding box
 ```
@@ -172,11 +172,11 @@ In some cases you really need to manipulate physic attributes on a body level.
 To get to a single body by node id:
 
 ``` js
-var graph = createGraph();
-graph.addLink(1, 2);
+const graph = createGraph();
+graph.addNode("test");
 
 // Get body that represents node 1:
-var body = layout.getBody(1);
+const body = layout.getBody("test");
 assert(
   typeof body.pos.x === 'number' &&
   typeof body.pos.y === 'number', 'Body has position');
@@ -190,7 +190,7 @@ layout.forEachBody(function(body, nodeId) {
   assert(
     typeof body.pos.x === 'number' &&
     typeof body.pos.y === 'number', 'Body has position');
-  assert(graph.getNode(nodeId), 'NodeId is coming from the graph');
+  assert(graph.hasNode(nodeId), 'NodeId is coming from the graph');
 });
 ```
 
@@ -216,25 +216,17 @@ space would reuse generated codes. It is pretty fast and cool.
 With [npm](https://npmjs.org) do:
 
 ```
-npm install ngraph.forcelayout
+npm install graphology.forcelayout
 ```
 
 Or download from CDN:
 
 ``` html
-<script src='https://unpkg.com/ngraph.forcelayout@3.0.0/dist/ngraph.forcelayout.min.js'></script>
+<script src='https://unpkg.com/graphology.forcelayout@0.1.0/dist/graphology.forcelayout.min.js'></script>
 ```
 
-If you download from CDN the library will be available under `ngraphCreateLayout` global name.
+If you download from CDN the library will be available under `graphologyCreateLayout` global name.
 
 # license
 
-MIT
-
-# Feedback?
-
-I'd totally love it! Please email me, open issue here, [tweet](https://twitter.com/anvaka) to me,
-or join discussion [on gitter](https://gitter.im/anvaka/VivaGraphJS).
-
-If you love this library, please consider sponsoring it at https://github.com/sponsors/anvaka or at
-https://www.patreon.com/anvaka
+BSD 3-Clause

@@ -11,11 +11,14 @@ t.test("it exposes simulator", (t) => {
 
 t.test("it adds a node", (t) => {
   const g = new Graph();
-  g.addNode(1);
-  t.ok(1 == g.order, "graph has the number of expected nodes");
-  t.ok("1" == g.nodes()[0], "graph contains all expected nodes");
+  const layout = createLayout(g);
+  g.addNode("test");
+  t.equal(g.order, 1, "graph has the number of expected nodes");
+  t.equal(g.nodes()[0], "test", "graph contains all expected nodes");
+  t.ok(layout.getNodePosition("test"), "node creates body");
   t.end();
 });
+
 
 t.test("it creates a layout from a prepopulated graph", (t) => {
   const g = new Graph();
@@ -71,6 +74,7 @@ t.test("it returns same position", function (t) {
     firstNodePos === layout.getNodePosition("1"),
     "Position is the same object after multiple steps",
   );
+  t.equal(layout.getNodePosition("1"), layout.getNodePosition("1"), "results are the same")
   t.end();
 });
 
