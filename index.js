@@ -198,7 +198,6 @@ export default function createLayout(graph, physicsSettings) {
       releaseLink: releaseLink,
       getNeighborBodies: getNeighborBodies,
       updateBodyMass: updateBodyMass,
-      isNodeOriginallyPinned: isNodeOriginallyPinned,
       getInitializedBody: getInitializedBody,
       defaultNodeMass: defaultNodeMass,
       initLink: initLink,
@@ -289,28 +288,22 @@ export default function createLayout(graph, physicsSettings) {
   }
 
   function initBody(nodeId, nodeAttrs) {
-    // graphology
-    const initBody = nodeBodies.get(nodeId);
-    if (!initBody) {
+    if (!nodeAttrs.body) {
       if (!graph.hasNode(nodeId)) {
         throw new Error("initBody() was called with unknown node id");
       }
-
+      
       let pos = nodeAttrs.position;
       if (!pos) {
-        const neighbors = getNeighborBodies(nodeId);
+        const neighbors = getNeighborNodes(nodeId);
         pos = physicsSimulator.getBestNewBodyPosition(neighbors);
       }
-
-      const simBody = physicsSimulator.addBodyAt(pos);
-      simBody.id = nodeId;
-
-      nodeBodies.set(nodeId, simBody);
-      updateBodyMass(nodeId);
-
-      if (isNodeOriginallyPinned(nodeId)) {
-        simBody.isPinned = true;
+      const body = physicsSimulator.createBodyAt(pos);
+      if (nodeAttrs.isPinned) {
+        body.isPinned = true;
       }
+      graph.setNodeAttribute(nodeId, 'body', body);
+      updateBodyMass(nodeId);
     }
   }
 
@@ -365,21 +358,20 @@ export default function createLayout(graph, physicsSettings) {
     return neighbors.slice(0, maxNeighbors);
   }
 
-  function updateBodyMass(nodeId) {
-    // untouched
-    const body = nodeBodies.get(nodeId);
-    body.mass = nodeMass(nodeId);
+  function getNeighborNodes(nodeId) {
+    if (!graph.hasNode(nodeId)) {
+      throw new Error("getNeighborBodies() was called with unknown node id");
+    }
+    const maxNeighbors = Math.min(neighbors.length, 2); // Not sure why we're capping the neighbors, but that's how the old code worked
+
+    const neighbors = graph.neighbors(nodeId).slice(0, maxNeighbors);
+    return neighbors;
   }
 
-  /**
-   * Checks whether graphology node has isPinned attribute,
-   * which means layout algorithm cannot move it.
-   *
-   * @param {any} node a graphology node to check
-   * @return {Boolean} true if node should be treated as pinned; falsy otherwise.
-   */
-  function isNodeOriginallyPinned(node) {
-    return graph.getNodeAttribute(node, "isPinned");
+  function updateBodyMass(nodeId) {
+    const body = graph.getNodeAttribute(nodeId, 'body');
+    body.mass = nodeMass(nodeId);
+    graph.setNodeAttribute(nodeId, 'body', body);
   }
 
   function getInitializedBody(nodeId) {
