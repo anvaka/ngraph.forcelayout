@@ -52,7 +52,7 @@ export default function createLayout(graph, physicsSettings) {
      * The system is stable if no further call to `step()` can improve the layout.
      */
     step: function () {
-      if (nodeBodies.size === 0) {
+      if (graph.order === 0) {
         updateStableStatus(true);
         return true;
       }
@@ -66,7 +66,7 @@ export default function createLayout(graph, physicsSettings) {
       // Allow listeners to perform low-level actions after nodes are updated.
       api.fire("step");
 
-      const ratio = lastMove / nodeBodies.size;
+      const ratio = lastMove / graph.order;
       const isStableNow = ratio <= 0.01; // TODO: The number is somewhat arbitrary...
       updateStableStatus(isStableNow);
 
@@ -90,6 +90,7 @@ export default function createLayout(graph, physicsSettings) {
     setNodePosition: function (nodeId) {
       const body = getInitializedBody(nodeId);
       body.setPosition.apply(body, Array.prototype.slice.call(arguments, 1));
+      graph.setNodeAttribute(nodeId, 'body', body);
     },
 
     /**
