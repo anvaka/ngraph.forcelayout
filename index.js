@@ -33,8 +33,6 @@ export default function createLayout(graph, physicsSettings) {
   const nodeAddedHandler = ({ key, attributes }) => initBody(key, attributes);
   const edgeAddedHandler = ({ key, source, target, attributes }) =>
     initLink(key, attributes, source, target);
-  const nodeDroppedHandler = ({ key, attributes }) =>
-    releaseNode(key, attributes);
   const edgeDroppedHandler = ({ key, source, target, attributes }) =>
     releaseLink(key, attributes, source, target);
   const nodeAttributesUpdatedHandler = ({ type, key, attributes, name }) =>
@@ -143,7 +141,6 @@ export default function createLayout(graph, physicsSettings) {
     dispose: function () {
       graph.off("nodeAdded", nodeAddedHandler);
       graph.off("edgeAdded", edgeAddedHandler);
-      graph.off("nodeDropped", nodeDroppedHandler);
       graph.off("edgeDropped", edgeDroppedHandler);
       graph.off("nodeAttributesUpdated", nodeAttributesUpdatedHandler);
       graph.off("cleared", handleCleared);
@@ -194,7 +191,6 @@ export default function createLayout(graph, physicsSettings) {
       onStableChanged: onStableChanged,
       initPhysics: initPhysics,
       initBody: initBody,
-      releaseNode: releaseNode,
       releaseLink: releaseLink,
       getNeighborBodies: getNeighborBodies,
       updateBodyMass: updateBodyMass,
@@ -256,7 +252,6 @@ export default function createLayout(graph, physicsSettings) {
     // graphology
     graph.on("nodeAdded", nodeAddedHandler);
     graph.on("edgeAdded", edgeAddedHandler);
-    graph.on("nodeDropped", nodeDroppedHandler);
     graph.on("edgeDropped", edgeDroppedHandler);
     graph.on("nodeAttributesUpdated", nodeAttributesUpdatedHandler);
     graph.on("cleared", handleCleared);
@@ -304,15 +299,6 @@ export default function createLayout(graph, physicsSettings) {
       }
       graph.setNodeAttribute(nodeId, 'body', body);
       updateBodyMass(nodeId);
-    }
-  }
-
-  function releaseNode(nodeId) {
-    // graphology
-    const body = nodeBodies.get(nodeId);
-    if (body) {
-      nodeBodies.delete(nodeId);
-      physicsSimulator.removeBody(body);
     }
   }
 
@@ -375,13 +361,12 @@ export default function createLayout(graph, physicsSettings) {
   }
 
   function getInitializedBody(nodeId) {
-    // untouched
-    let body = nodeBodies.get(nodeId);
+    const body = graph.getNodeAttribute(nodeId, 'body');
     if (!body) {
-      initBody(nodeId);
-      body = nodeBodies.get(nodeId);
+      initBody(nodeId, graph.getNodeAttributes(nodeId));
+      return getInitializedBody(nodeId);
     }
-    return body;
+    return body
   }
 
   /**
