@@ -297,7 +297,7 @@ export default function createLayout(graph, physicsSettings) {
     }
   }
 
-  function initLink(edge, attributes, source, target) {
+  function initLink(edgeId, attributes, source, target) {
     const fromBody = getBody(source);
     const toBody = getBody(target);
     if (!fromBody || !toBody) {
@@ -306,23 +306,16 @@ export default function createLayout(graph, physicsSettings) {
       );
     }
     const spring = new Spring(fromBody, toBody, attributes.length);
-    physicsSimulator.addSpringWithKey(edge, spring);
+    physicsSimulator.addSpring(edgeId, spring);
     updateBodyMass(source);
     updateBodyMass(target);
     return spring;
   }
 
-  function releaseLink(link) {
-    // graphology
-    const spring = physicsSimulator.getSpring(link);
-    if (!spring) {
-      throw new Error("releaseLink() was called with unknown link id");
-    }
-    const source = spring.from;
-    const target = spring.to;
-    physicsSimulator.removeSpring(link);
-    updateBodyMass(source.id);
-    updateBodyMass(target.id);
+  function releaseLink(edgeId, attributes, source, target) {
+    const spring = attributes[physicsSimulator.settings.spring];
+    updateBodyMass(source);
+    updateBodyMass(target);
     return spring;
   }
 
