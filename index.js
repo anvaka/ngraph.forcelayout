@@ -27,8 +27,6 @@ export default function createLayout(graph, physicsSettings) {
     nodeMass = physicsSettings.nodeMass;
   }
 
-  let nodeBodies = new Map();
-
   // Define event handlers
   const nodeAddedHandler = ({ key, attributes }) => initBody(key, attributes);
   const edgeAddedHandler = ({ key, source, target, attributes }) =>
@@ -90,7 +88,7 @@ export default function createLayout(graph, physicsSettings) {
     setNodePosition: function (nodeId) {
       const body = getInitializedBody(nodeId);
       body.setPosition.apply(body, Array.prototype.slice.call(arguments, 1));
-      graph.setNodeAttribute(nodeId, 'body', body);
+      graph.setNodeAttribute(nodeId, physicsSimulator.settings.body, body);
     },
 
     /**
@@ -193,12 +191,11 @@ export default function createLayout(graph, physicsSettings) {
       initPhysics: initPhysics,
       initBody: initBody,
       releaseLink: releaseLink,
-      getNeighborBodies: getNeighborBodies,
+      getNeighborNodes: getNeighborNodes,
       updateBodyMass: updateBodyMass,
       getInitializedBody: getInitializedBody,
       defaultNodeMass: defaultNodeMass,
       initLink: initLink,
-      nodeBodies: nodeBodies,
     };
     Object.assign(api, privateFunctions);
   }
@@ -218,18 +215,16 @@ export default function createLayout(graph, physicsSettings) {
     }
   }
 
-  function forEachBody(cb) {
-    // untouched
-    nodeBodies.forEach(cb);
-  }
-
   function getForceVectorLength() {
     // untouched
     let fx = 0;
     let fy = 0;
-    forEachBody(function (body) {
-      fx += Math.abs(body.force.x);
-      fy += Math.abs(body.force.y);
+    graph.forEachNode((node, attributes) => {
+      const body = attributes[physicsSimulator.settings.body]
+      if (body) {
+        fx += Math.abs(body.force.x);
+        fy += Math.abs(body.force.y);
+      }
     });
     return Math.sqrt(fx * fx + fy * fy);
   }
@@ -241,7 +236,7 @@ export default function createLayout(graph, physicsSettings) {
 
   function getBody(nodeId) {
     // untouched
-    return nodeBodies.get(nodeId);
+    return graph.getNodeAttribute(nodeId, physicsSimulator.settings.body);
   }
 
   function pinNode(nodeId, isPinned) {
@@ -260,15 +255,14 @@ export default function createLayout(graph, physicsSettings) {
 
   function handleNodeUpdates(type, nodeId, attributes, name) {
     if (type == "set") {
-      if (name == "isPinned") {
-        pinNode(nodeId, attributes.isPinned);
+      if (name == physicsSimulator.settings.isPinned) {
+        pinNode(nodeId, attributes[physicsSimulator.settings.isPinned]);
       }
     }
   }
 
   function handleCleared() {
     physicsSimulator = createSimulator(physicsSettings);
-    nodeBodies = new Map();
     initPhysics();
   }
 
@@ -284,31 +278,31 @@ export default function createLayout(graph, physicsSettings) {
   }
 
   function initBody(nodeId, nodeAttrs) {
-    if (!nodeAttrs.body) {
+    if (!nodeAttrs[physicsSimulator.settings.body]) {
       if (!graph.hasNode(nodeId)) {
         throw new Error("initBody() was called with unknown node id");
       }
       
-      let pos = nodeAttrs.position;
+      let pos = nodeAttrs[physicsSimulator.settings.position];
       if (!pos) {
         const neighbors = getNeighborNodes(nodeId);
         pos = physicsSimulator.getBestNewBodyPosition(neighbors);
       }
       const body = physicsSimulator.createBodyAt(pos);
-      if (nodeAttrs.isPinned) {
+      if (nodeAttrs[physicsSimulator.settings.isPinned]) {
         body.isPinned = true;
       }
-      graph.setNodeAttribute(nodeId, 'body', body);
+      graph.setNodeAttribute(nodeId, physicsSimulator.settings.body, body);
       updateBodyMass(nodeId);
     }
   }
 
   function initLink(edge, attributes, source, target) {
-    const fromBody = nodeBodies.get(source);
-    const toBody = nodeBodies.get(target);
+    const fromBody = getBody(source);
+    const toBody = getBody(target);
     if (!fromBody || !toBody) {
       throw new Error(
-        "initLink() was called with unknown source or target node id",
+        "initLink() was called with unknown source or target node body",
       );
     }
     const spring = new Spring(fromBody, toBody, attributes.length);
@@ -332,19 +326,6 @@ export default function createLayout(graph, physicsSettings) {
     return spring;
   }
 
-  function getNeighborBodies(nodeId) {
-    // graphology
-    if (!graph.hasNode(nodeId)) {
-      throw new Error("getNeighborBodies() was called with unknown node id");
-    }
-    const neighbors = graph.mapNeighbors(nodeId, (neighbor) => {
-      return nodeBodies.get(neighbor);
-    });
-    const maxNeighbors = Math.min(neighbors.length, 2); // Not sure why we're capping the neighbors, but that's how the old code worked
-
-    return neighbors.slice(0, maxNeighbors);
-  }
-
   function getNeighborNodes(nodeId) {
     if (!graph.hasNode(nodeId)) {
       throw new Error("getNeighborBodies() was called with unknown node id");
@@ -356,13 +337,13 @@ export default function createLayout(graph, physicsSettings) {
   }
 
   function updateBodyMass(nodeId) {
-    const body = graph.getNodeAttribute(nodeId, 'body');
+    const body = graph.getNodeAttribute(nodeId, physicsSimulator.settings.body);
     body.mass = nodeMass(nodeId);
-    graph.setNodeAttribute(nodeId, 'body', body);
+    graph.setNodeAttribute(nodeId, physicsSimulator.settings.body, body);
   }
 
   function getInitializedBody(nodeId) {
-    const body = graph.getNodeAttribute(nodeId, 'body');
+    const body = graph.getNodeAttribute(nodeId, physicsSimulator.settings.body);
     if (!body) {
       initBody(nodeId, graph.getNodeAttributes(nodeId));
       return getInitializedBody(nodeId);
