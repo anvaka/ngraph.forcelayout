@@ -70,12 +70,11 @@ t.test("it can create a body at given position", function (t) {
 t.test("Does not update position of one body", function (t) {
   const simulator = createPhysicsSimulator();
   const pos = {x: 0, y: 0};
-  simulator.createBodyAt(pos);
+  const body = simulator.createBodyAt(pos);
+  simulator.addBody("test", body);
 
   simulator.step();
-  t.equal(simulator.bodies.length, 1, "Number of bodies is 1");
-  t.equal(simulator.springs.size, 0, "Number of springs is 0");
-  t.equal(simulator.bodies[0], body, "Body points to actual object");
+  t.equal(simulator.getBody("test"), body, "Body points to actual object");
   t.equal(body.pos.x, 0, "X is not changed");
   t.equal(body.pos.y, 0, "Y is not changed");
   t.end();

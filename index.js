@@ -97,7 +97,7 @@ export default function createLayout(graph, physicsSettings) {
      * @returns {Object.to} {x, y} coordinates of link end
      */
     getLinkPosition: function (linkId) {
-      const spring = getSpring(linkId);
+      const spring = physicsSimulator.getSpring(linkId);
       if (spring) {
         return {
           from: spring.from.pos,
@@ -150,13 +150,13 @@ export default function createLayout(graph, physicsSettings) {
      * Gets physical body for a given node id. If node is not found undefined
      * value is returned.
      */
-    getBody: getBody,
+    getBody: physicsSimulator.getBody,
 
     /**
      * Gets spring for a given edge.
      * @param {string} linkId link identifier.
      */
-    getSpring: getSpring,
+    getSpring: physicsSimulator.getSpring,
 
     /**
      * Returns length of cumulative force vector. The closer this to zero - the more stable the system is
@@ -229,16 +229,6 @@ export default function createLayout(graph, physicsSettings) {
     return Math.sqrt(fx * fx + fy * fy);
   }
 
-  function getSpring(linkId) {
-    // graphology
-    return physicsSimulator.getSpring(linkId);
-  }
-
-  function getBody(nodeId) {
-    // untouched
-    return graph.getNodeAttribute(nodeId, physicsSimulator.settings.body);
-  }
-
   function pinNode(nodeId, isPinned) {
     const body = getInitializedBody(nodeId);
     body.isPinned = !!isPinned;
@@ -298,8 +288,8 @@ export default function createLayout(graph, physicsSettings) {
   }
 
   function initLink(edgeId, attributes, source, target) {
-    const fromBody = getBody(source);
-    const toBody = getBody(target);
+    const fromBody = physicsSimulator.getBody(source);
+    const toBody = physicsSimulator.getBody(target);
     if (!fromBody || !toBody) {
       throw new Error(
         "initLink() was called with unknown source or target node body",
