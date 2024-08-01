@@ -52,7 +52,7 @@ t.test("it gives amount of total movement", function (t) {
   t.end();
 });
 
-t.test("it can add a body at given position", function (t) {
+t.test("it can create a body at given position", function (t) {
   const simulator = createPhysicsSimulator();
   const pos1 = { x: -10, y: 0 };
   const pos2 = { x: 10, y: 1 };
@@ -69,10 +69,10 @@ t.test("it can add a body at given position", function (t) {
 
 t.test("Does not update position of one body", function (t) {
   const simulator = createPhysicsSimulator();
-  const body = new Body2(0, 0);
-  simulator.addBody(body);
+  const pos = {x: 0, y: 0};
+  simulator.createBodyAt(pos);
 
-  simulator.step(1);
+  simulator.step();
   t.equal(simulator.bodies.length, 1, "Number of bodies is 1");
   t.equal(simulator.springs.size, 0, "Number of springs is 0");
   t.equal(simulator.bodies[0], body, "Body points to actual object");
