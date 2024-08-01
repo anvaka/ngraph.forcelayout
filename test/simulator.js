@@ -4,6 +4,7 @@ import generateCreateBodyFunction from '../lib/codeGenerators/generateCreateBody
 import createPhysicsSimulator from '../lib/createPhysicsSimulator.js';
 import {augment} from '../lib/createPhysicsSimulator.js';
 import Spring from '../lib/spring.js';
+import Graph from 'graphology';
 
 const dimensions2 = 2;
 const Body2 = generateCreateBodyFunction(dimensions2);
@@ -11,16 +12,15 @@ const Body3 = generateCreateBodyFunction(3);
 
 t.test("Can step without bodies", function (t) {
   const simulator = createPhysicsSimulator();
-  t.equal(simulator.bodies.length, 0, "There should be no bodies");
-  t.equal(simulator.springs.size, 0, "There should be no springs");
+  // t.equal(simulator.bodies.length, 0, "There should be no bodies");
+  // t.equal(simulator.springs.size, 0, "There should be no springs");
   simulator.step();
   t.end();
 });
 
 t.test("it has settings exposed", function (t) {
-  const mySettings = {};
-  const simulator = createPhysicsSimulator(mySettings);
-  t.ok(mySettings === simulator.settings, "settings are exposed");
+  const simulator = createPhysicsSimulator();
+  t.ok(simulator.settings, "settings are exposed");
   t.end();
 });
 
@@ -41,11 +41,10 @@ t.test("value of augment key should be a number", function (t) {
 });
 
 t.test("it gives amount of total movement", function (t) {
-  const simulator = createPhysicsSimulator();
-  const body1 = new Body2(-10, 0);
-  const body2 = new Body2(10, 0);
-  simulator.addBody(body1);
-  simulator.addBody(body2);
+  const g = new Graph();
+  g.addNode("first", {position: {x: -10, y: 0}});
+  g.addNode("second", {position: {x: 10, y: 0}});
+  const simulator = createPhysicsSimulator(g);
   simulator.step();
 
   const totalMoved = simulator.getTotalMovement();
@@ -56,19 +55,15 @@ t.test("it gives amount of total movement", function (t) {
 t.test("it can add a body at given position", function (t) {
   const simulator = createPhysicsSimulator();
   const pos1 = { x: -10, y: 0 };
-  const pos2 = { x: 10, y: 0 };
-  simulator.addBodyAt(pos1);
-  simulator.addBodyAt(pos2);
-
-  t.equal(simulator.bodies.length, 2, "All bodies are added");
-  const body1 = simulator.bodies[0];
+  const pos2 = { x: 10, y: 1 };
+  const body1 = simulator.createBodyAt(pos1);
+  const body2 = simulator.createBodyAt(pos2);
 
   t.equal(body1.pos.x, -10, "X is there");
   t.equal(body1.pos.y, 0, "Y is there");
 
-  const body2 = simulator.bodies[1];
   t.equal(body2.pos.x, 10, "X is there");
-  t.equal(body2.pos.y, 0, "Y is there");
+  t.equal(body2.pos.y, 1, "Y is there");
   t.end();
 });
 

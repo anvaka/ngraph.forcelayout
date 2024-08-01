@@ -22,28 +22,30 @@ t.test("it adds a node", (t) => {
 
 t.test("it creates a layout from a prepopulated graph", (t) => {
   const g = new Graph();
-  g.addNode(1);
-  g.addNode(2);
-  const edge = g.addEdgeWithKey("1->2", 1, 2);
+  g.addNode("src");
+  g.addNode("dst");
+  const edge = g.addEdgeWithKey("src->dst", "src", "dst");
   const layout = createLayout(g, { dimensions: 3 });
 
-  t.ok(1 == g.size, "graph has one node");
-  t.ok("1->2" == edge, "edge key is constant");
+  t.equal(g.size, 1, "graph has one edge");
+  t.equal(g.order, 2, "graph has two nodes");
+  t.equal(edge, "src->dst", "edge key is constant");
   t.ok(layout, "Layout exists.");
   t.end();
 });
 
-t.test("it returns spring", (t) => {
+t.test("getSpring returns spring", (t) => {
   const g = new Graph();
   const layout = createLayout(g);
 
-  g.addNode(1);
-  g.addNode(2);
-  const link = g.addEdge(1, 2);
+  g.addNode("src");
+  g.addNode("dst");
+  const edge = g.addEdgeWithKey("src->dst", "src", "dst");
 
-  const springForLink = layout.getSpring(link);
+  const springForLink = layout.getSpring(edge);
 
   t.ok(springForLink, "spring is here");
+  t.equal(springForLink, layout.simulator.getSpring(edge));
   t.end();
 });
 

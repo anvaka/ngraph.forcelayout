@@ -292,7 +292,7 @@ export default function createLayout(graph, physicsSettings) {
       if (nodeAttrs[physicsSimulator.settings.isPinned]) {
         body.isPinned = true;
       }
-      graph.setNodeAttribute(nodeId, physicsSimulator.settings.body, body);
+      physicsSimulator.addBody(nodeId, body);
       updateBodyMass(nodeId);
     }
   }
