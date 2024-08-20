@@ -335,14 +335,13 @@ function createLayout(graph, physicsSettings) {
     if (!node.links) {
       return neighbors;
     }
-    var maxNeighbors = Math.min(node.links.length, 2);
-    for (var i = 0; i < maxNeighbors; ++i) {
-      var link = node.links[i];
+    // TODO: Previously I was looking only at two links. Should I look at all of them?
+    node.links.forEach(function(link) {
       var otherBody = link.fromId !== node.id ? nodeBodies.get(link.fromId) : nodeBodies.get(link.toId);
       if (otherBody && otherBody.pos) {
         neighbors.push(otherBody);
       }
-    }
+    });
 
     return neighbors;
   }

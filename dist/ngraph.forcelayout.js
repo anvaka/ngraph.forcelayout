@@ -1,4 +1,4 @@
-(function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.ngraphCreateLayout = f()}})(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+(function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.ngraphCreateLayout = f()}})(function(){var define,module,exports;return (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){
 module.exports = createLayout;
 module.exports.simulator = require('./lib/createPhysicsSimulator');
 
@@ -21,8 +21,7 @@ function createLayout(graph, physicsSettings) {
   var physicsSimulator = createSimulator(physicsSettings);
   if (Array.isArray(physicsSettings)) throw new Error('Physics settings is expected to be an object');
 
-  // Starting from v20 of ngraph we use `Set` instead of `Array` for `node.links`
-  var nodeMass = if (graph.version !== undefined && graph.version >= 20) ? defaultNodeMassWithSet : defaultNodeMass;
+  var nodeMass = graph.version > 19 ? defaultSetNodeMass : defaultArrayNodeMass;
   if (physicsSettings && typeof physicsSettings.nodeMass === 'function') {
     nodeMass = physicsSettings.nodeMass;
   }
@@ -151,7 +150,7 @@ function createLayout(graph, physicsSettings) {
     /**
      * Gets spring for a given edge.
      *
-     * @param {string} linkId link identifer. If two arguments are passed then
+     * @param {string} linkId link identifier. If two arguments are passed then
      * this argument is treated as formNodeId
      * @param {string=} toId when defined this parameter denotes head of the link
      * and first argument is treated as tail of the link (fromId)
@@ -337,14 +336,14 @@ function createLayout(graph, physicsSettings) {
     if (!node.links) {
       return neighbors;
     }
-    var maxNeighbors = Math.min(node.links.length, 2);
-    for (var i = 0; i < maxNeighbors; ++i) {
-      var link = node.links[i];
+    // var linksSize = node.links.size || node.links.length;
+    // var maxNeighbors = Math.min(linksSize, 2);
+    node.links.forEach(function(link) {
       var otherBody = link.fromId !== node.id ? nodeBodies.get(link.fromId) : nodeBodies.get(link.toId);
       if (otherBody && otherBody.pos) {
         neighbors.push(otherBody);
       }
-    }
+    });
 
     return neighbors;
   }
@@ -384,13 +383,14 @@ function createLayout(graph, physicsSettings) {
    * @param {String|Number} nodeId identifier of a node, for which body mass needs to be calculated
    * @returns {Number} recommended mass of the body;
    */
-  function defaultNodeMass(nodeId) {
+  function defaultArrayNodeMass(nodeId) {
+    // This function is for older versions of ngraph.graph.
     var links = graph.getLinks(nodeId);
     if (!links) return 1;
     return 1 + links.length / 3.0;
   }
 
-  function defaultNodeMassWithSet(nodeId) {
+  function defaultSetNodeMass(nodeId) {
     var links = graph.getLinks(nodeId);
     if (!links) return 1;
     return 1 + links.size / 3.0;
@@ -1745,10 +1745,14 @@ Generator.prototype.next = next;
 Generator.prototype.nextDouble = nextDouble;
 
 /**
- * Returns a random real number uniformly in [0, 1)
+ * Returns a random real number from uniform distribution in [0, 1)
  */
 Generator.prototype.uniform = nextDouble;
 
+/**
+ * Returns a random real number from a Gaussian distribution
+ * with 0 as a mean, and 1 as standard deviation u ~ N(0,1)
+ */
 Generator.prototype.gaussian = gaussian;
 
 function gaussian() {
@@ -1762,6 +1766,26 @@ function gaussian() {
   } while (r >= 1 || r === 0);
 
   return x * Math.sqrt(-2 * Math.log(r)/r);
+}
+
+/**
+ * See https://twitter.com/anvaka/status/1296182534150135808
+ */
+Generator.prototype.levy = levy;
+
+function levy() {
+  var beta = 3 / 2;
+  var sigma = Math.pow(
+      gamma( 1 + beta ) * Math.sin(Math.PI * beta / 2) / 
+        (gamma((1 + beta) / 2) * beta * Math.pow(2, (beta - 1) / 2)),
+      1/beta
+  );
+  return this.gaussian() * sigma / Math.pow(Math.abs(this.gaussian()), 1/beta);
+}
+
+// gamma function approximation
+function gamma(z) {
+  return Math.sqrt(2 * Math.PI / z) * Math.pow((1 / Math.E) * (z + 1 / (12 * z - 1 / (10 * z))), z);
 }
 
 function nextDouble() {
