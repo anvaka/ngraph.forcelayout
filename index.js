@@ -385,13 +385,13 @@ function createLayout(graph, physicsSettings) {
     // This function is for older versions of ngraph.graph.
     var links = graph.getLinks(nodeId);
     if (!links) return 1;
-    return 1 + links.length / 3.0;
+    return 1 + (links.length || links.size) / 3.0;
   }
 
   function defaultSetNodeMass(nodeId) {
     var links = graph.getLinks(nodeId);
     if (!links) return 1;
-    return 1 + links.size / 3.0;
+    return 1 + (links.length || links.size) / 3.0;
   }
 }
 
