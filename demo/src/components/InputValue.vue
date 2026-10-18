@@ -20,15 +20,16 @@
 </div>
 </template>
 <script>
-import HelpIcon from './HelpIcon';
+import HelpIcon from './HelpIcon.vue';
 
 export default {
   components: {
     HelpIcon
   },
+  emits: ['update:modelValue'],
   props: {
     label: String,
-    value: Number, 
+    modelValue: Number,
     step: {
       default: '0.1',
       type: String
@@ -42,12 +43,12 @@ export default {
   data() {
     return {
       helpVisible: false,
-      inputValue: this.value
+      inputValue: this.modelValue
     }
   },
   watch: {
     inputValue(newValue) {
-      this.$emit('input', parseFloat(newValue));
+      this.$emit('update:modelValue', parseFloat(newValue));
     }
   }
 }

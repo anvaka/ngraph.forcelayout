@@ -8,6 +8,7 @@
 
 <script>
 export default {
+  emits: ['show'],
   methods: {
     show() { this.$emit('show');}
   }

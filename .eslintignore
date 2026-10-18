@@ -1,2 +1,3 @@
 dist
-demo/dist
+# demo/ has its own ESLint setup (cd demo && npm run lint)
+demo/

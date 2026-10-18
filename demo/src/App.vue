@@ -1,5 +1,5 @@
 <template>
-  <div id="app">
+  <div>
     <h2><a href='https://github.com/anvaka/ngraph.forcelayout'>ngraph.forcelayout</a> demo
       <small class='toggle-settings'><a href='#' @click.prevent='settingsOpen = !settingsOpen'>{{settingsOpen ? 'hide settings' : 'show settings'}}</a></small>
     </h2>
@@ -58,8 +58,8 @@ import getAvailableGraphs from './lib/getAvailableGraphs';
 import loadGraph from './lib/loadGraph';
 import bus from './lib/bus';
 import queryState from 'query-state';
-import InputValue from './components/InputValue';
-import InputFlag from './components/InputFlag';
+import InputValue from './components/InputValue.vue';
+import InputFlag from './components/InputFlag.vue';
 
 let appState = queryState({
   graph: 'Miserables',
@@ -141,7 +141,7 @@ export default {
     bus.on('load-graph', this.onGraphLoaded);
   },
 
-  beforeDestroy() {
+  beforeUnmount() {
     if (this.scene) {
       this.scene.dispose();
     }
