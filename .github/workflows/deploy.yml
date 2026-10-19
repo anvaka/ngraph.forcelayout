@@ -1,0 +1,47 @@
+name: Deploy demo to GitHub Pages
+
+# Production deploy. On every push to main, test the library, build the demo (which bundles
+# the library from this same commit) and publish demo/dist to the ROOT of the gh-pages branch,
+# which GitHub Pages serves. Per-PR previews live under pr-preview/ in the same branch (see
+# preview.yml): clean-exclude keeps this deploy from wiping them, and force: false adds a
+# commit instead of rewriting history, so the two workflows don't clobber each other.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gh-pages-deploy
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Keep in sync with preview.yml. The demo's Vite needs Node 20.19 or newer.
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            demo/package-lock.json
+      - run: npm ci
+      # A failure here means demo/dist is never published, so the site keeps the last good build.
+      - run: npm test
+      - run: npm ci
+        working-directory: demo
+      - run: npm run build
+        working-directory: demo
+      - name: Publish to gh-pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: demo/dist
+          branch: gh-pages
+          clean: true
+          clean-exclude: pr-preview/
+          force: false
