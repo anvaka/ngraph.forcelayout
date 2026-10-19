@@ -7,7 +7,9 @@ import createForceLayout from './createForceLayout';
 import findLargestComponent from './findLargestComponent';
 import createGraph from 'ngraph.graph';
 
-export default function createGraphScene(canvas, layoutSettings = {}) {
+const layoutProps = ['timeStep', 'springLength', 'springCoefficient', 'dimensions', 'dragCoefficient', 'gravity', 'theta', 'maxVelocity', 'integrator', 'nbody'];
+
+export default function createGraphScene(canvas, layoutSettings = {}, sceneSettings = {}) {
   let drawLinks = true;
 
   // Since graph can be loaded dynamically, we have these uninitialized
@@ -18,6 +20,8 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
   let fixedViewBox = false;
   let isRunning = false;
   let rafHandle;
+  let stepsPerFrame = sceneSettings.stepsPerFrame || 1;
+  let stats = createStats();
 
   bus.on('load-graph', loadGraph);
 
@@ -26,6 +30,9 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
     runLayout,
     updateLayoutSettings,
     setFixedViewBox,
+    setStepsPerFrame,
+    restart,
+    getStats,
   };
 
   function loadGraph(newGraph, desiredLayout) {
@@ -47,23 +54,50 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
     guide = createGuide(scene, {showGrid: true, lineColor: 0xffffff10, maxAlpha: 0x10, showCursor: false});
     // this is a standard force layout
     layout = createForceLayout(graph, layoutSettings);
+    stats.reset();
 
-    //standardizePositions(layout)
-    let minX = -42, minY = -42;
-    let maxX = 42, maxY =42 
-
-    setSceneSize(Math.max(maxX - minX, maxY - minY) * 1.2);
+    fitView();
     initUIElements();
 
     rafHandle = requestAnimationFrame(frame);
   }
 
-  function setSceneSize(sceneSize) {
+  function restart() {
+    // Fresh layout keeps the settings, but forgets positions and velocities.
+    layout.dispose();
+    layout = createForceLayout(graph, layoutSettings);
+    stats.reset();
+    fitView();
+  }
+
+  function setStepsPerFrame(newStepsPerFrame) {
+    stepsPerFrame = Math.max(1, Math.round(newStepsPerFrame) || 1);
+  }
+
+  function getStats() {
+    return {
+      nodes: graph ? graph.getNodesCount() : 0,
+      links: graph ? graph.getLinksCount() : 0,
+      steps: stats.steps,
+      msPerStep: stats.msPerStep()
+    };
+  }
+
+  function fitView() {
+    let rect = layout.getGraphRect();
+    let cx = (rect.min_x + rect.max_x) / 2;
+    let cy = (rect.min_y + rect.max_y) / 2;
+    let half = Math.max(rect.max_x - rect.min_x, rect.max_y - rect.min_y) * 0.6;
+    if (!Number.isFinite(half) || half < 100.8) {
+      // Small graphs: keep the scene size we always had
+      cx = cy = 0;
+      half = 100.8;
+    }
     scene.setViewBox({
-      left:  -sceneSize,
-      top:   -sceneSize,
-      right:  sceneSize,
-      bottom: sceneSize,
+      left:  cx - half,
+      top:   cy - half,
+      right:  cx + half,
+      bottom: cy + half,
     });
   }
 
@@ -72,7 +106,7 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
   }
 
   function updateLayoutSettings(newLayoutSettings) {
-    let props = ['timeStep', 'springLength', 'springCoefficient', 'dimensions', 'dragCoefficient', 'gravity', 'theta']
+    let props = layoutProps;
     let previousDimensions = (layoutSettings && layoutSettings.dimensions) || 2;
     layoutSettings = props.reduce((settings, name) => (settings[name] = newLayoutSettings[name], settings), {});
     if (!layout) return;
@@ -146,7 +180,9 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
     rafHandle = requestAnimationFrame(frame);
 
     if (isRunning) {
-      layout.step();
+      let start = performance.now();
+      for (let i = 0; i < stepsPerFrame; ++i) layout.step();
+      stats.record(performance.now() - start, stepsPerFrame);
       if (fixedViewBox) {
         let rect = layout.getGraphRect();
         scene.setViewBox({
@@ -233,6 +269,28 @@ export default function createGraphScene(canvas, layoutSettings = {}) {
     scene.dispose();
     bus.off('load-graph', loadGraph);
   }
+}
+
+// Average time per layout step over the last frames.
+function createStats() {
+  let samples = [];
+  let api = {
+    steps: 0,
+    record(ms, steps) {
+      api.steps += steps;
+      samples.push(ms / steps);
+      if (samples.length > 30) samples.shift();
+    },
+    reset() {
+      api.steps = 0;
+      samples = [];
+    },
+    msPerStep() {
+      if (samples.length === 0) return 0;
+      return samples.reduce((a, b) => a + b, 0) / samples.length;
+    }
+  };
+  return api;
 }
 
 function standardizePositions(layout) {

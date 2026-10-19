@@ -2,6 +2,12 @@ export default function getAvailableGraphs() {
   return [
     'Miserables',
     'Binary',
+    // Bigger generated graphs, to see the speed-ups:
+    'Grid 100x100 (10k)',
+    'Binary tree (8k)',
+    'Watts-Strogatz (10k)',
+    'Barabasi-Albert (20k)',
+    'Barabasi-Albert (100k)',
 'HB/blckhole',
 'Bai/rw5151',
 'HB/bcsstm13',

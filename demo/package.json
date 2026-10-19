@@ -14,7 +14,6 @@
     "d3-color": "^2.0.0",
     "miserables": "^2.0.0",
     "ngraph.events": "^1.0.0",
-    "ngraph.forcelayout": "^3.2.0",
     "ngraph.fromdot": "^6.0.0",
     "ngraph.fromjson": "^3.0.0",
     "ngraph.generators": "^20.0.0",

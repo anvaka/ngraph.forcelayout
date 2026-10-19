@@ -20,6 +20,16 @@ to load new graphs.
 npm run build
 ```
 
+### Deploy
+
+The demo always bundles the library from the same commit (see `vite.config.js`).
+
+* Every push to `main` publishes it to https://anvaka.github.io/ngraph.forcelayout/
+  (`.github/workflows/deploy.yml`).
+* Every pull request gets a preview at
+  `https://anvaka.github.io/ngraph.forcelayout/pr-preview/pr-<number>/`, linked in a PR comment
+  and removed when the PR closes (`.github/workflows/preview.yml`).
+
 ## What's inside?
 
 * [ngraph.graph](https://github.com/anvaka/ngraph.graph) as a graph data structure
