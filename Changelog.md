@@ -1,3 +1,19 @@
+# Unreleased
+
+* `maxVelocity` - replaces the hard coded speed limit of 1. **The default is 4**, so layouts
+  settle in fewer steps, and default layouts are different from previous versions. Pass
+  `maxVelocity: 1` to get the old layouts.
+
+New opt-in settings to make layouts faster:
+
+* `integrator: 'fire'` - Fast Inertial Relaxation Engine integrator.
+* `nbody: 'dualtree'` - dual tree traversal for repulsion forces. Works in any dimension.
+
+Fixes:
+
+* Adaptive time step of one body no longer leaks into the next bodies.
+* Quad tree bounds are correct when all bodies have negative coordinates.
+
 # v3.0 
 
 The following physics settings are renamed: 

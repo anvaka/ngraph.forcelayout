@@ -101,6 +101,27 @@ declare module "ngraph.forcelayout" {
     adaptiveTimeStepWeight: number;
 
     /**
+     * Maximum speed of a body. Each step moves a body by at most `timeStep * maxVelocity`.
+     * Default is 4 (before v3.4 the limit was fixed at 1).
+     */
+    maxVelocity: number;
+
+    /**
+     * How velocities and positions are updated from forces. `'euler'` (default) is
+     * classic integration slowed down by drag. `'fire'` (Fast Inertial Relaxation
+     * Engine) ignores `dragCoefficient`, keeps momentum while the system moves "downhill"
+     * and stops it when it overshoots.
+     */
+    integrator: 'euler' | 'fire';
+
+    /**
+     * How repulsion between bodies is computed. `'quadtree'` (default) is Barnes-Hut,
+     * where each body walks the tree. `'dualtree'` lets pairs of tree cells interact,
+     * which is several times faster on large graphs with about the same accuracy.
+     */
+    nbody: 'quadtree' | 'dualtree';
+
+    /**
      * This parameter defines number of dimensions of the space where simulation
      * is performed.
      */

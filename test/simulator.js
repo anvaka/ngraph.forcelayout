@@ -94,7 +94,8 @@ test('Can add and remove forces', function (t) {
 
 test('Can configure forces', function (t) {
   t.test('Gravity', function (t) {
-    var simulator = createSimulator();
+    // A low speed limit lets the bodies turn around within one step
+    var simulator = createSimulator({maxVelocity: 1});
     var body1 = new Body(0, 0);
     var body2 = new Body(1, 0);
 
@@ -332,5 +333,25 @@ test('it throws on dragCoeff', function (t) {
   t.throws(function () {
     createSimulator({dragCoeff: 1});
   }, 'dragCoeff was renamed to dragCoefficient');
+  t.end();
+});
+test('it validates integrator and nbody settings', function (t) {
+  t.throws(function () { createSimulator({ integrator: 'verlet' }); }, 'Unknown integrator throws');
+  t.throws(function () { createSimulator({ nbody: 'octree' }); }, 'Unknown nbody throws');
+  t.end();
+});
+
+test('FIRE integrator ignores drag', function (t) {
+  var euler = createSimulator({ dragCoefficient: 0.9 });
+  var fire = createSimulator({ dragCoefficient: 0.9, integrator: 'fire' });
+  [euler, fire].forEach(function (simulator) {
+    simulator.addBody(new Body(-10, 0)).velocity.x = 0.5;
+    simulator.addBody(new Body(10, 0)).velocity.x = -0.5;
+    simulator.step();
+  });
+  // Bodies move towards each other, while repulsion pushes them apart (uphill), so
+  // FIRE drops their velocity; Euler keeps it, slowed by drag.
+  t.ok(fire.bodies[0].velocity.x < 0, 'FIRE body follows repulsion right away');
+  t.ok(euler.bodies[0].velocity.x > 0, 'Euler body still moves towards the other');
   t.end();
 });

@@ -76,3 +76,14 @@ test('it does not stuck', function(t) {
   t.ok(1);
   t.end();
 });
+
+test('Tree bounds fit bodies with negative coordinates', function (t) {
+  var tree = createQuadTree({}, random);
+  var bodyA = new Body(); bodyA.pos.x = -20; bodyA.pos.y = -20;
+  var bodyB = new Body(); bodyB.pos.x = -10; bodyB.pos.y = -10;
+
+  tree.insertBodies([bodyA, bodyB]);
+  var root = tree.getRoot();
+  t.equal(root.max_x - root.min_x, 10, 'Root is as wide as the bodies');
+  t.end();
+});

@@ -142,11 +142,38 @@ var physicsSettings = {
   springLength: 10,
   springCoefficient: 0.8,
   dragCoefficient: 0.9,
+  maxVelocity: 4,
+  integrator: 'euler',
+  nbody: 'quadtree',
 };
 
 // pass it as second argument to layout:
 var layout = require('ngraph.forcelayout')(graph, physicsSettings);
 ```
+
+### Faster layouts
+
+Each step moves a body by at most `timeStep * maxVelocity`. The default `maxVelocity`
+is 4 since v3.4 (it was fixed at 1 before), which lets layouts settle in fewer steps.
+Pass `maxVelocity: 1` to get exactly the same layouts as in previous versions.
+
+Two more settings make large graphs converge several times faster. They are off by default:
+
+``` js
+var layout = require('ngraph.forcelayout')(graph, {
+  // FIRE integrator: keeps momentum while the layout improves, and stops the
+  // system when it overshoots. Ignores `dragCoefficient`.
+  integrator: 'fire',
+  // Dual tree traversal: pairs of tree cells interact with each other, instead
+  // of every body walking the tree. 5-10x faster repulsion on large graphs, with
+  // about the same accuracy for the same `theta`.
+  nbody: 'dualtree',
+});
+```
+
+On graphs with several separate pieces, the pieces drift apart faster with these settings.
+
+All three settings can also be changed while the layout runs, e.g. `layout.simulator.nbody('dualtree')`.
 
 You can get current physics simulator from layout by checking `layout.simulator`
 property. This is a read only property. 

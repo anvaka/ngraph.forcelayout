@@ -66,3 +66,23 @@ test('Can get total system movement', function (t) {
   t.ok(0.04 <= movement && movement <= 0.041, 'System should travel by 0.2 pixels');
   t.end();
 });
+
+test('Body does not move faster than maxVelocity', function (t) {
+  var body = new Body();
+  body.mass = 1; body.force.x = 10;
+
+  integrate([body], 1, 0, 4);
+  t.equal(body.velocity.x, 4, 'Velocity is clamped to maxVelocity');
+  t.end();
+});
+
+test('Adaptive time step of one body does not leak into another', function (t) {
+  var withSprings = new Body();
+  withSprings.springCount = 1; withSprings.springLength = 100;
+  var withoutSprings = new Body();
+  withoutSprings.velocity.x = 0.5;
+
+  integrate([withSprings, withoutSprings], 1, 0.1);
+  t.equal(withoutSprings.pos.x, 0.5, 'Body without springs uses the global time step');
+  t.end();
+});
