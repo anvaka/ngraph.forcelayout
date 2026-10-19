@@ -98,8 +98,8 @@
     </div>
       <div v-if='!loading' class='layout-box'>
         <div class='buttons'>
-          <a href="#" @click.prevent='toggleLayoutRun' class='btn'>{{isRunning ? 'Stop layout' : 'Start layout'}}</a>
-          <a href="#" @click.prevent='restart' class='btn restart' title='Start over from initial positions'>Restart</a>
+          <a href="#" @click.prevent='toggleLayoutRun' class='btn'>{{isRunning ? 'Pause' : 'Run'}}</a>
+          <a href="#" @click.prevent='restart' class='btn restart' title='Start over from initial positions'>Reset</a>
         </div>
         <div class='stats' v-if='stats'>
           {{stats.nodes.toLocaleString()}} nodes, {{stats.links.toLocaleString()}} links<span v-if='stats.placement'>, {{stats.placement}} start</span><br>
@@ -207,7 +207,7 @@ export default {
       });
     },
     onGraphLoaded() {
-      this.isRunning = false;
+      this.isRunning = true;
     }
   },
   watch: {
@@ -257,7 +257,7 @@ export default {
   data() {
     let graphs = getAvailableGraphs();
     return {
-      isRunning: false,
+      isRunning: true,
       fixedViewBox: false,
       selectedGraph: appState.get('graph'),
       settingsOpen: window.innerWidth > 500,
