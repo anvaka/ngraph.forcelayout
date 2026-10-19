@@ -23,7 +23,8 @@
       <input-value label='Spring coefficient' v-model='layoutSettings.springCoefficient'>
         Higher values makes the spring force stronger, pushing edges closer to the ideal spring length.
       </input-value>
-      <input-value label='Drag coefficient' v-model='layoutSettings.dragCoefficient'>
+      <input-value label='Drag coefficient' v-model='layoutSettings.dragCoefficient'
+        :disabled='usesFire' :note="usesFire ? 'Not used by the fire integrator.' : ''">
         This coefficient introduces "resistance" from environment. When it is close to 0 the forces
         will have a lot of freedom, nothing will be stopping them, and that can result in a very
         unstable simulation.
@@ -40,6 +41,33 @@
       of dimensions.
       </input-value>
 
+      <div class='section'>
+        Speed-ups
+        <small>
+          <a href='#' @click.prevent='useSpeedups(true)'>turn all on</a> |
+          <a href='#' @click.prevent='useSpeedups(false)'>library defaults</a>
+        </small>
+      </div>
+      <input-value label='Max velocity' v-model='layoutSettings.maxVelocity'>
+        Maximum distance a node can travel in one unit of time (each step moves a node by at most
+        time step * max velocity). Library default is 4. Set it to 1 to get the layouts of versions
+        before v3.4, which settle more slowly.
+      </input-value>
+      <input-select label='Integrator' v-model='layoutSettings.integrator' :options='integratorOptions'>
+        How forces move nodes. <b>euler</b> is the classic integration slowed down by drag.
+        <b>fire</b> (Fast Inertial Relaxation Engine) ignores drag: the whole system keeps its momentum
+        while it moves "downhill", and stops dead when it overshoots. Usually reaches a good layout in
+        fewer steps, especially on trees and grids.
+      </input-select>
+      <input-select label='Repulsion' v-model='layoutSettings.nbody' :options='nbodyOptions'>
+        How node repulsion is computed. <b>quad tree</b> is Barnes-Hut: each node walks the tree.
+        <b>dual tree</b> lets pairs of tree cells interact with each other, which is 5-10x faster on large
+        graphs with the same accuracy. Both use theta.
+      </input-select>
+      <input-value label='Steps per frame' v-model='stepsPerFrame' step=1>
+        How many layout steps to run before each frame is rendered. Fast layouts can do many steps per frame.
+      </input-value>
+
       <input-flag label='Follow bounding box' v-model='fixedViewBox' step=1>
       Setting this to true will disable pan/zoom but will always keep the graph visible. This is not
       part of the layout algorithm. Just a view setting of the renderer.
@@ -47,7 +75,14 @@
       <div v-if='loading'>Loading graph...</div>
     </div>
       <div v-if='!loading' class='layout-box'>
-        <a href="#" @click.prevent='toggleLayoutRun' class='btn'>{{isRunning ? 'Stop layout' : 'Start layout'}}</a> 
+        <div class='buttons'>
+          <a href="#" @click.prevent='toggleLayoutRun' class='btn'>{{isRunning ? 'Stop layout' : 'Start layout'}}</a>
+          <a href="#" @click.prevent='restart' class='btn restart' title='Start over from initial positions'>Restart</a>
+        </div>
+        <div class='stats' v-if='stats'>
+          {{stats.nodes.toLocaleString()}} nodes, {{stats.links.toLocaleString()}} links<br>
+          {{stats.steps.toLocaleString()}} steps<span v-if='stats.msPerStep'>, <span class='number'>{{formatMs(stats.msPerStep)}}</span> ms/step</span>
+        </div>
       </div>
   </div>
 </template>
@@ -60,6 +95,10 @@ import bus from './lib/bus';
 import queryState from 'query-state';
 import InputValue from './components/InputValue.vue';
 import InputFlag from './components/InputFlag.vue';
+import InputSelect from './components/InputSelect.vue';
+
+const librarySpeedSettings = {maxVelocity: 4, integrator: 'euler', nbody: 'quadtree'};
+const fastSpeedSettings = {maxVelocity: 4, integrator: 'fire', nbody: 'dualtree'};
 
 let appState = queryState({
   graph: 'Miserables',
@@ -70,15 +109,48 @@ let appState = queryState({
   dimensions: 2,
   theta: 0.8,
   gravity: -12,
+  maxVelocity: 4,
+  integrator: 'euler',
+  nbody: 'quadtree',
+  stepsPerFrame: 1,
 }, { useSearch: true });
 
 export default {
   name: 'app',
   components: {
     InputValue,
-    InputFlag
+    InputFlag,
+    InputSelect
+  },
+  computed: {
+    usesFire() {
+      return this.layoutSettings.integrator === 'fire';
+    },
+    integratorOptions() {
+      return [{value: 'euler', label: 'euler (default)'}, {value: 'fire', label: 'fire'}];
+    },
+    nbodyOptions() {
+      return [{value: 'quadtree', label: 'quad tree (default)'}, {value: 'dualtree', label: 'dual tree'}];
+    }
   },
   methods: {
+    useSpeedups(enabled) {
+      Object.assign(this.layoutSettings, enabled ? fastSpeedSettings : librarySpeedSettings);
+    },
+
+    restart() {
+      this.scene.restart();
+    },
+
+    formatMs(ms) {
+      return ms < 1 ? ms.toFixed(2) : ms < 10 ? ms.toFixed(1) : Math.round(ms);
+    },
+
+    updateStats() {
+      if (!this.scene) return;
+      this.stats = this.scene.getStats();
+    },
+
     toggleLayoutRun() {
       this.isRunning = !this.isRunning;
       this.scene.runLayout(this.isRunning);
@@ -109,6 +181,10 @@ export default {
     fixedViewBox(newValue) {
       this.scene.setFixedViewBox(newValue);
     },
+    stepsPerFrame(newValue) {
+      appState.set('stepsPerFrame', newValue);
+      this.scene.setStepsPerFrame(newValue);
+    },
     selectedGraph(newGraph) {
       appState.set('graph', newGraph);
       this.loadNewGraph(newGraph);
@@ -130,18 +206,27 @@ export default {
         dimensions: appState.get('dimensions'),
         theta: appState.get('theta'),
         gravity: appState.get('gravity'),
+        maxVelocity: appState.get('maxVelocity'),
+        integrator: appState.get('integrator'),
+        nbody: appState.get('nbody'),
       },
+      stepsPerFrame: appState.get('stepsPerFrame'),
+      stats: null,
       graphs
     }
   },
   mounted() {
     const canvas = document.getElementById('cnv');
-    this.scene = createGraphScene(canvas, {...this.layoutSettings});
+    this.scene = createGraphScene(canvas, {...this.layoutSettings}, {
+      stepsPerFrame: this.stepsPerFrame
+    });
     this.loadNewGraph(this.selectedGraph);
     bus.on('load-graph', this.onGraphLoaded);
+    this.statsTimer = setInterval(this.updateStats, 250);
   },
 
   beforeUnmount() {
+    clearInterval(this.statsTimer);
     if (this.scene) {
       this.scene.dispose();
     }
@@ -181,6 +266,33 @@ a {
   width: 100%;
 }
 
+.section {
+  margin: 12px 0 4px 0;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.3);
+  small {
+    float: right;
+    font-size: 12px;
+  }
+  a {
+    color: #267fcd;
+  }
+}
+.buttons {
+  display: flex;
+  a.btn.restart {
+    width: 30%;
+    border-left: 1px solid;
+  }
+}
+.stats {
+  padding: 8px;
+  font-size: 12px;
+  border-top: 1px solid;
+  .number {
+    font-size: 12px;
+  }
+}
 a.btn {
   color: rgb(244, 244, 244);
   text-decoration: none;

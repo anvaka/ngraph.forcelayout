@@ -1,11 +1,12 @@
 <template>
-<div class='block'>
+<div class='block' :class='{inactive: disabled}'>
   <div class='row'>
     <div class='col'>{{label}}</div>
     <div class='col'>
       <input type='number' 
         :step='step' 
         v-model='inputValue' 
+        :disabled='disabled'
         @focus="selectAll"
         autocomplete="off" 
         autocorrect="off" 
@@ -14,6 +15,7 @@
     </div>
     <help-icon @show='helpVisible = !helpVisible' :class='{open: helpVisible}'></help-icon>
   </div>
+  <div class='row note' v-if='note'>{{note}}</div>
   <div class='row help' v-if='helpVisible'>
     <slot></slot>
   </div>
@@ -34,6 +36,9 @@ export default {
       default: '0.1',
       type: String
     },
+    disabled: Boolean,
+    // short line shown under the input, e.g. why it is disabled
+    note: String,
   },
   methods: {
     selectAll(e) {
@@ -47,6 +52,9 @@ export default {
     }
   },
   watch: {
+    modelValue(newValue) {
+      if (newValue !== parseFloat(this.inputValue)) this.inputValue = newValue;
+    },
     inputValue(newValue) {
       this.$emit('update:modelValue', parseFloat(newValue));
     }
@@ -84,6 +92,14 @@ help-background = #004499;
         fill: primary-text;
       }
     }
+  }
+  &.inactive .col {
+    opacity: 0.5;
+  }
+  .row.note {
+    font-size: 12px;
+    opacity: 0.7;
+    padding: 0 0 6px 0;
   }
   .row.help {
     margin-top: 0;

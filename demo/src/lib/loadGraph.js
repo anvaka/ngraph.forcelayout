@@ -4,9 +4,18 @@ import generate from 'ngraph.generators';
 
 let cache = simpleCache();
 
+const generatedGraphs = {
+  'Grid 100x100 (10k)': () => generate.grid(100, 100),
+  'Binary tree (8k)': () => generate.balancedBinTree(13),
+  'Watts-Strogatz (10k)': () => generate.wattsStrogatz(10000, 6, 0.05),
+  'Barabasi-Albert (20k)': () => barabasiAlbert(20000, 2),
+  'Barabasi-Albert (100k)': () => barabasiAlbert(100000, 2),
+};
+
 export default function loadGraph(name) {
   if (name === 'Miserables') return Promise.resolve(miserables);
   if (name === 'Binary') return Promise.resolve(generate.balancedBinTree(10));
+  if (generatedGraphs[name]) return Promise.resolve(generatedGraphs[name]());
 
   let mtxObject = cache.get(name);
   if (mtxObject) return Promise.resolve(renderGraph(mtxObject.links, mtxObject.recordsPerEdge));
@@ -51,4 +60,31 @@ function simpleCache() {
             }
         }
     };
+}
+
+// Preferential attachment: each new node links to `m` existing nodes, picked
+// proportionally to their degree. Gives a few large hubs.
+function barabasiAlbert(n, m) {
+  let seed = 42;
+  const random = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  let graph = createGraph();
+  let endpoints = [];
+  for (let i = 0; i <= m; i++) {
+    for (let j = 0; j < i; j++) {
+      graph.addLink(i, j);
+      endpoints.push(i, j);
+    }
+  }
+  for (let i = m + 1; i < n; i++) {
+    let targets = new Set();
+    while (targets.size < m) targets.add(endpoints[Math.floor(random() * endpoints.length)]);
+    targets.forEach(target => {
+      graph.addLink(i, target);
+      endpoints.push(i, target);
+    });
+  }
+  return graph;
 }
