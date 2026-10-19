@@ -29,7 +29,8 @@
         will have a lot of freedom, nothing will be stopping them, and that can result in a very
         unstable simulation.
       </input-value>
-      <input-value label='Theta' v-model='layoutSettings.theta'>
+      <input-value label='Theta' v-model='layoutSettings.theta'
+        :disabled='onGpu' :note="onGpu ? 'Not used on WebGPU.' : ''">
         This coefficient influences when we apply long distance forces approximation. When this value is
         close to 0, the simulation compares forces between every single node (giving O(n^2), slow performance).
         Recommended value is 0.8.
@@ -59,7 +60,8 @@
         while it moves "downhill", and stops dead when it overshoots. Usually reaches a good layout in
         fewer steps, especially on trees and grids.
       </input-select>
-      <input-select label='Repulsion' v-model='layoutSettings.nbody' :options='nbodyOptions'>
+      <input-select label='Repulsion' v-model='layoutSettings.nbody' :options='nbodyOptions'
+        :disabled='onGpu' :note="onGpu ? 'Not used on WebGPU: it has its own grid pyramid (exact up to 1,024 nodes).' : ''">
         How node repulsion is computed. <b>quad tree</b> is Barnes-Hut: each node walks the tree.
         <b>dual tree</b> lets pairs of tree cells interact with each other, which is 5-10x faster on large
         graphs with the same accuracy. Both use theta.
@@ -72,6 +74,26 @@
       Setting this to true will disable pan/zoom but will always keep the graph visible. This is not
       part of the layout algorithm. Just a view setting of the renderer.
       </input-flag>
+
+      <div class='section'>
+        Add-ons
+        <small><a href='https://github.com/anvaka/ngraph.forcelayout/tree/main/modules'>not part of the library</a></small>
+      </div>
+      <input-select label='Start from' v-model='placement' :options='placementOptions'>
+        Initial positions of nodes. <b>pivot MDS</b> places nodes so that distances follow graph distances
+        (or uses a radial tree when it fits better), so the layout only needs to polish it.
+        Changing this restarts the layout.
+        This is a separate module, <code>modules/pivot</code> in this repository; ngraph.forcelayout itself
+        places each node at random near its already placed neighbours.
+      </input-select>
+      <input-select label='Run on' v-model='backend' :options='backendOptions' :note='gpuMessage'>
+        <b>WebGPU</b> runs the whole simulation on the GPU (2D only). Repulsion uses a grid pyramid
+        instead of a tree, so Theta and Repulsion settings do not apply; graphs up to 1,024 nodes
+        use exact all-pairs repulsion. It is hundreds of times faster on large graphs, so raise
+        Steps per frame (e.g. 20) to see it: with one step per frame, drawing the graph is the
+        bottleneck. This is a separate module, <code>modules/gpu</code> in this repository;
+        ngraph.forcelayout itself always runs on the CPU.
+      </input-select>
       <div v-if='loading'>Loading graph...</div>
     </div>
       <div v-if='!loading' class='layout-box'>
@@ -80,8 +102,9 @@
           <a href="#" @click.prevent='restart' class='btn restart' title='Start over from initial positions'>Restart</a>
         </div>
         <div class='stats' v-if='stats'>
-          {{stats.nodes.toLocaleString()}} nodes, {{stats.links.toLocaleString()}} links<br>
+          {{stats.nodes.toLocaleString()}} nodes, {{stats.links.toLocaleString()}} links<span v-if='stats.placement'>, {{stats.placement}} start</span><br>
           {{stats.steps.toLocaleString()}} steps<span v-if='stats.msPerStep'>, <span class='number'>{{formatMs(stats.msPerStep)}}</span> ms/step</span>
+          on {{stats.backend === 'webgpu' ? 'WebGPU' : 'CPU'}}
         </div>
       </div>
   </div>
@@ -112,6 +135,8 @@ let appState = queryState({
   maxVelocity: 4,
   integrator: 'euler',
   nbody: 'quadtree',
+  placement: 'default',
+  backend: 'cpu',
   stepsPerFrame: 1,
 }, { useSearch: true });
 
@@ -123,6 +148,9 @@ export default {
     InputSelect
   },
   computed: {
+    onGpu() {
+      return this.backend === 'webgpu';
+    },
     usesFire() {
       return this.layoutSettings.integrator === 'fire';
     },
@@ -131,6 +159,13 @@ export default {
     },
     nbodyOptions() {
       return [{value: 'quadtree', label: 'quad tree (default)'}, {value: 'dualtree', label: 'dual tree'}];
+    },
+    placementOptions() {
+      return [{value: 'default', label: 'library default'}, {value: 'pivot', label: 'pivot MDS (add-on)'}];
+    },
+    backendOptions() {
+      let gpuDisabled = this.layoutSettings.dimensions !== 2 || this.gpuAvailable === false;
+      return [{value: 'cpu', label: 'CPU (library)'}, {value: 'webgpu', label: 'WebGPU, 2D (add-on)', disabled: gpuDisabled}];
     }
   },
   methods: {
@@ -149,6 +184,11 @@ export default {
     updateStats() {
       if (!this.scene) return;
       this.stats = this.scene.getStats();
+      if (this.stats.backend !== this.backend && this.backend === 'webgpu') {
+        // the scene fell back to CPU (e.g. GPU device was lost)
+        this.gpuMessage = 'WebGPU device was lost, switched back to CPU.';
+        this.backend = this.stats.backend;
+      }
     },
 
     toggleLayoutRun() {
@@ -181,9 +221,33 @@ export default {
     fixedViewBox(newValue) {
       this.scene.setFixedViewBox(newValue);
     },
+    'layoutSettings.dimensions'(newValue) {
+      if (newValue !== 2 && this.backend === 'webgpu') {
+        this.gpuMessage = 'WebGPU layout works only in 2D, switched to CPU.';
+        this.backend = 'cpu';
+      }
+    },
+    placement(newValue) {
+      appState.set('placement', newValue);
+      this.scene.setPlacement(newValue);
+    },
     stepsPerFrame(newValue) {
       appState.set('stepsPerFrame', newValue);
       this.scene.setStepsPerFrame(newValue);
+    },
+    backend(newValue) {
+      this.scene.setBackend(newValue).then(actualBackend => {
+        if (actualBackend !== newValue) {
+          this.gpuMessage = this.layoutSettings.dimensions !== 2 ?
+            'WebGPU layout works only in 2D.' :
+            'WebGPU is not available in this browser.';
+          if (this.layoutSettings.dimensions === 2) this.gpuAvailable = false;
+          this.backend = actualBackend;
+        } else if (newValue === 'webgpu') {
+          this.gpuMessage = '';
+        }
+        appState.set('backend', this.backend);
+      });
     },
     selectedGraph(newGraph) {
       appState.set('graph', newGraph);
@@ -210,7 +274,12 @@ export default {
         integrator: appState.get('integrator'),
         nbody: appState.get('nbody'),
       },
+      placement: appState.get('placement'),
+      // WebGPU is turned on after the first graph is loaded (see mounted)
+      backend: 'cpu',
       stepsPerFrame: appState.get('stepsPerFrame'),
+      gpuAvailable: typeof navigator !== 'undefined' && !!navigator.gpu,
+      gpuMessage: '',
       stats: null,
       graphs
     }
@@ -218,10 +287,12 @@ export default {
   mounted() {
     const canvas = document.getElementById('cnv');
     this.scene = createGraphScene(canvas, {...this.layoutSettings}, {
+      placement: this.placement,
       stepsPerFrame: this.stepsPerFrame
     });
     this.loadNewGraph(this.selectedGraph);
     bus.on('load-graph', this.onGraphLoaded);
+    if (appState.get('backend') === 'webgpu') this.backend = 'webgpu';
     this.statsTimer = setInterval(this.updateStats, 250);
   },
 

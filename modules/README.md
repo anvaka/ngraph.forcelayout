@@ -1,0 +1,13 @@
+# Add-on modules
+
+Code that works with `ngraph.forcelayout` but is not part of it. Each folder is its own package;
+none of them ships inside the `ngraph.forcelayout` npm package, and none is published yet
+(they are marked `private`).
+
+| Folder | Package name | What it does |
+|---|---|---|
+| [pivot](pivot) | `ngraph.forcelayout.pivot` | Places nodes before the first step so that distances on screen follow graph distances. The layout then only needs to polish. |
+| [gpu](gpu) | `ngraph.forcelayout.gpu` | Runs a 2D force layout on WebGPU, with the same physics and settings as the library. |
+
+The [demo](../demo) imports both by package name (see `demo/vite.config.js`) and shows them in
+its "Add-ons" section.
