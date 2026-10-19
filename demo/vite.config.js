@@ -9,7 +9,15 @@ const libraryRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 export default defineConfig({
   base: './',
   plugins: [vue(), localForceLayout()],
-  server: { port: 8080, host: true }
+  resolve: {
+    // Add-ons that live next to the library in this repository, imported by their package names
+    alias: {
+      'ngraph.forcelayout.pivot': path.join(libraryRoot, 'modules/pivot/index.js'),
+      'ngraph.forcelayout.gpu': path.join(libraryRoot, 'modules/gpu/index.js')
+    }
+  },
+  // The dev server may serve files from the whole repository, not only demo/
+  server: { port: 8080, host: true, fs: { allow: [libraryRoot] } }
 });
 
 /**

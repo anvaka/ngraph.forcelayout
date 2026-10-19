@@ -34,6 +34,8 @@ The demo always bundles the library from the same commit (see `vite.config.js`).
 
 * [ngraph.graph](https://github.com/anvaka/ngraph.graph) as a graph data structure
 * [ngraph.forcelayout](https://github.com/anvaka/ngraph.forcelayout) for the basic graph layout
+* Add-ons from [modules](../modules), shown in the "Add-ons" section: pivot start and a WebGPU
+  layout. They are not part of ngraph.forcelayout.
 * [w-gl](https://github.com/anvaka/w-gl) - super duper obscure (and fast) WebGL renderer.
 * vue.js powered UI and dev tools.
 

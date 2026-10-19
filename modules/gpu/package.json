@@ -1,0 +1,16 @@
+{
+  "name": "ngraph.forcelayout.gpu",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Experimental 2D force layout for ngraph.graph that runs on WebGPU",
+  "type": "module",
+  "main": "index.js",
+  "exports": "./index.js",
+  "keywords": [
+    "ngraph",
+    "ngraphjs",
+    "webgpu"
+  ],
+  "author": "Andrei Kashcha",
+  "license": "BSD-3-Clause"
+}

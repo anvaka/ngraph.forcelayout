@@ -5,6 +5,9 @@ import bus from './bus';
 import createHighLayout from 'ngraph.hde'
 import createForceLayout from './createForceLayout';
 import findLargestComponent from './findLargestComponent';
+// Add-ons from modules/ in this repository (see vite.config.js), not part of ngraph.forcelayout
+import placeNodes from 'ngraph.forcelayout.pivot';
+import {initWebGPU, createGpuLayout} from 'ngraph.forcelayout.gpu';
 import createGraph from 'ngraph.graph';
 
 const layoutProps = ['timeStep', 'springLength', 'springCoefficient', 'dimensions', 'dragCoefficient', 'gravity', 'theta', 'maxVelocity', 'integrator', 'nbody'];
@@ -17,10 +20,17 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   let graph, layout;
   let scene, nodes, lines, guide;
 
+  // When WebGPU backend is on, gpuLayout runs the simulation, and `layout` only keeps
+  // positions for the moment we switch back to CPU.
+  let backend = 'cpu';
+  let gpuDevice, gpuLayout;
+
   let fixedViewBox = false;
   let isRunning = false;
   let rafHandle;
   let stepsPerFrame = sceneSettings.stepsPerFrame || 1;
+  let placement = sceneSettings.placement || 'default';
+  let placementChoice = '';
   let stats = createStats();
 
   bus.on('load-graph', loadGraph);
@@ -31,6 +41,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     updateLayoutSettings,
     setFixedViewBox,
     setStepsPerFrame,
+    setPlacement,
+    setBackend,
     restart,
     getStats,
   };
@@ -38,6 +50,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   function loadGraph(newGraph, desiredLayout) {
     if (scene) {
       scene.dispose();
+      stopGpuLayout(false);
       layout.dispose();
       scene = null
       isRunning = false;
@@ -54,6 +67,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     guide = createGuide(scene, {showGrid: true, lineColor: 0xffffff10, maxAlpha: 0x10, showCursor: false});
     // this is a standard force layout
     layout = createForceLayout(graph, layoutSettings);
+    applyPlacement();
+    if (backend === 'webgpu') startGpuLayout();
     stats.reset();
 
     fitView();
@@ -64,27 +79,85 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
 
   function restart() {
     // Fresh layout keeps the settings, but forgets positions and velocities.
+    stopGpuLayout(false);
     layout.dispose();
     layout = createForceLayout(graph, layoutSettings);
+    applyPlacement();
+    if (backend === 'webgpu') startGpuLayout();
     stats.reset();
     fitView();
+  }
+
+  function applyPlacement() {
+    placementChoice = '';
+    if (placement !== 'pivot') return;
+    placementChoice = placeNodes(graph, layout, {
+      dimensions: layoutSettings.dimensions || 2,
+      unit: layoutSettings.springLength || 10
+    });
+  }
+
+  function setPlacement(newPlacement) {
+    if (placement === newPlacement) return;
+    placement = newPlacement;
+    if (graph) restart();
   }
 
   function setStepsPerFrame(newStepsPerFrame) {
     stepsPerFrame = Math.max(1, Math.round(newStepsPerFrame) || 1);
   }
 
+  async function setBackend(newBackend) {
+    if (newBackend === 'webgpu' && backend !== 'webgpu') {
+      if ((layoutSettings.dimensions || 2) !== 2) return backend;
+      gpuDevice = gpuDevice || await initWebGPU();
+      if (!gpuDevice) return backend;
+      backend = 'webgpu';
+      if (graph) startGpuLayout();
+    } else if (newBackend === 'cpu' && backend !== 'cpu') {
+      backend = 'cpu';
+      stopGpuLayout(true);
+    }
+    stats.reset();
+    return backend;
+  }
+
+  function startGpuLayout() {
+    gpuLayout = createGpuLayout(gpuDevice, graph, {
+      settings: layoutSettings,
+      getInitialPosition: nodeId => layout.getNodePosition(nodeId)
+    });
+  }
+
+  function stopGpuLayout(keepPositions) {
+    if (!gpuLayout) return;
+    if (keepPositions) {
+      graph.forEachNode(node => {
+        let pos = gpuLayout.getNodePosition(node.id);
+        layout.setNodePosition(node.id, pos.x, pos.y);
+      });
+    }
+    gpuLayout.dispose();
+    gpuLayout = null;
+  }
+
   function getStats() {
     return {
+      backend,
       nodes: graph ? graph.getNodesCount() : 0,
       links: graph ? graph.getLinksCount() : 0,
       steps: stats.steps,
-      msPerStep: stats.msPerStep()
+      msPerStep: gpuLayout ? gpuLayout.getStats().msPerStep : stats.msPerStep(),
+      placement: placementChoice
     };
   }
 
+  function activeLayout() {
+    return gpuLayout || layout;
+  }
+
   function fitView() {
-    let rect = layout.getGraphRect();
+    let rect = activeLayout().getGraphRect();
     let cx = (rect.min_x + rect.max_x) / 2;
     let cy = (rect.min_y + rect.max_y) / 2;
     let half = Math.max(rect.max_x - rect.min_x, rect.max_y - rect.min_y) * 0.6;
@@ -111,6 +184,12 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     layoutSettings = props.reduce((settings, name) => (settings[name] = newLayoutSettings[name], settings), {});
     if (!layout) return;
 
+    if (gpuLayout && layoutSettings.dimensions !== 2) {
+      // WebGPU layout is 2D only
+      backend = 'cpu';
+      stopGpuLayout(true);
+    }
+
     if (layoutSettings.dimensions !== previousDimensions) {
       let prevLayout = layout;
       layout = createForceLayout(graph, layoutSettings)
@@ -130,6 +209,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
       props.forEach(name => {
         layout.simulator[name](layoutSettings[name]);
       });
+      if (gpuLayout) gpuLayout.updateSettings(layoutSettings);
     }
   }
 
@@ -149,7 +229,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     });
 
     graph.forEachNode(node => {
-      var point = layout.getNodePosition(node.id);
+      var point = activeLayout().getNodePosition(node.id);
       let size = 1;
       if (node.data && node.data.size) {
         size = node.data.size;
@@ -164,8 +244,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     lines = new LineCollection(scene.getGL(), { capacity: graph.getLinksCount() });
 
     graph.forEachLink(link => {
-      var from = layout.getNodePosition(link.fromId);
-      var to = layout.getNodePosition(link.toId);
+      var from = activeLayout().getNodePosition(link.fromId);
+      var to = activeLayout().getNodePosition(link.toId);
       var line = { from: [from.x, from.y, from.z || 0], to: [to.x, to.y, to.z || 0], color: 0xFFFFFF10 };
       link.ui = line;
       link.uiId = lines.add(link.ui);
@@ -179,12 +259,22 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   function frame() {
     rafHandle = requestAnimationFrame(frame);
 
+    if (gpuLayout && gpuLayout.getStats().lost) {
+      // GPU device is gone (e.g. driver reset) - continue on CPU from the last known positions
+      backend = 'cpu';
+      stopGpuLayout(true);
+    }
+
     if (isRunning) {
       let start = performance.now();
-      for (let i = 0; i < stepsPerFrame; ++i) layout.step();
+      if (gpuLayout) {
+        gpuLayout.step(stepsPerFrame);
+      } else {
+        for (let i = 0; i < stepsPerFrame; ++i) layout.step();
+      }
       stats.record(performance.now() - start, stepsPerFrame);
       if (fixedViewBox) {
-        let rect = layout.getGraphRect();
+        let rect = activeLayout().getGraphRect();
         scene.setViewBox({
           left:  rect.min_x,
           top:   rect.min_y,
@@ -199,6 +289,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
 
   function drawGraph() {
     let names = ['x', 'y', 'z']
+    let layout = activeLayout();
     // let minR = Infinity; let maxR = -minR;
     // let minG = Infinity; let maxG = -minG;
     // let minB = Infinity; let maxB = -minB;
@@ -266,6 +357,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   function dispose() {
     cancelAnimationFrame(rafHandle);
 
+    stopGpuLayout(false);
     scene.dispose();
     bus.off('load-graph', loadGraph);
   }
