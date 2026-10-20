@@ -15,6 +15,9 @@ import findGroups from './findGroups.js';
 
 const EVERY = 25;      // steps between updates
 const MIN_SHARE = 0.05; // weakest a link between groups can get, as a share of its stiffness
+// Group colors, largest group first, then the list repeats
+const PALETTE = [0xf28e2bff, 0xe15759ff, 0xedc948ff, 0x59a14fff, 0xff9da7ff,
+  0xb07aa1ff, 0x76b7b2ff, 0xffffffff, 0x9c755fff, 0xbab0acff];
 
 export default {
   id: 'v1-3-group-bridges',
@@ -33,6 +36,8 @@ outside forces move its centre (the average position of its parts). From far awa
 group pushes like one heavy node at that centre.</p>
 <p>Look for separate blobs with white space between them and long links across the gaps, as
 ForceAtlas2 draws them. Compare with <b>none</b>. On grid20, nothing should change.</p>
+<p>Each group it found has its own color; nodes in no group (or in a group smaller than
+<b>Smallest group</b>) keep the usual color.</p>
 <p>What gets worse: links between groups become long, so they no longer match graph
 distance, and the gaps leave more of the frame empty. Lower <b>Smallest group</b> to 1 and
 weak groups (Miserables) or random clumps (rgg1500) get pulled apart too: the picture turns
@@ -81,11 +86,23 @@ lopsided or gets holes.</p>`,
     const mass = new Float64Array(groups.length);
     const width = new Float64Array(groups.length);
 
+    // One color per group, largest group first
+    const color = new Map();
+    groups.map((nodes, g) => g)
+      .sort((a, b) => groups[b].length - groups[a].length)
+      .forEach((g, rank) => {
+        const c = PALETTE[rank % PALETTE.length];
+        groups[g].forEach(id => color.set(id, c));
+      });
+
     let steps = 0;
     update();
     layout.on('step', onStep);
 
     return {
+      nodeColor(nodeId) {
+        return color.get(nodeId) || 0;
+      },
       dispose() {
         layout.off('step', onStep);
         original.forEach((coefficient, spring) => { spring.coefficient = coefficient; });
