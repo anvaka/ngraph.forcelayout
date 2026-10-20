@@ -1,9 +1,6 @@
 <template>
   <div>
-    <h2>
-      <a href='#' @click.prevent='settingsOpen = !settingsOpen' class='toggle-settings'>Settings {{settingsOpen ? '▴' : '▾'}}</a>
-      <a href='https://github.com/anvaka/ngraph.forcelayout'>ngraph.forcelayout</a> demo
-    </h2>
+    <h2><a href='https://github.com/anvaka/ngraph.forcelayout'>ngraph.forcelayout</a> demo</h2>
     <div class='layout-box'>
       <div class='buttons'>
         <label class='graph-picker' title='Graph'>
@@ -14,11 +11,14 @@
         <a href="#" @click.prevent='toggleLayoutRun' class='btn'>{{isRunning ? 'Pause' : 'Run'}}</a>
         <a href="#" @click.prevent='restart' class='btn restart' title='Start over from initial positions'>Reset</a>
       </div>
-      <div class='stats' v-if='loading'>Loading graph...</div>
-      <div class='stats' v-else-if='stats'>
-        {{stats.nodes.toLocaleString()}} nodes, {{stats.links.toLocaleString()}} links<span v-if='stats.placement'>, {{stats.placement}} start</span><br>
-        {{stats.steps.toLocaleString()}} steps<span v-if='stats.msPerStep'>, <span class='number'>{{formatMs(stats.msPerStep)}}</span> ms/step</span>
-        on {{stats.backend === 'webgpu' ? 'WebGPU' : 'CPU'}}
+      <div class='stats'>
+        <div v-if='loading'>Loading graph...</div>
+        <div v-else-if='stats'>
+          {{stats.nodes.toLocaleString()}} nodes, {{stats.links.toLocaleString()}} links<span v-if='stats.placement'>, {{stats.placement}} start</span><br>
+          {{stats.steps.toLocaleString()}} steps<span v-if='stats.msPerStep'>, <span class='number'>{{formatMs(stats.msPerStep)}}</span> ms/step</span>
+          on {{stats.backend === 'webgpu' ? 'WebGPU' : 'CPU'}}
+        </div>
+        <a href='#' @click.prevent='settingsOpen = !settingsOpen' class='toggle-settings'>Settings {{settingsOpen ? '▴' : '▾'}}</a>
       </div>
     </div>
     <div class='content' v-if='settingsOpen'>
@@ -385,12 +385,24 @@ a {
   }
 }
 .stats {
+  display: flex;
+  align-items: center;
   padding: 8px;
   font-size: 12px;
   border-top: 1px solid;
   .number {
     font-size: 12px;
   }
+}
+.toggle-settings {
+  margin-left: auto;
+  padding: 0 8px;
+  border: 1px solid #267fcd;
+  border-radius: 4px;
+  color: #267fcd;
+  font-size: 14px;
+  line-height: 22px;
+  white-space: nowrap;
 }
 a.btn {
   color: rgb(244, 244, 244);
@@ -408,14 +420,6 @@ h2 {
   font-weight: normal;
   a {
     color: #267fcd;
-  }
-  .toggle-settings {
-    float: right;
-    padding: 0 8px;
-    border: 1px solid #267fcd;
-    border-radius: 4px;
-    font-size: 14px;
-    line-height: 22px;
   }
 }
 .number {
