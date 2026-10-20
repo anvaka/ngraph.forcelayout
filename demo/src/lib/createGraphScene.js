@@ -31,6 +31,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   let stepsPerFrame = sceneSettings.stepsPerFrame || 1;
   let placement = sceneSettings.placement || 'default';
   let placementChoice = '';
+  // An experimental idea from demo/src/prototypes, attached to every new layout
+  let prototype = null, prototypeParams = {}, prototypeControl = null;
   let stats = createStats();
 
   bus.on('load-graph', loadGraph);
@@ -43,6 +45,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     setStepsPerFrame,
     setPlacement,
     setBackend,
+    setPrototype,
+    finishPrototype,
     restart,
     getStats,
   };
@@ -51,6 +55,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     if (scene) {
       scene.dispose();
       stopGpuLayout(false);
+      detachPrototype();
       layout.dispose();
       scene = null
       cancelAnimationFrame(rafHandle);
@@ -67,6 +72,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     // this is a standard force layout
     layout = createForceLayout(graph, layoutSettings);
     applyPlacement();
+    attachPrototype();
     if (backend === 'webgpu') startGpuLayout();
     stats.reset();
 
@@ -80,12 +86,39 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   function restart() {
     // Fresh layout keeps the settings, but forgets positions and velocities.
     stopGpuLayout(false);
+    detachPrototype();
     layout.dispose();
     layout = createForceLayout(graph, layoutSettings);
     applyPlacement();
+    attachPrototype();
     if (backend === 'webgpu') startGpuLayout();
     stats.reset();
     fitView();
+  }
+
+  function setPrototype(newPrototype, params) {
+    prototype = newPrototype || null;
+    prototypeParams = {...params};
+    if (graph) restart();
+  }
+
+  function attachPrototype() {
+    if (!prototype) return;
+    prototypeControl = prototype.attach({
+      layout,
+      graph,
+      params: {...prototypeParams},
+      settings: {...layoutSettings}
+    }) || null;
+  }
+
+  function detachPrototype() {
+    if (prototypeControl && prototypeControl.dispose) prototypeControl.dispose();
+    prototypeControl = null;
+  }
+
+  function finishPrototype() {
+    if (prototypeControl && prototypeControl.finish) prototypeControl.finish();
   }
 
   function applyPlacement() {
@@ -148,7 +181,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
       links: graph ? graph.getLinksCount() : 0,
       steps: stats.steps,
       msPerStep: gpuLayout ? gpuLayout.getStats().msPerStep : stats.msPerStep(),
-      placement: placementChoice
+      placement: placementChoice,
+      canFinishPrototype: !!(prototypeControl && prototypeControl.finish)
     };
   }
 
@@ -192,6 +226,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
 
     if (layoutSettings.dimensions !== previousDimensions) {
       let prevLayout = layout;
+      detachPrototype();
       layout = createForceLayout(graph, layoutSettings)
       graph.forEachNode(node => {
         let prevPos = prevLayout.getNodePosition(node.id);
@@ -205,6 +240,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
       });
 
       prevLayout.dispose();
+      attachPrototype();
     } else {
       props.forEach(name => {
         layout.simulator[name](layoutSettings[name]);
@@ -358,6 +394,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     cancelAnimationFrame(rafHandle);
 
     stopGpuLayout(false);
+    detachPrototype();
     scene.dispose();
     bus.off('load-graph', loadGraph);
   }

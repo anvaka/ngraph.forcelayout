@@ -106,6 +106,33 @@
         bottleneck. This is a separate module, <code>modules/gpu</code> in this repository;
         ngraph.forcelayout itself always runs on the CPU.
       </input-select>
+
+      <template v-if='prototypes.length'>
+        <div class='section'>
+          Prototypes
+          <small><a href='https://github.com/anvaka/ngraph.forcelayout/tree/main/demo/src/prototypes'>ideas to try, not part of the library</a></small>
+        </div>
+        <input-select label='Idea' v-model='prototypeId' :options='prototypeOptions'
+          :disabled='onGpu' :note="onGpu ? 'Prototypes run on the CPU only.' : ''">
+          Experimental changes to the layout, one per folder in <code>demo/src/prototypes</code>.
+          Picking an idea restarts the layout from the same start as <b>none</b>, so switch between
+          the two to compare. Changing a parameter restarts the layout too.
+        </input-select>
+        <div v-if='prototype' class='prototype'>
+          <div class='about' v-html='prototype.description'></div>
+          <div v-if='prototype.tryGraphs' class='try'>
+            Try on:
+            <a href='#' v-for='name in prototype.tryGraphs' :key='name' @click.prevent='selectedGraph = name'>{{shortGraphName(name)}}</a>
+          </div>
+          <input-value v-for='param in prototype.params || []' :key='param.key'
+            :label='param.label' :step='param.step || "0.1"' v-model='prototypeParams[param.key]'>
+            {{param.help}}
+          </input-value>
+          <a href='#' v-if='stats && stats.canFinishPrototype' class='finish' @click.prevent='finishPrototype'>
+            {{prototype.finishLabel || 'Run final step'}}
+          </a>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -119,6 +146,7 @@ import queryState from 'query-state';
 import InputValue from './components/InputValue.vue';
 import InputFlag from './components/InputFlag.vue';
 import InputSelect from './components/InputSelect.vue';
+import prototypes from './prototypes';
 
 const librarySpeedSettings = {maxVelocity: 4, integrator: 'euler', nbody: 'quadtree'};
 const fastSpeedSettings = {maxVelocity: 4, integrator: 'fire', nbody: 'dualtree'};
@@ -138,7 +166,25 @@ let appState = queryState({
   placement: 'default',
   backend: 'cpu',
   stepsPerFrame: 1,
+  prototype: 'none',
 }, { useSearch: true });
+
+// Prototype parameters live in the URL as p.<key>
+const PARAM_PREFIX = 'p.';
+
+function findPrototype(id) {
+  return prototypes.find(p => p.id === id) || null;
+}
+
+function getPrototypeParams(prototype, fromUrl) {
+  let params = {};
+  if (!prototype) return params;
+  (prototype.params || []).forEach(param => {
+    let saved = fromUrl ? appState.get(PARAM_PREFIX + param.key) : undefined;
+    params[param.key] = Number.isFinite(saved) ? saved : param.value;
+  });
+  return params;
+}
 
 export default {
   name: 'app',
@@ -163,6 +209,16 @@ export default {
     placementOptions() {
       return [{value: 'default', label: 'library default'}, {value: 'pivot', label: 'pivot MDS (add-on)'}];
     },
+    prototype() {
+      return findPrototype(this.prototypeId);
+    },
+    prototypeOptions() {
+      return [{value: 'none', label: 'none'}].concat(prototypes.map(p => ({value: p.id, label: p.title})));
+    },
+    // One value for the watcher, so picking an idea (which also resets its parameters) restarts once
+    prototypeConfig() {
+      return {id: this.prototypeId, params: {...this.prototypeParams}};
+    },
     backendOptions() {
       let gpuDisabled = this.layoutSettings.dimensions !== 2 || this.gpuAvailable === false;
       return [{value: 'cpu', label: 'CPU (library)'}, {value: 'webgpu', label: 'WebGPU, 2D (add-on)', disabled: gpuDisabled}];
@@ -175,6 +231,16 @@ export default {
 
     restart() {
       this.scene.restart();
+    },
+
+    finishPrototype() {
+      // A final step means little while the layout keeps moving the nodes
+      if (this.isRunning) this.toggleLayoutRun();
+      this.scene.finishPrototype();
+    },
+
+    shortGraphName(name) {
+      return name.replace(/^Benchmark: /, '');
     },
 
     formatMs(ms) {
@@ -252,6 +318,21 @@ export default {
     selectedGraph(newGraph) {
       appState.set('graph', newGraph);
       this.loadNewGraph(newGraph);
+    },
+    prototypeId(newId, oldId) {
+      let old = findPrototype(oldId);
+      if (old) (old.params || []).forEach(param => appState.unset(PARAM_PREFIX + param.key));
+      appState.set('prototype', newId);
+      this.prototypeParams = getPrototypeParams(this.prototype, false);
+    },
+    prototypeConfig: {
+      deep: true,
+      handler(config) {
+        // Wait while a parameter is being typed (an empty input gives NaN)
+        if (!Object.values(config.params).every(Number.isFinite)) return;
+        Object.entries(config.params).forEach(([key, value]) => appState.set(PARAM_PREFIX + key, value));
+        this.scene.setPrototype(this.prototype, config.params);
+      }
     }
   },
   data() {
@@ -278,6 +359,9 @@ export default {
       // WebGPU is turned on after the first graph is loaded (see mounted)
       backend: 'cpu',
       stepsPerFrame: appState.get('stepsPerFrame'),
+      prototypes,
+      prototypeId: findPrototype(appState.get('prototype')) ? appState.get('prototype') : 'none',
+      prototypeParams: getPrototypeParams(findPrototype(appState.get('prototype')), true),
       gpuAvailable: typeof navigator !== 'undefined' && !!navigator.gpu,
       gpuMessage: '',
       stats: null,
@@ -290,6 +374,7 @@ export default {
       placement: this.placement,
       stepsPerFrame: this.stepsPerFrame
     });
+    if (this.prototype) this.scene.setPrototype(this.prototype, this.prototypeParams);
     this.loadNewGraph(this.selectedGraph);
     bus.on('load-graph', this.onGraphLoaded);
     if (appState.get('backend') === 'webgpu') this.backend = 'webgpu';
@@ -350,6 +435,28 @@ a {
   }
   a {
     color: #267fcd;
+  }
+}
+.prototype {
+  font-size: 14px;
+  a {
+    color: #267fcd;
+  }
+  .about p {
+    margin: 6px 0;
+  }
+  .try {
+    margin: 6px 0;
+    a {
+      margin-left: 6px;
+    }
+  }
+  .finish {
+    display: block;
+    margin-top: 8px;
+    padding: 6px 0;
+    text-align: center;
+    border: 1px solid #267fcd;
   }
 }
 .buttons {
