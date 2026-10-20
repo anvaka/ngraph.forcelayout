@@ -1,11 +1,12 @@
 # Layout prototypes
 
 Each folder here is one experimental change to the layout that you can try live in the demo:
-pick it under **Settings → Prototypes → Idea**. They are demo code, not part of the library,
+pick it in the idea bar at the top of the panel. They are demo code, not part of the library,
 and each one changes the layout only through the library's public API.
 
-Picking an idea restarts the layout from the same start as **none**, so switching between the
-two compares them directly. Changing a parameter restarts the layout too.
+Picking an idea restarts the layout from the same start as **none**, and the **on** box next to
+the picker turns the idea off and on again, so switching compares the two directly. Changing a
+parameter (under Settings) restarts the layout too.
 
 ## Adding one
 
