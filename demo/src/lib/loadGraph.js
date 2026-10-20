@@ -6,10 +6,14 @@ let cache = simpleCache();
 
 const generatedGraphs = {
   'Grid 100x100 (10k)': () => generate.grid(100, 100),
-  'Binary tree (8k)': () => generate.balancedBinTree(13),
+  'Binary tree (8k)': () => generate.balancedBinTree(12),
   'Watts-Strogatz (10k)': () => generate.wattsStrogatz(10000, 6, 0.05),
   'Barabasi-Albert (20k)': () => barabasiAlbert(20000, 2),
   'Barabasi-Albert (100k)': () => barabasiAlbert(100000, 2),
+  'Scale-free tree (10k)': () => barabasiAlbert(10000, 1),
+  'Cube 20x20x20 (8k)': () => generate.grid3(20, 20, 20),
+  'Groups 8x250 (2k)': () => plantedGroups(8, 250),
+  'Many pieces (300)': () => manyPieces(300),
 };
 
 export default function loadGraph(name) {
@@ -65,11 +69,7 @@ function simpleCache() {
 // Preferential attachment: each new node links to `m` existing nodes, picked
 // proportionally to their degree. Gives a few large hubs.
 function barabasiAlbert(n, m) {
-  let seed = 42;
-  const random = () => {
-    seed = (seed * 1664525 + 1013904223) >>> 0;
-    return seed / 4294967296;
-  };
+  const random = seededRandom(42);
   let graph = createGraph();
   let endpoints = [];
   for (let i = 0; i <= m; i++) {
@@ -87,4 +87,48 @@ function barabasiAlbert(n, m) {
     });
   }
   return graph;
+}
+
+// Groups of `size` nodes: each node links to 3 random nodes of its own group,
+// and about one node in eight also links to a random node anywhere.
+function plantedGroups(groups, size) {
+  const random = seededRandom(7);
+  const pick = n => Math.floor(random() * n);
+  let graph = createGraph();
+  for (let u = 0; u < groups * size; u++) {
+    const group = Math.floor(u / size);
+    for (let k = 0; k < 3; k++) {
+      const v = group * size + pick(size);
+      if (v !== u) graph.addLink(u, v);
+    }
+    if (random() < 0.12) graph.addLink(u, pick(groups * size));
+  }
+  return graph;
+}
+
+// Separate pieces of very different sizes (8 to 400 nodes): each is a random
+// tree with a few extra links that make loops.
+function manyPieces(count) {
+  const random = seededRandom(42);
+  const pick = n => Math.floor(random() * n);
+  let graph = createGraph();
+  let next = 0;
+  for (let p = 0; p < count; p++) {
+    const size = 2 + Math.floor(400 / (1 + pick(60)));
+    const base = next;
+    next += size;
+    for (let i = 1; i < size; i++) graph.addLink(base + i, base + pick(i));
+    for (let k = 0; k < size / 10; k++) {
+      const a = base + pick(size), b = base + pick(size);
+      if (a !== b) graph.addLink(a, b);
+    }
+  }
+  return graph;
+}
+
+function seededRandom(seed) {
+  return () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
 }
