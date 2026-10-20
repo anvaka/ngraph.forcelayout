@@ -102,6 +102,7 @@ help-background = #004499;
     padding: 0 0 6px 0;
   }
   .row.help {
+    display: block;
     margin-top: 0;
     background: help-background;
     padding: 8px;

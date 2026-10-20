@@ -312,6 +312,8 @@ small-screen = 500px;
 #app {
   position: absolute;
   width: 400px;
+  max-height: 100dvh;
+  overflow-y: auto;
   background: rgb(12, 41, 82);
   border: 1px solid white;
 }
