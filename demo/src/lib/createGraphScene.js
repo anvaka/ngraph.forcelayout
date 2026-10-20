@@ -10,6 +10,7 @@ import placeNodes from 'ngraph.forcelayout.pivot';
 import {initWebGPU, createGpuLayout} from 'ngraph.forcelayout.gpu';
 import createGraph from 'ngraph.graph';
 
+const NODE_COLOR = 0x90f8fcff;
 const layoutProps = ['timeStep', 'springLength', 'springCoefficient', 'dimensions', 'dragCoefficient', 'gravity', 'theta', 'maxVelocity', 'integrator', 'nbody'];
 
 export default function createGraphScene(canvas, layoutSettings = {}, sceneSettings = {}) {
@@ -273,7 +274,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
         if (!node.data) node.data = {};
         node.data.size = size;
       }
-      node.ui = {size, position: [point.x, point.y, point.z || 0], color: 0x90f8fcff};
+      node.ui = {size, position: [point.x, point.y, point.z || 0], color: NODE_COLOR};
       node.uiId = nodes.add(node.ui);
     });
 
@@ -340,6 +341,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     //   if (pos.c6 < minB) minB = pos.c6;
     //   if (pos.c6 > maxB) maxB = pos.c6;
     // });
+    // A prototype may color nodes, e.g. by the groups it found (not on WebGPU, which ignores it)
+    let nodeColor = !gpuLayout && prototypeControl && prototypeControl.nodeColor;
 
     graph.forEachNode(node => {
       let pos = layout.getNodePosition(node.id);
@@ -356,6 +359,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
       //   (pos.c6 - minB) / (maxB - minB)
       // );
       // node.ui.color = (0x000000FF | r | g | b);
+      node.ui.color = (nodeColor && nodeColor(node.id)) || NODE_COLOR;
       nodes.update(node.uiId, node.ui)
     });
 
