@@ -17,7 +17,7 @@ export default {
   id: 'my-idea',                 // stable, used in the URL
   title: 'Short name',           // shown in the picker
   author: 'who wrote it',
-  // HTML shown under the picker: what problem it fixes, how, and what to look for
+  // HTML shown by the picker's help (?) icon: what problem it fixes, how, and what to look for
   description: '<p>...</p>',
   // Graphs worth trying, as named in the graph picker (src/lib/getAvailableGraphs.js)
   tryGraphs: ['Benchmark: starOfStars', 'Benchmark: grid20'],
