@@ -118,7 +118,7 @@
           Picking an idea restarts the layout from the same start as <b>none</b>, so switch between
           the two to compare. Changing a parameter restarts the layout too.
         </input-select>
-        <div v-if='prototype' class='prototype'>
+        <div v-if='prototype && !onGpu' class='prototype'>
           <div class='about' v-html='prototype.description'></div>
           <div v-if='prototype.tryGraphs' class='try'>
             Try on:
