@@ -114,12 +114,14 @@
         </div>
         <input-select label='Idea' v-model='prototypeId' :options='prototypeOptions'
           :disabled='onGpu' :note="onGpu ? 'Prototypes run on the CPU only.' : ''">
-          Experimental changes to the layout, one per folder in <code>demo/src/prototypes</code>.
-          Picking an idea restarts the layout from the same start as <b>none</b>, so switch between
-          the two to compare. Changing a parameter restarts the layout too.
+          <div v-if='prototype' class='about' v-html='prototype.description'></div>
+          <template v-else>
+            Experimental changes to the layout, one per folder in <code>demo/src/prototypes</code>.
+            Picking an idea restarts the layout from the same start as <b>none</b>, so switch between
+            the two to compare. Changing a parameter restarts the layout too.
+          </template>
         </input-select>
-        <div v-if='prototype' class='prototype'>
-          <div class='about' v-html='prototype.description'></div>
+        <div v-if='prototype && !onGpu' class='prototype'>
           <div v-if='prototype.tryGraphs' class='try'>
             Try on:
             <a href='#' v-for='name in prototype.tryGraphs' :key='name' @click.prevent='selectedGraph = name'>{{shortGraphName(name)}}</a>
@@ -437,13 +439,22 @@ a {
     color: #267fcd;
   }
 }
+.about {
+  font-size: 14px;
+  p {
+    margin: 6px 0;
+  }
+  p:first-child {
+    margin-top: 0;
+  }
+  p:last-child {
+    margin-bottom: 0;
+  }
+}
 .prototype {
   font-size: 14px;
   a {
     color: #267fcd;
-  }
-  .about p {
-    margin: 6px 0;
   }
   .try {
     margin: 6px 0;
