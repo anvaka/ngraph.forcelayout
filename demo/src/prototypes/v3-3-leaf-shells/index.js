@@ -12,7 +12,7 @@ export default {
 <p>Why: leaves at the same distance from their hub push each other apart. Packed closer than about half a link length, the ring buckles (every other leaf slides in or out) and crumples into a dense disk.</p>
 <p>This gives each hub several rings of leaves at growing distances, like the shells of an atom, and puts in each ring only as many leaves as it holds without buckling. The hub's other links start outside its rings, so they don't cut through them. Only link lengths change, once at the start; hubs with up to about 11 leaves are left alone.</p>
 <p>From Feynman's Lectures, Vol. 3: ch. 13 and 15 (waves on a ring of atoms; the zigzag wave is the first to give way) and ch. 15-6 (electrons filling shells).</p>
-<p>Look for evenly filled sunbursts with visible rays instead of dark balls, and stars that fill the screen. Compare with <b>none</b>.</p>
+<p>Look for evenly filled sunbursts with visible rays instead of dark balls, and stars that fill the screen. Compare with <b>none</b>. A close sibling, "Fermi fans" (v3-1), uses a fixed gap you set yourself; here the gap follows gravity and spring strength.</p>
 <p>Worse: big stars make the drawing larger, so the rest looks smaller, and links between stars can cut across other stars' rays (more crossings on starOfStars). 2D only: in 3D it does nothing.</p>`,
   tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: EVA', 'Benchmark: caterpillars'],
   params: [
