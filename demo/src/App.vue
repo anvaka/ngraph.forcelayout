@@ -1,15 +1,27 @@
 <template>
   <div>
-    <h2><a href='https://github.com/anvaka/ngraph.forcelayout'>ngraph.forcelayout</a> demo
-      <small class='toggle-settings'><a href='#' @click.prevent='settingsOpen = !settingsOpen'>{{settingsOpen ? 'hide settings' : 'show settings'}}</a></small>
+    <h2>
+      <a href='#' @click.prevent='settingsOpen = !settingsOpen' class='toggle-settings'>Settings {{settingsOpen ? '▴' : '▾'}}</a>
+      <a href='https://github.com/anvaka/ngraph.forcelayout'>ngraph.forcelayout</a> demo
     </h2>
-    <div class='content' v-if='settingsOpen'>
-      <div class='row'>
-        <div class='label'>Graph </div>
-        <select v-model='selectedGraph' :disable='loading' class='value'>
-          <option v-for="graph in graphs" :key='graph' :value='graph'>{{graph}}</option>
-        </select>
+    <div class='layout-box'>
+      <div class='buttons'>
+        <label class='graph-picker' title='Graph'>
+          <select v-model='selectedGraph'>
+            <option v-for="graph in graphs" :key='graph' :value='graph'>{{graph}}</option>
+          </select>
+        </label>
+        <a href="#" @click.prevent='toggleLayoutRun' class='btn'>{{isRunning ? 'Pause' : 'Run'}}</a>
+        <a href="#" @click.prevent='restart' class='btn restart' title='Start over from initial positions'>Reset</a>
       </div>
+      <div class='stats' v-if='loading'>Loading graph...</div>
+      <div class='stats' v-else-if='stats'>
+        {{stats.nodes.toLocaleString()}} nodes, {{stats.links.toLocaleString()}} links<span v-if='stats.placement'>, {{stats.placement}} start</span><br>
+        {{stats.steps.toLocaleString()}} steps<span v-if='stats.msPerStep'>, <span class='number'>{{formatMs(stats.msPerStep)}}</span> ms/step</span>
+        on {{stats.backend === 'webgpu' ? 'WebGPU' : 'CPU'}}
+      </div>
+    </div>
+    <div class='content' v-if='settingsOpen'>
       <input-value label='Time step' v-model='layoutSettings.timeStep'>
       This is integration time step value. The higher it is, the faster nodes will move, but setting it too high
       can result in lots of jitter and instability.
@@ -94,19 +106,7 @@
         bottleneck. This is a separate module, <code>modules/gpu</code> in this repository;
         ngraph.forcelayout itself always runs on the CPU.
       </input-select>
-      <div v-if='loading'>Loading graph...</div>
     </div>
-      <div v-if='!loading' class='layout-box'>
-        <div class='buttons'>
-          <a href="#" @click.prevent='toggleLayoutRun' class='btn'>{{isRunning ? 'Pause' : 'Run'}}</a>
-          <a href="#" @click.prevent='restart' class='btn restart' title='Start over from initial positions'>Reset</a>
-        </div>
-        <div class='stats' v-if='stats'>
-          {{stats.nodes.toLocaleString()}} nodes, {{stats.links.toLocaleString()}} links<span v-if='stats.placement'>, {{stats.placement}} start</span><br>
-          {{stats.steps.toLocaleString()}} steps<span v-if='stats.msPerStep'>, <span class='number'>{{formatMs(stats.msPerStep)}}</span> ms/step</span>
-          on {{stats.backend === 'webgpu' ? 'WebGPU' : 'CPU'}}
-        </div>
-      </div>
   </div>
 </template>
 
@@ -320,6 +320,7 @@ a {
 }
 .content {
   padding: 8px;
+  border-top: 1px solid;
 }
 .row {
   display: flex;
@@ -351,9 +352,36 @@ a {
 }
 .buttons {
   display: flex;
-  a.btn.restart {
-    width: 30%;
+  border-top: 1px solid;
+  a.btn {
     border-left: 1px solid;
+  }
+  a.btn.restart {
+    width: 60%;
+  }
+}
+.graph-picker {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  select {
+    appearance: none;
+    width: 100%;
+    height: 32px;
+    padding: 0 24px 0 8px;
+    border: none;
+    border-radius: 0;
+    background: rgb(12, 41, 82);
+    color: rgb(244, 244, 244);
+    font: inherit;
+    text-overflow: ellipsis;
+  }
+  &::after {
+    content: '▾';
+    position: absolute;
+    right: 8px;
+    top: 7px;
+    pointer-events: none;
   }
 }
 .stats {
@@ -369,7 +397,6 @@ a.btn {
   text-decoration: none;
   justify-content: center;
   align-items: center;
-  border-top: 1px solid;
   height: 32px;
   width: 100%;
   display: flex;
@@ -382,11 +409,13 @@ h2 {
   a {
     color: #267fcd;
   }
-  small a {
-    position: absolute;
-    right: 8px;
-    top: 8px;
-    font-size: 12px;
+  .toggle-settings {
+    float: right;
+    padding: 0 8px;
+    border: 1px solid #267fcd;
+    border-radius: 4px;
+    font-size: 14px;
+    line-height: 22px;
   }
 }
 .number {
