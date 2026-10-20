@@ -90,5 +90,5 @@ export function describeDomains(nodeCount, neighbors, spins) {
     }
   }
   const domainCount = new Set(labels).size;
-  return { wallShare: links ? walls / links : 0, modularity, domainCount, links };
+  return { wallShare: links ? walls / links : 0, modularity, domainCount, links, labels };
 }

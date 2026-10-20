@@ -7,6 +7,9 @@
 import { computeDomains, describeDomains } from './domains.js';
 import createDomainRepulsion from './domainRepulsion.js';
 
+// Node colors by domain, largest domain first, then cycling
+const PALETTE = [0xf28e2bff, 0xe15759ff, 0xedc948ff, 0x59a14fff, 0xff9da7ff, 0xb07aa1ff, 0x76b7b2ff, 0xffffffff, 0x9c755fff, 0xbab0acff];
+
 export default {
   id: 'v2-5-magnetic-domains',
   title: 'Magnetic domains decide who repels',
@@ -25,7 +28,9 @@ in iron line up their tiny magnets, and below a critical temperature the metal s
 worse: edge crossings don't go down, edges between groups get longer, and loosely grouped graphs
 like Miserables get stretched. Grids, trees, random and tree-like graphs are recognized and left
 unchanged (try <i>grid20</i>) unless you set <i>Auto-off</i> to 0. 2D only: with 3 or more dimensions
-it does nothing. The browser console says whether it switched on and why.</p>`,
+it does nothing. The browser console says whether it switched on and why.</p>
+<p>Colors show the domains: each domain gets its own color, the largest one orange, then red,
+yellow, green and so on. When Auto-off leaves the graph alone, nodes keep the default color.</p>`,
   tryGraphs: ['Benchmark: communities', 'Benchmark: sbm8x50', 'Groups 8x250 (2k)', 'Benchmark: grid20'],
   params: [
     {
@@ -97,7 +102,20 @@ it does nothing. The browser console says whether it switched on and why.</p>`,
     });
     const forceName = 'v2-5-domain-repulsion';
     simulator.addForce(forceName, repulsion.apply);
+
+    // The domains are final from the start (computed above), so colors don't change while it runs
+    const size = new Map();
+    for (const label of about.labels) size.set(label, (size.get(label) || 0) + 1);
+    const colorOfLabel = new Map([...size.keys()]
+      .sort((a, b) => size.get(b) - size.get(a) || a - b)
+      .map((label, rank) => [label, PALETTE[rank % PALETTE.length]]));
+    const colorOfNode = new Map();
+    index.forEach((i, nodeId) => colorOfNode.set(nodeId, colorOfLabel.get(about.labels[i])));
+
     return {
+      nodeColor(nodeId) {
+        return colorOfNode.get(nodeId) || 0;
+      },
       dispose() {
         simulator.removeForce(forceName);
       }
