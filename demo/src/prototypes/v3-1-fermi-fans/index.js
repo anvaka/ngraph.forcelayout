@@ -28,7 +28,10 @@ the default settings, graphs where no node has more than about 12 leaves don't c
 <p>What gets worse: a leaf's link length now says which ring it sits in, not how far it is in the
 graph, and lines that pass over a big disc cross more spokes. "Leaves push only nearby nodes" makes
 fans lean away from their neighbours, packs trees tighter and adds crossings. 2D only; in 3D this
-does nothing.</p>`,
+does nothing.</p>
+<p>Close relatives: "leaf shells" (v3-3) uses nearly the same rings but picks the gap from a
+stability rule; "soft leaf links" (v2-6) gives all leaves of a node one longer, softer link. What
+only this one has is "Leaves push only nearby nodes".</p>`,
   tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: EVA', 'Benchmark: caterpillars'],
   params: [
     {
