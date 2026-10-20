@@ -53,7 +53,6 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
       stopGpuLayout(false);
       layout.dispose();
       scene = null
-      isRunning = false;
       cancelAnimationFrame(rafHandle);
     }
     // newGraph = createGraph(); newGraph.addLink(1, 2)
@@ -74,6 +73,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     fitView();
     initUIElements();
 
+    isRunning = true;
     rafHandle = requestAnimationFrame(frame);
   }
 
