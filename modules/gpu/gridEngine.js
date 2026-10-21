@@ -15,6 +15,9 @@
 // cell. Nodes outside the box are clamped into border cells. Their real positions still feed the
 // centres of mass, and they compute their own far field from monopoles at their real position,
 // because a cell-centred expansion is meaningless that far from the cell.
+//
+// Repulsion is 1/r^2 like the library's default. Another law (from ../../lib/repulsionLaw.js)
+// is compiled into LOCAL and FORCE, which then read the law's numbers from P.law.
 
 const WG = 256;
 const SPRING_CHUNK = 8;
@@ -368,7 +371,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
 // Every non-empty cell receives the far field of its interaction list (children of the
 // parent's 3x3 that are not in my 3x3) once, at its centre, as field + 2x2 Jacobian.
-const LOCAL = COMMON + /* wgsl */`
+const LOCAL = law => withLaw(COMMON, law) + /* wgsl */`
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var<storage, read> bs: array<u32>;
 @group(0) @binding(2) var<storage, read_write> cells: array<vec4f>;
@@ -383,7 +386,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   }
   let c = t - off;
   let me = cells[off + c];
-  if (me.x == 0.0) { return; }
+  if (me.x == 0.0) { return; }${law ? '\n  ' + law.wgslPrologue(lawValue) : ''}
   let o = vec2f(bitcast<f32>(bs[4]), bitcast<f32>(bs[5]));
   let w = bitcast<f32>(bs[6]) / f32(Gl);
   let xl = i32(compact1by1(c)); let yl = i32(compact1by1(c >> 1u));
@@ -399,14 +402,24 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       let cell = cells[off + morton(u32(x), u32(y))];
       if (cell.x > 0.0) {
         let d = cell.yz - center;
-        let r2 = dot(d, d);
+        let r2 = dot(d, d);${law ? `
+        if (${inRange(law, 'r2')}) {
+          let r = sqrt(r2);
+          ${law.emitWGSL(2, 'r', 'k1', 'k2')}
+          let g = P.gravity * cell.x;
+          F += (g * k1) * d;
+          // d/dp of gravity M k1(r) (q - p) = gravity M (k2 d d^T - k1 I)
+          jxx += g * (k2 * d.x * d.x - k1);
+          jxy += g * (k2 * d.x * d.y);
+          jyy += g * (k2 * d.y * d.y - k1);
+        }` : `
         let ir2 = 1.0 / r2;
         let g = P.gravity * cell.x * ir2 * sqrt(ir2); // gravity M / r^3
         F += g * d;
         // d/dp of gravity M (q - p) / |q - p|^3 = gravity M (3 d d^T / r^5 - I / r^3)
         jxx += g * (3.0 * d.x * d.x * ir2 - 1.0);
         jxy += g * (3.0 * d.x * d.y * ir2);
-        jyy += g * (3.0 * d.y * d.y * ir2 - 1.0);
+        jyy += g * (3.0 * d.y * d.y * ir2 - 1.0);`}
       }
     }
   }
@@ -416,7 +429,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
 // One thread per node, in cell order. Euler integrates here; FIRE stores the force in
 // vel[n + i] for the FIRE passes.
-const FORCE = COMMON + /* wgsl */`
+const FORCE = law => withLaw(COMMON, law) + /* wgsl */`
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var<storage, read> sp: array<vec4f>;
 @group(0) @binding(2) var<storage, read> perm: array<u32>;
@@ -438,7 +451,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let c = u32(abs(me.w));
   let cx = i32(compact1by1(c)); let cy = i32(compact1by1(c >> 1u));
   let Gi = i32(P.G);
-  var f = vec2f(0.0);
+  var f = vec2f(0.0);${law ? '\n  ' + law.wgslPrologue(lawValue) : ''}
 
   // near field: exact pairs in my 3x3 cells (strided with weights in overfull cells)
   for (var dy = -1; dy <= 1; dy++) {
@@ -460,8 +473,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         var d = q.xy - p;
         var r2 = dot(d, d);
         if (r2 == 0.0) { d = jitter(i, perm[t]); r2 = dot(d, d); }
-        let r = sqrt(r2);
-        f += (P.gravity * mi * q.z * w / (r2 * r)) * d;
+        ${law ? `${law.hasRange ? `if (r2 > lawRange2) { continue; }
+        ` : ''}let r = sqrt(r2);
+        ${law.emitWGSL(2, 'r', 'k1')}
+        f += (P.gravity * mi * q.z * w * k1) * d;` : `let r = sqrt(r2);
+        f += (P.gravity * mi * q.z * w / (r2 * r)) * d;`}
       }
     }
   }
@@ -491,7 +507,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           if (cell.x > 0.0) {
             let d = cell.yz - p;
             let r2 = dot(d, d);
-            if (r2 > 0.0) { ff += (P.gravity * cell.x / (r2 * sqrt(r2))) * d; }
+            ${law ? `if (r2 > 0.0 && ${inRange(law, 'r2')}) {
+              let r = sqrt(r2);
+              ${law.emitWGSL(2, 'r', 'm1')}
+              ff += (P.gravity * cell.x * m1) * d;
+            }` : 'if (r2 > 0.0) { ff += (P.gravity * cell.x / (r2 * sqrt(r2))) * d; }'}
           }
         }
       }
@@ -595,23 +615,50 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   pos[i] = pos[i] + P.dt * v;
 }`;
 
-const SHADERS = { HIST, BOX, BIN, SCAN_BLOCKS, SCAN_TOP, SCAN_ADD, PLACE, ORDER, SPRINGS, AGG0, PYR, LOCAL, FORCE, FIRE_REDUCE, FIRE_STATE, FIRE_INTEGRATE };
-const pipelineCache = new WeakMap();
+// A law's numbers (see writeValues in lib/repulsionLaw.js) follow the 16 words of Params
+export const LAW_VALUES = 16;
 
-function getPipelines(device) {
+function withLaw(common, law) {
+  if (!law) return common;
+  if (law.valueCount > LAW_VALUES) throw new Error(`The GPU takes laws with up to ${LAW_VALUES} numbers`);
+  return common.replace('locOff: u32,\n};', `locOff: u32,\n  law: array<vec4f, ${LAW_VALUES / 4}>,\n};`);
+}
+
+function lawValue(i) {
+  return `P.law[${i >> 2}].${'xyzw'[i & 3]}`;
+}
+
+function inRange(law, r2) {
+  return law.hasRange ? `${r2} <= lawRange2` : 'true';
+}
+
+const SHADERS = { HIST, BOX, BIN, SCAN_BLOCKS, SCAN_TOP, SCAN_ADD, PLACE, ORDER, SPRINGS, AGG0, PYR, FIRE_REDUCE, FIRE_STATE, FIRE_INTEGRATE };
+// Shaders that depend on the repulsion law
+const LAW_SHADERS = { LOCAL, FORCE };
+const pipelineCache = new WeakMap(); // device -> {name: pipeline, laws: {law key: {name: pipeline}}}
+
+function createPipeline(device, name, code) {
+  return device.createComputePipeline({
+    layout: 'auto',
+    compute: { module: device.createShaderModule({ code, label: name }), entryPoint: 'main' },
+    label: name,
+  });
+}
+
+// `law` is null for 1/r^2
+function getPipelines(device, law) {
   let cached = pipelineCache.get(device);
   if (!cached) {
-    cached = {};
-    for (const [name, code] of Object.entries(SHADERS)) {
-      cached[name] = device.createComputePipeline({
-        layout: 'auto',
-        compute: { module: device.createShaderModule({ code, label: name }), entryPoint: 'main' },
-        label: name,
-      });
-    }
+    cached = { laws: {} };
+    for (const [name, code] of Object.entries(SHADERS)) cached[name] = createPipeline(device, name, code);
     pipelineCache.set(device, cached);
   }
-  return cached;
+  const key = law ? law.key : '';
+  if (!cached.laws[key]) {
+    const forLaw = cached.laws[key] = {};
+    for (const [name, code] of Object.entries(LAW_SHADERS)) forLaw[name] = createPipeline(device, name, code(law));
+  }
+  return Object.assign({}, cached, cached.laws[key]);
 }
 
 function chooseGrid(n) {
@@ -622,11 +669,12 @@ function chooseGrid(n) {
 
 /**
  * @param {GPUDevice} device
- * @param {{n: number, edges: Uint32Array, init: Float32Array, mass: Float32Array}} data
+ * @param {{n: number, edges: Uint32Array, init: Float32Array, mass: Float32Array, law?: object}} data
  *   init: 2n positions relative to the layout origin; edges: flat (from, to) pairs, no self-loops.
+ *   law: a compiled repulsion law other than 1/r^2, or nothing.
  */
-export function createGridEngine(device, { n, edges, init, mass }) {
-  const pipes = getPipelines(device);
+export function createGridEngine(device, { n, edges, init, mass, law = null }) {
+  const pipes = getPipelines(device, law);
   const G = chooseGrid(n);
   const K = Math.log2(G);
   const nCells = G * G;
@@ -694,12 +742,13 @@ export function createGridEngine(device, { n, edges, init, mass }) {
   }
   const boxB = upload(boxInit, S | CD | CS);
 
-  const paramBuf = new ArrayBuffer(64);
+  const paramSize = law ? 64 + 4 * LAW_VALUES : 64;
+  const paramBuf = new ArrayBuffer(paramSize);
   const pu = new Uint32Array(paramBuf), pf = new Float32Array(paramBuf);
   pu[0] = n; pu[1] = G; pu[2] = K; pu[3] = nCells;
   pu[10] = NEAR_CAP; pu[12] = SPRING_CHUNK; pu[13] = Math.max(1, Math.floor(n / 1000));
   pu[14] = nChunks; pu[15] = pyrSize;
-  const params = buf(64, GPUBufferUsage.UNIFORM | CD);
+  const params = buf(paramSize, GPUBufferUsage.UNIFORM | CD);
   const nbU = upload(new Uint32Array([nBlocks, 0, 0, 0]), GPUBufferUsage.UNIFORM | CD);
   const fireU = upload(new Uint32Array([fireGroups, 0, 0, 0]), GPUBufferUsage.UNIFORM | CD);
 
@@ -773,7 +822,13 @@ export function createGridEngine(device, { n, edges, init, mass }) {
       pf[4] = s.gravity; pf[5] = s.springLength; pf[6] = s.springCoefficient; pf[7] = s.dragCoefficient;
       pf[8] = s.timeStep; pf[9] = s.maxVelocity; pu[11] = s.integrator === 'fire' ? 1 : 0;
       fireMode = pu[11] === 1;
+      if (law) law.writeValues(pf, 16);
       device.queue.writeBuffer(params, 0, paramBuf);
+    },
+    // After law.update(): the law's numbers for the next steps
+    setLawValues() {
+      law.writeValues(pf, 16);
+      device.queue.writeBuffer(params, 64, paramBuf, 64);
     },
     resetFire,
     // Encodes `count` steps into one compute pass (or several encoders when count is large).
@@ -802,4 +857,11 @@ export function createGridEngine(device, { n, edges, init, mass }) {
     boxBuffer: boxB,
     destroy() { for (const b of owned) b.destroy(); },
   };
+}
+
+// For checks: the WGSL of every shader for a law (null for 1/r^2)
+export function shaderCode(law = null) {
+  const code = Object.assign({}, SHADERS);
+  for (const [name, make] of Object.entries(LAW_SHADERS)) code[name] = make(law);
+  return code;
 }

@@ -15,6 +15,7 @@
 // the initial positions, so f32 keeps its precision when the whole graph sits far from (0, 0).
 import { createGridEngine } from './gridEngine.js';
 import { createSmallEngine, smallEngineFits } from './smallEngine.js';
+import createRepulsionLaw from '../../lib/repulsionLaw.js';
 
 const DEFAULT_SETTINGS = {
   timeStep: 0.5,
@@ -84,7 +85,9 @@ function watchDevice(device) {
  * Creates a GPU layout for an ngraph.graph instance.
  *
  * options.settings: timeStep, springLength, springCoefficient, dragCoefficient, gravity,
- *   maxVelocity (4), integrator ('euler' | 'fire')
+ *   maxVelocity (4), integrator ('euler' | 'fire'), repulsionLaw (as in the library, e.g.
+ *   'exp(-r / L) / r^2' or {force, params, range}; compiled into the shaders, so it is read
+ *   once, but its parameters are read again on every step() call)
  * options.getInitialPosition(nodeId) -> {x, y}; nodes without one get a deterministic spot.
  */
 export function createGpuLayout(device, graph, options = {}) {
@@ -92,6 +95,22 @@ export function createGpuLayout(device, graph, options = {}) {
   const errorsAtStart = deviceInfo.errors;
   const settings = Object.assign({}, DEFAULT_SETTINGS);
   mergeSettings(settings, options.settings);
+  let stepsSubmitted = 0;
+
+  // A repulsion law other than 1/r^2. Its parameter functions get a stand-in for the library's
+  // simulator: settings, unit() and iteration().
+  let law = options.settings && options.settings.repulsionLaw;
+  law = law ? (typeof law.emitWGSL === 'function' ? law : createRepulsionLaw(law)) : null;
+  if (law && law.isDefault) law = null;
+  const lawContext = {
+    settings: null,
+    unit: () => (settings.springLength > 1e-3 ? settings.springLength : 1e-3),
+    iteration: () => stepsSubmitted,
+  };
+  function updateLaw() {
+    lawContext.settings = Object.assign({ dimensions: 2 }, settings);
+    law.update(lawContext);
+  }
 
   // Node ids -> user index (graph.forEachNode order)
   const ids = [];
@@ -148,7 +167,8 @@ export function createGpuLayout(device, graph, options = {}) {
   if (n > 0) {
     device.pushErrorScope('validation');
     device.pushErrorScope('out-of-memory');
-    engine = (useSmall ? createSmallEngine : createGridEngine)(device, { n, edges, init, mass });
+    engine = (useSmall ? createSmallEngine : createGridEngine)(device, { n, edges, init, mass, law });
+    if (law) updateLaw();
     engine.setParams(settings);
     const report = e => {
       if (!e) return;
@@ -184,7 +204,6 @@ export function createGpuLayout(device, graph, options = {}) {
   }
 
   let disposed = false;
-  let stepsSubmitted = 0;
   let readbackSerial = 0;      // serial of the latest readback that was submitted
   let lastReadbackSteps = 0;   // stepsSubmitted when that readback was submitted
   let appliedSerial = 0;       // serial of the latest readback copied into the mirror
@@ -217,6 +236,7 @@ export function createGpuLayout(device, graph, options = {}) {
     if (!(count > 0)) return;
     const rb = freeReadbacks.pop();
     const withTs = !!rb && hasTimestamps;
+    if (law) { updateLaw(); engine.setLawValues(); }
     engine.run(count, withTs ? { querySet } : null, rb ? enc => {
       enc.copyBufferToBuffer(engine.pos, 0, rb.buffer, 0, n * 8);
       if (withTs) {
@@ -329,6 +349,7 @@ export function createGpuLayout(device, graph, options = {}) {
     const wasFire = settings.integrator === 'fire';
     mergeSettings(settings, partial);
     if (!engine) return;
+    if (law) updateLaw();
     engine.setParams(settings);
     if (settings.integrator === 'fire' && !wasFire) engine.resetFire();
   }

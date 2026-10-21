@@ -30,6 +30,12 @@ if (device) {
 }
 ```
 
+Repulsion is 1/r^2 by default, as in the library. `settings.repulsionLaw` takes any law the
+library's `repulsionLaw` takes (say `'exp(-r / L) / r^2'` or `{force, params, range}`) and compiles
+it into the shaders, so a new law costs only its arithmetic. The law is read when the layout is
+created; its parameters are read again on every `step()` call. Laws with custom JS `functions`
+run on the CPU only.
+
 The layout also has `setNodePosition(id, x, y)`, `pinNode(id, isPinned)`, `getGraphRect()`,
 `updateSettings(partial)`, `getStats()` and `dispose()`. `await layout.flush()` waits until
 positions include every step queued so far.
