@@ -288,3 +288,65 @@ test('layouts can use formulas', function (t) {
   t.ok(Number.isFinite(rect.min_x) && rect.max_x > rect.min_x, 'the graph spreads');
   t.end();
 });
+
+test('vectors: dot, length, choices and scaling', function (t) {
+  var sim = makeSimulator({ dimensions: 3 }, 6);
+  ['clear', 'repulsion', 'drag', 'springs', 'integrate'].forEach(function (name) { sim.removeStage(name); });
+  sim.store.define('size');
+  sim.store.define('flat');
+  sim.store.define('kick', Float64Array, 3);
+  sim.addNodeFormula('vectors', {
+    formula: [
+      'size = length(pos)',
+      'flat = dot(pos, pos) - size^2',
+      'v = size > 10 ? -pos : pos * 2',
+      'v /= 2',
+      'kick = v',
+      'kick *= 3'
+    ].join('; ')
+  });
+  sim.step();
+  var pos = sim.store.pos, size = sim.store.size, kick = sim.store.kick;
+  for (var i = 0; i < 6; ++i) {
+    var p = [pos[3 * i], pos[3 * i + 1], pos[3 * i + 2]];
+    var expected = Math.sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+    t.ok(Math.abs(size[i] - expected) < 1e-12, 'length of body ' + i);
+    t.ok(Math.abs(sim.store.flat[i]) < 1e-9, 'dot(pos, pos) is length^2');
+    var scale = expected > 10 ? -1.5 : 3;
+    t.ok(Math.abs(kick[3 * i + 2] - scale * p[2]) < 1e-12, 'choice between vectors, then scaled');
+  }
+  t.throws(function () { sim.addNodeFormula('bad', { formula: 'kick += 1' }); }, /vector but gets a number/);
+  t.throws(function () { sim.addNodeFormula('bad2', { formula: 'size = 1 / pos' }); }, /divide by a vector/);
+  t.throws(function () { sim.addNodeFormula('bad3', { formula: 'size = pos > 1 ? 1 : 0' }); }, /vector is used as a number/);
+  t.end();
+});
+
+test('formula errors name the stage', function (t) {
+  var sim = makeSimulator({ dimensions: 2 }, 3);
+  t.throws(function () { sim.addNodeFormula('mine', { formula: 'mass = nothing' }); }, /^mine: Unknown name nothing/);
+  t.throws(function () { sim.addNodeFormula('empty', { formula: ' ; ' }); }, /empty/);
+  t.throws(function () { sim.addNodeFormula('noFormula', {}); }, /needs a `formula`/);
+  t.throws(function () { sim.addPairFormula('noRadius', { formula: 'push = 1' }); }, /needs a radius/);
+  t.throws(function () { sim.addSum('nothing', { formula: 'mass = 1' }); }, /mass cannot be assigned/, 'sums only read');
+  t.throws(function () { sim.addSum('badReduce', { formula: 'mass', reduce: 'mean' }); }, /sum, min or max/);
+  t.throws(function () { sim.addSum('badOver', { formula: 'mass', over: 'pairs' }); }, /over nodes or links/);
+  t.throws(function () { sim.addSum('badGroup', { formula: 'mass', group: 'nope' }); }, /no body column named nope/);
+  t.throws(function () { sim.addStage('x', function () {}, { replace: 'nope' }); }, /No stage named nope/);
+  t.end();
+});
+
+test('link formulas read and write link columns and add into both ends', function (t) {
+  var sim = makeSimulator({ dimensions: 2 }, 8);
+  sim.springStore.define('seen');
+  sim.store.define('linkCount');
+  sim.addLinkFormula('count', { formula: 'seen = seen + 1; linkCount_i += 1; linkCount_j += 1; pull = 0' });
+  sim.step();
+  sim.step();
+  t.equal(sim.springStore.seen[0], 2, 'link columns keep their values');
+  for (var i = 0; i < sim.store.n; ++i) t.equal(sim.store.linkCount[i], sim.store.degree[i], 'counts start at 0 every pass');
+  sim.addSum('links', { formula: '1', over: 'links' });
+  sim.addSum('total', { formula: 'linkCount' });
+  sim.step();
+  t.equal(sim.sums().total.value[0], 2 * sim.sums().links.value[0], 'each link has two ends');
+  t.end();
+});
