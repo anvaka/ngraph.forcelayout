@@ -41,11 +41,16 @@ dual tree (the fade costs one exp() per pair); both trees and any number of dime
     if (!(fadeInSprings > 0)) return null;
 
     // The law is compiled into both trees; L is read every step, so it follows the spring length.
+    // A spring length of 0 makes L infinite, which is the stock 1/r^2; an L too small to divide
+    // by (e.g. 1e-320) leaves no push at all.
     const simulator = layout.simulator;
     const previousLaw = simulator.repulsionLaw().spec;
     simulator.repulsionLaw({
       force: 'exp(-r / L) / r^2',
-      params: { L: sim => fadeInSprings * sim.unit() }
+      params: { L: sim => {
+        const L = fadeInSprings * sim.springLength();
+        return L > 0 ? Math.max(L, 1e-300) : Infinity;
+      } }
     });
     return { dispose() { simulator.repulsionLaw(previousLaw); } };
   },

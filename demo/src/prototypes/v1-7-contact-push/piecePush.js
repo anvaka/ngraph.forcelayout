@@ -196,11 +196,11 @@ export default function createPiecePush(simulator, options) {
     const pos = store.pos;
     const grid = simulator.neighbors(reach);
     if (start[largest + 1] - start[largest] < store.n / 4) {
-      // Only small pieces: every close pair once. (The grid skips pairs on the same spot, which
-      // a layout of separate pieces practically never has.)
+      // Only small pieces: every close pair once
       grid.forEachPair(reach, (i, j, r) => {
         const pa = pieceOf[i], pb = pieceOf[j];
         if (pa === pb) return;
+        if (r === 0) { pushFromSameSpot(pa, pb, reach, stiffness); return; }
         const f = stiffness * (reach - r) / r;
         for (let k = 0; k < D; k++) {
           const dk = pos[i * D + k] - pos[j * D + k];

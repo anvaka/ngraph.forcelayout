@@ -83,7 +83,8 @@ crossings, and steps take 1.1–1.4× as long. It works in any number of dimensi
         }
         pushStiffness[i] += 2 * k;
         pushStiffness[j] += 2 * k;
-        return f / r;
+        // On the same spot (r = 0) the simulator pushes along a fixed axis by what we return
+        return f / (r || 1);
       }
     });
     // Reads the settings every step, so panel changes apply live

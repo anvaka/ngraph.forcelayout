@@ -27,7 +27,8 @@ export default function addCrowdingCost(simulator, name, options) {
       const weight = c * (1 / mass[i] + 1 / mass[j]);
       crowdingStiffness[i] += weight * pairStiffness;
       crowdingStiffness[j] += weight * pairStiffness;
-      return weight * 2 * (1 - r * inv) * inv / r;
+      // On the same spot (r = 0) the simulator pushes along a fixed axis by what we return
+      return weight * 2 * (1 - r * inv) * inv / (r || 1);
     }
   });
   // Reads the spring length every step, so panel changes apply live
