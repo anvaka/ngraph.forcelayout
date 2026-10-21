@@ -9,7 +9,9 @@ the README):
 * Every step runs named stages (`clear`, `repulsion`, `drag`, `springs`, `integrate`) that can
   be added, replaced, removed or wrapped.
 * `repulsionLaw` - the push between two nodes can be any expression of the distance, e.g.
-  `'exp(-r / L) / r^2'`. It is compiled into both the quad tree and the dual tree.
+  `'exp(-r / L) / r^2'`. It is compiled into both the quad tree and the dual tree. The 2D only
+  bundle (`dist/ngraph.forcelayout2d.js`) has pre-generated code for 1/r^2 only, and throws for
+  other laws.
 * `repulsionCharge` / `nodeCharge` - nodes can push with a charge other than their mass, and
   `repulsionSensitivity` - feel the push with yet another number.
 * `simulator.addPairRule()` - forces between close nodes, found with one shared grid.
