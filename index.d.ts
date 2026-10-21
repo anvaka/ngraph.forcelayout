@@ -83,7 +83,8 @@ declare module "ngraph.forcelayout" {
     radius: number | ((simulator: PhysicsSimulator) => number);
     /**
      * Returns `s`; the force `s * (pos_i - pos_j)` is added to body `i`, and the opposite one
-     * to body `j` (unless the rule is not symmetric).
+     * to body `j` (unless the rule is not symmetric). Bodies on the same spot get r = 0, and
+     * then the force is `s` along an axis picked from i and j (a non-finite `s` is skipped).
      */
     rule(i: number, j: number, r: number, store: BodyStore): number;
     /** false: the rule is asked for (i, j) and (j, i), and each answer moves the first body only */
@@ -94,6 +95,7 @@ declare module "ngraph.forcelayout" {
    * Grid of bodies for finding close pairs, in any number of dimensions.
    */
   export interface NeighborGrid {
+    /** Every pair closer than `radius` once, with i < j; bodies on the same spot have r = 0 */
     forEachPair(radius: number, callback: (i: number, j: number, r: number) => void): void;
     forEachNeighbor(i: number, radius: number, callback: (j: number, r: number) => void): void;
     cellSize(): number;

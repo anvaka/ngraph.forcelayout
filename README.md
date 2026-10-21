@@ -263,7 +263,9 @@ simulator.addPairRule('personalSpace', {
 ```
 
 With `symmetric: false` the rule is asked for both `(i, j)` and `(j, i)` and only moves the
-first body. `simulator.neighbors(cellSize)` gives the grid to stages that need their own
+first body. Two bodies on the same spot get `r = 0`, and `s` is then the size of their push
+along an axis picked from `i` and `j`. A rule that divides by `r`, as above, gives no finite `s`
+there and leaves them alone. `simulator.neighbors(cellSize)` gives the grid to stages that need their own
 neighbor queries.
 
 ## Space occupied by graph

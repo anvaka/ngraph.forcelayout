@@ -33,8 +33,10 @@ if (device) {
 Repulsion is 1/r^2 by default, as in the library. `settings.repulsionLaw` takes any law the
 library's `repulsionLaw` takes (say `'exp(-r / L) / r^2'` or `{force, params, range}`) and compiles
 it into the shaders, so a new law costs only its arithmetic. The law is read when the layout is
-created; its parameters are read again on every `step()` call. Laws with custom JS `functions`
-run on the CPU only.
+created; its parameters are read again on every `step()` call. Parameter functions get a stand-in
+for the simulator with `settings`, `unit()`, `iteration()` and getters such as `springLength()`.
+Laws with custom JS `functions`, or with more than 16 numbers, run on the CPU only: the GPU
+layout throws for them when it is created.
 
 The layout also has `setNodePosition(id, x, y)`, `pinNode(id, isPinned)`, `getGraphRect()`,
 `updateSettings(partial)`, `getStats()` and `dispose()`. `await layout.flush()` waits until

@@ -8,6 +8,15 @@ test('it exposes simulator', function(t) {
   t.end();
 });
 
+test('node charge must be a number', function (t) {
+  var g = createGraph();
+  g.addLink(1, 2);
+  t.throws(function () {
+    createLayout(g, { nodeCharge: function (id) { return id === 1 ? 2 : undefined; } });
+  }, /charge should be a number/);
+  t.end();
+});
+
 test('it returns spring', function(t) {
   var g = createGraph();
   var layout = createLayout(g);

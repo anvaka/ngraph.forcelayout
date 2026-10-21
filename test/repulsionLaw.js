@@ -204,6 +204,85 @@ test('pair rules act on close pairs only', function (t) {
   t.end();
 });
 
+test('pair rules push bodies on the same spot apart', function (t) {
+  [2, 3].forEach(function (dimensions) {
+    var simulator = createSimulator({ dimensions: dimensions });
+    simulator.addBodyAt({ x: 1, y: 1, z: 1 });
+    simulator.addBodyAt({ x: 1, y: 1, z: 1 });
+    var distances = [];
+    simulator.addPairRule('apart', {
+      radius: 1,
+      rule: function (i, j, r) { distances.push(r); return r > 0 ? 2 / r : 2; }
+    });
+    runStages(simulator, ['clear', 'pairRules']);
+    t.same(distances, [0], dimensions + 'D: the pair is seen at r = 0');
+    var force = simulator.store.force;
+    var axes = [];
+    for (var k = 0; k < dimensions; ++k) {
+      if (force[k] !== 0) axes.push(k);
+      t.equal(force[k], -force[dimensions + k], 'opposite pushes');
+    }
+    t.equal(axes.length, 1, 'along one axis');
+    t.equal(Math.abs(force[axes[0]]), 2, 'by s');
+
+    simulator.removePairRule('apart');
+    simulator.addPairRule('dividesByR', { radius: 1, rule: function (i, j, r) { return 1 / r; } });
+    runStages(simulator, ['clear', 'pairRules']);
+    t.same(Array.from(force.subarray(0, 2 * dimensions)), new Array(2 * dimensions).fill(0), 'no finite push leaves them alone');
+  });
+  t.end();
+});
+
+test('pair rules work without the springs stage', function (t) {
+  var simulator = createSimulator();
+  simulator.removeStage('springs');
+  simulator.addPairRule('contact', { radius: 1, rule: function () { return 0; } });
+  t.same(simulator.stages(), ['clear', 'repulsion', 'drag', 'pairRules', 'integrate']);
+  t.end();
+});
+
+test('law parameters can have any name', function (t) {
+  ['q', 'h0', 'h1', 'lawH0', 'range'].forEach(function (name) {
+    var params = {};
+    params[name] = 2;
+    var law = createRepulsionLaw({ force: 'exp(-r / ' + name + ') * ' + name + ' / r^2', params: params, range: 10 });
+    law.update({ settings: { dimensions: 2 } });
+    var code = law.prologue('values') + ' var k1; ' + law.emit(2, 'r', 'k1') + ' return k1;';
+    var k1 = new Function('r', 'values', 'lawFunctions', code)(3, law.values, law.functions);
+    var expected = Math.exp(-3 / 2) * 2 / 9 / 3;
+    t.ok(Math.abs(k1 - expected) < 1e-15 * expected, name + ': ' + k1);
+    t.equal(law.values[name], 2, name + ' keeps its value');
+  });
+  t.end();
+});
+
+test('a range of 0 pushes nothing, even with 1/r^2', function (t) {
+  t.notOk(createRepulsionLaw({ force: 'r^-2', range: 0 }).isDefault, 'not the stock law');
+  ['quadtree', 'dualtree'].forEach(function (nbody) {
+    var simulator = createSimulator({ nbody: nbody, repulsionLaw: { force: 'r^-2', range: 0 } });
+    simulator.addBodyAt({ x: 0, y: 0 });
+    simulator.addBodyAt({ x: 1, y: 0 });
+    runStages(simulator, ['clear', 'repulsion']);
+    t.equal(simulator.store.force[0], 0, nbody);
+  });
+  t.end();
+});
+
+test('law code reads every number it computes', function (t) {
+  ['exp(-r / L) / r^2', '-r^-2', '(1 + r / L) * exp(-r / L) / r^2', 'sqrt(1 + L * r * r) / r^2'].forEach(function (force) {
+    var law = createRepulsionLaw({ force: force, params: { L: 2 } });
+    [law.emit(2, 'r', 'k1'), law.emit(2, 'r', 'k1', 'k2'), law.emitWGSL(2, 'r', 'k1', 'k2')].forEach(function (code) {
+      var declared = code.match(/(var|let) k1_\d+ /g) || [];
+      declared.forEach(function (declaration) {
+        var name = declaration.split(' ')[1];
+        var after = code.slice(code.indexOf(declaration) + declaration.length);
+        t.ok(new RegExp('\\b' + name + '\\b').test(after), force + ': ' + name + ' is read');
+      });
+    });
+  });
+  t.end();
+});
+
 test('unit never reaches zero', function (t) {
   var simulator = createSimulator({ springLength: 30 });
   t.equal(simulator.unit(), 30);
@@ -269,7 +348,7 @@ function exactForces(simulator, spec) {
         r2 += d * d;
       }
       var r = Math.sqrt(r2);
-      if (r > law.values.range) continue;
+      if (r > law.values.$range) continue;
       var v = gravity * sensitivity[i] * charge[j] * kernel(r, law.values, law.functions);
       for (k = 0; k < D; ++k) forces[i * D + k] += v * (store.pos[j * D + k] - store.pos[i * D + k]);
     }

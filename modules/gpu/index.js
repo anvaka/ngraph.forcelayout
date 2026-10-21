@@ -13,7 +13,7 @@
 // Graphs up to 1024 nodes run on an exact single-workgroup kernel (smallEngine.js), larger ones on
 // a grid pyramid (gridEngine.js). Positions are uploaded relative to an origin near the median of
 // the initial positions, so f32 keeps its precision when the whole graph sits far from (0, 0).
-import { createGridEngine } from './gridEngine.js';
+import { createGridEngine, LAW_VALUES } from './gridEngine.js';
 import { createSmallEngine, smallEngineFits } from './smallEngine.js';
 import createRepulsionLaw from '../../lib/repulsionLaw.js';
 
@@ -98,7 +98,7 @@ export function createGpuLayout(device, graph, options = {}) {
   let stepsSubmitted = 0;
 
   // A repulsion law other than 1/r^2. Its parameter functions get a stand-in for the library's
-  // simulator: settings, unit() and iteration().
+  // simulator: settings, unit(), iteration() and getters such as springLength().
   let law = options.settings && options.settings.repulsionLaw;
   law = law ? (typeof law.emitWGSL === 'function' ? law : createRepulsionLaw(law)) : null;
   if (law && law.isDefault) law = null;
@@ -107,9 +107,16 @@ export function createGpuLayout(device, graph, options = {}) {
     unit: () => (settings.springLength > 1e-3 ? settings.springLength : 1e-3),
     iteration: () => stepsSubmitted,
   };
+  Object.keys(DEFAULT_SETTINGS).forEach(key => { lawContext[key] = () => settings[key]; });
   function updateLaw() {
     lawContext.settings = Object.assign({ dimensions: 2 }, settings);
     law.update(lawContext);
+  }
+  if (law) {
+    // A law the GPU cannot run throws here, before anything is created on the device
+    law.emitWGSL(2, 'r', 'k1', 'k2');
+    if (law.valueCount > LAW_VALUES) throw new Error(`The GPU takes laws with up to ${LAW_VALUES} numbers`);
+    updateLaw();
   }
 
   // Node ids -> user index (graph.forEachNode order)
@@ -165,18 +172,20 @@ export function createGpuLayout(device, graph, options = {}) {
   let engine = null;
   let creationError = null;
   if (n > 0) {
-    device.pushErrorScope('validation');
-    device.pushErrorScope('out-of-memory');
-    engine = (useSmall ? createSmallEngine : createGridEngine)(device, { n, edges, init, mass, law });
-    if (law) updateLaw();
-    engine.setParams(settings);
     const report = e => {
       if (!e) return;
       creationError = e.message;
       console.error('WebGPU layout setup failed:', e.message);
     };
-    device.popErrorScope().then(report);
-    device.popErrorScope().then(report);
+    device.pushErrorScope('validation');
+    device.pushErrorScope('out-of-memory');
+    try {
+      engine = (useSmall ? createSmallEngine : createGridEngine)(device, { n, edges, init, mass, law });
+      engine.setParams(settings);
+    } finally {
+      device.popErrorScope().then(report);
+      device.popErrorScope().then(report);
+    }
   }
 
   // CPU mirror (internal order, relative to the origin) and stable {x, y} objects per node
