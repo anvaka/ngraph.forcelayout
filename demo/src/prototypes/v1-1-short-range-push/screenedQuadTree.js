@@ -12,7 +12,9 @@ import generateQuadTree from '../../../../lib/codeGenerators/generateQuadTree.js
 const BODY_FORCE = 'v = gravity * body.mass * sourceBody.mass / (r * r * r);';
 const CELL_FORCE = 'v = gravity * node.mass * sourceBody.mass / (r * r * r);';
 const OPEN_TEST = 'if ((node.max_x - node.min_x) / r < theta) {';
-const SCREEN = 'if (screen.range > 0) { var q = r / screen.range; v *= (1 + q) * Math.exp(-q); }';
+// q is Infinity only when the range is too small to divide by (e.g. 1e-320): the factor is 0
+// there, not Infinity * 0 = NaN.
+const SCREEN = 'if (screen.range > 0) { var q = r / screen.range; v *= q < Infinity ? (1 + q) * Math.exp(-q) : 0; }';
 const SKIP_FAR = 'if (screen.range > 0 && r - (node.max_x - node.min_x) * 1.4143 > screen.cutoff) continue;';
 
 /**
