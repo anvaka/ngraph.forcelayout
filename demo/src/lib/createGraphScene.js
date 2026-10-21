@@ -7,7 +7,7 @@ import createForceLayout from './createForceLayout';
 import findLargestComponent from './findLargestComponent';
 // Add-ons from modules/ in this repository (see vite.config.js), not part of ngraph.forcelayout
 import placeNodes from 'ngraph.forcelayout.pivot';
-import {initWebGPU, createGpuLayout} from 'ngraph.forcelayout.gpu';
+import {initWebGPU, createGpuLayout, gpuBackend} from 'ngraph.forcelayout.gpu';
 import createGraph from 'ngraph.graph';
 
 const NODE_COLOR = 0x90f8fcff;
@@ -25,6 +25,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   // positions for the moment we switch back to CPU.
   let backend = 'cpu';
   let gpuDevice, gpuLayout;
+  // Why the GPU runs the layout without the idea (empty when it runs the idea too)
+  let ideaOffGpu = '';
 
   let fixedViewBox = false;
   let isRunning = false;
@@ -107,7 +109,11 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   // New values for the same idea: it carries on from the current drawing instead of starting over
   function setPrototypeParams(params) {
     prototypeParams = {...params};
-    if (graph && prototype && !gpuLayout) continueLayout(layoutSettings.dimensions);
+    if (!graph || !prototype) return;
+    let onGpu = !!gpuLayout;
+    stopGpuLayout(true);
+    continueLayout(layoutSettings.dimensions);
+    if (onGpu) startGpuLayout();
   }
 
   // `steps` tells the idea how many steps the drawing has already run (0 for a fresh start)
@@ -165,9 +171,23 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     return backend;
   }
 
+  // The GPU runs the idea too when the module can run all of the simulator the idea changed
+  // (today that is a repulsion law); otherwise it runs the layout without the idea.
   function startGpuLayout() {
+    let simulator = layout.simulator;
+    let plan = simulator.plan(gpuBackend);
+    let settings = layoutSettings;
+    if (plan.runs) {
+      settings = {...layoutSettings, repulsionLaw: simulator.repulsionLaw().spec};
+      ideaOffGpu = '';
+    } else {
+      // Each kind of refusal once, without the stage names
+      let reasons = plan.stages.filter(stage => !stage.runs).map(stage => stage.reason);
+      reasons = gpuBackend.checkSettings(simulator).concat(reasons);
+      ideaOffGpu = Array.from(new Set(reasons)).join('; ');
+    }
     gpuLayout = createGpuLayout(gpuDevice, graph, {
-      settings: layoutSettings,
+      settings,
       getInitialPosition: nodeId => layout.getNodePosition(nodeId)
     });
   }
@@ -182,6 +202,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     }
     gpuLayout.dispose();
     gpuLayout = null;
+    ideaOffGpu = '';
   }
 
   function getStats() {
@@ -192,7 +213,9 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
       steps: stats.steps,
       msPerStep: gpuLayout ? gpuLayout.getStats().msPerStep : stats.msPerStep(),
       placement: placementChoice,
-      canFinishPrototype: !!(prototypeControl && prototypeControl.finish)
+      // the final step works on the CPU layout
+      canFinishPrototype: !gpuLayout && !!(prototypeControl && prototypeControl.finish),
+      ideaOffGpu: prototype ? ideaOffGpu : ''
     };
   }
 
@@ -356,8 +379,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     //   if (pos.c6 < minB) minB = pos.c6;
     //   if (pos.c6 > maxB) maxB = pos.c6;
     // });
-    // A prototype may color nodes, e.g. by the groups it found (not on WebGPU, which ignores it)
-    let nodeColor = !gpuLayout && prototypeControl && prototypeControl.nodeColor;
+    // A prototype may color nodes, e.g. by the groups it found (also on WebGPU, if it runs there)
+    let nodeColor = !ideaOffGpu && prototypeControl && prototypeControl.nodeColor;
 
     graph.forEachNode(node => {
       let pos = layout.getNodePosition(node.id);

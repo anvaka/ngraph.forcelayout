@@ -12,14 +12,14 @@
         <a href="#" @click.prevent='restart' class='btn restart' title='Start over from initial positions'>Reset</a>
       </div>
       <div class='buttons idea-bar' v-if='prototypes.length'>
-        <label class='graph-picker' :title="onGpu ? 'Prototypes run on the CPU only.' : 'Layout idea to try'">
-          <select v-model='prototypeId' :disabled='onGpu'>
+        <label class='graph-picker' title='Layout idea to try'>
+          <select v-model='prototypeId'>
             <option v-for='option in prototypeOptions' :key='option.value' :value='option.value'>{{option.label}}</option>
           </select>
         </label>
-        <label class='idea-toggle' :class='{inactive: !prototype || onGpu}'
+        <label class='idea-toggle' :class='{inactive: !prototype}'
           title='Turn the idea off and on: the layout restarts from the same start, so you can compare'>
-          <input type='checkbox' v-model='prototypeOn' :disabled='!prototype || onGpu'> on
+          <input type='checkbox' v-model='prototypeOn' :disabled='!prototype'> on
         </label>
         <help-icon @show='aboutOpen = !aboutOpen' :class='{open: aboutOpen}'></help-icon>
       </div>
@@ -38,6 +38,7 @@
           {{stats.nodes.toLocaleString()}} nodes, {{stats.links.toLocaleString()}} links<span v-if='stats.placement'>, {{stats.placement}} start</span><br>
           {{stats.steps.toLocaleString()}} steps<span v-if='stats.msPerStep'>, <span class='number'>{{formatMs(stats.msPerStep)}}</span> ms/step</span>
           on {{stats.backend === 'webgpu' ? 'WebGPU' : 'CPU'}}
+          <div v-if='stats.ideaOffGpu' class='off-gpu'>Without the idea: {{stats.ideaOffGpu}}.</div>
         </div>
         <a href='#' @click.prevent='settingsOpen = !settingsOpen' class='toggle-settings'>Settings {{settingsOpen ? '▴' : '▾'}}</a>
       </div>
@@ -128,13 +129,14 @@
         ngraph.forcelayout itself always runs on the CPU.
       </input-select>
 
-      <template v-if='prototype && !onGpu'>
+      <template v-if='prototype'>
         <div class='section'>
           Idea settings
           <small><a href='https://github.com/anvaka/ngraph.forcelayout/tree/main/demo/src/prototypes'>ideas to try, not part of the library</a></small>
         </div>
         <div class='prototype'>
           <div v-if='!prototypeOn' class='off-note'>The idea is off: turn it on at the top to use these.</div>
+          <div v-else-if='stats && stats.ideaOffGpu' class='off-note'>Not used on WebGPU: {{stats.ideaOffGpu}}.</div>
           <div v-if='prototype.tryGraphs' class='try'>
             Try on:
             <a href='#' v-for='name in prototype.tryGraphs' :key='name' @click.prevent='selectedGraph = name'>{{shortGraphName(name)}}</a>
@@ -596,6 +598,10 @@ a {
   border-top: 1px solid;
   .number {
     font-size: 12px;
+  }
+  .off-gpu {
+    margin-top: 2px;
+    opacity: 0.7;
   }
 }
 .toggle-settings {

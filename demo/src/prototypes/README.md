@@ -58,4 +58,6 @@ repulsion law, charges, columns of your own on the bodies, and rules for close p
 forces over `store.pos` and `store.force` (axis `k` of body `i` is at `i * D + k`) and they work
 in any number of dimensions.
 
-Prototypes run on the CPU only; the WebGPU backend ignores them.
+On WebGPU the demo asks `simulator.plan(gpuBackend)` whether the GPU module can run what an idea
+changed. If it can (today, ideas that only change the repulsion law), the GPU runs the idea;
+otherwise the GPU runs the layout without it and the demo says why.
