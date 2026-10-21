@@ -235,10 +235,11 @@ layout.simulator.repulsionLaw('r^(1 - D)'); // how charges push in D dimensions
 ```
 
 The expression is compiled into both the quad tree and the dual tree (its derivative, which
-the dual tree needs, is derived automatically), so a new law keeps all speed-ups. Expressions
-know `+ - * / ^`, `r`, `D` (number of dimensions), the law's parameters, and `exp`, `log`,
-`sqrt`, `abs`, `min`, `max`, `pow`, `tanh`, `sin`, `cos`. Other functions can be passed as
-`functions: { name: { value: fn, derivative: fn } }`.
+the dual tree needs, is derived automatically), so a new law keeps all speed-ups. A law is
+written in the formula language described below: besides `r` and its parameters it can use
+conditions (`r < L ? 1 / r^2 : 0`), named values (`'u = r / L; exp(-u) / r^2'`), the built in
+values and lookup tables (`tables: { T: { from, to, values } }`). JS functions can be passed as
+`functions: { name: { value: fn, derivative: fn } }`, but they keep the law on the CPU.
 
 A law that fades fast leaves mostly the pushes of near nodes, which the trees approximate less
 well: in 3D, `theta: 0.5` gives such a law the accuracy that 1/r^2 has at the default 0.8.
@@ -267,6 +268,74 @@ first body. Two bodies on the same spot get `r = 0`, and `s` is then the size of
 along an axis picked from `i` and `j`. A rule that divides by `r`, as above, gives no finite `s`
 there and leaves them alone. `simulator.neighbors(cellSize)` gives the grid to stages that need their own
 neighbor queries.
+
+### Formulas
+
+Most new physics is "for every node", "for every link" or "for every close pair, do this
+arithmetic". Written as a formula, the simulator owns the loop and compiles the formula into it,
+so it costs what its arithmetic costs, works in any dimension, and other engines can run the
+same text (`plan()` below tells which):
+
+``` js
+// A pull of every node towards the center of mass
+simulator.addSum('total', { formula: 'mass' });
+simulator.addSum('weighted', { formula: 'mass * pos' });
+simulator.addNodeFormula('pullToCenter', {
+  formula: 'force += -k * mass * (pos - weighted / total)',
+  params: { k: 0.01 }
+});
+
+// Springs that stiffen when stretched past 3 spring lengths, in place of the stock springs
+simulator.addLinkFormula('stiffSprings', {
+  replace: 'springs',
+  formula: 'stretch = max(0, r - length) / (3 * length); pull = coefficient * (r - length) * (1 + stretch^2)'
+});
+
+// Close nodes push apart, and count how crowded they are
+simulator.store.define('crowd');
+simulator.addPairFormula('personalSpace', {
+  radius: 'h',
+  params: { h: function (simulator) { return simulator.unit(); } },
+  formula: 'w = 1 - r / h; crowd_i += w; crowd_j += w; push = 2 * w'
+});
+```
+
+A formula is a list of statements separated by `;`. It assigns named values (`w = ...`),
+columns, or the stage's output, and knows numbers, `+ - * / ^`, comparisons, `&& || !`,
+`c ? a : b` (also `select(c, a, b)`), and the functions `exp`, `log`, `sqrt`, `abs`, `sign`,
+`floor`, `ceil`, `round`, `tanh`, `sin`, `cos`, `min`, `max`, `pow`, `clamp(x, lo, hi)`, and
+`dot(a, b)`, `length(a)` for vectors. Columns of `D` numbers (`pos`, `velocity`, `force`) are
+vectors: they add, subtract, multiply or divide by numbers, and `*=` scales them. Every formula
+can read its `params` (numbers, or functions of the simulator read once per step), its lookup
+`tables`, the results of sums, and the built in values `D`, `pi`, `n` (number of bodies),
+`step` (steps done), `dt`, `unit`, and the settings `springLength`, `springCoefficient`,
+`gravity`, `dragCoefficient`, `theta`, `timeStep`, `maxVelocity`.
+
+* `addNodeFormula(name, options)` runs for every body and reads and assigns its columns by name.
+* `addLinkFormula(name, options)` runs for every link. It reads the distance `r`, the link's
+  `length` and `coefficient` (the settings when the link has none), its own columns
+  (`springStore.define()`), and the columns of its ends as `mass_i` (from) and `mass_j` (to). It
+  sets `pull`, which pulls the ends together (negative pushes them apart). The stock springs are
+  `pull = coefficient * (r - length)`, and with `replace: 'springs'` that formula gives exactly the
+  stock numbers, random nudges of links of length 0 included.
+* `addPairFormula(name, options)` runs for every pair closer than `radius` (a number, an
+  expression of the params, or a function). It reads `r` and the columns of both bodies and sets
+  `push`. With `symmetric: false` it runs for `(i, j)` and `(j, i)` and pushes only `i`. Bodies on
+  the same spot are pushed along an axis picked from `i` and `j`. It replaces a pair rule and is
+  faster: the pass takes about 0.7x the time of the same pair rule.
+* Link and pair formulas can add into body columns (`crowd_i += ...`). Such a column starts each
+  pass at 0, and later formulas read what the pass added up.
+* `addSum(name, options)` adds up a formula over all bodies (or links, with `over: 'links'`), or
+  takes its `reduce: 'min'` or `'max'`. With `group: 'column'` it keeps one result per group id;
+  formulas read that as `name[group]`. Place sums before the formulas that read them.
+* `addRepulsion(name, { law, charge, sensitivity })` adds another tree pass with its own law and
+  columns, e.g. a short push between leaves only.
+
+All of them take `before`, `after` or `replace` as stages do, and `removeStage(name)` removes
+them (a replaced stage comes back).
+
+`simulator.plan(backend)` tells which stages an engine can run, and why not: the WebGPU module
+in `modules/gpu` exports `gpuBackend` for it. JS stages and pair rules run on the CPU only.
 
 ## Space occupied by graph
 

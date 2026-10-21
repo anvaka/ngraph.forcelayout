@@ -17,6 +17,8 @@ import { createGridEngine, LAW_VALUES } from './gridEngine.js';
 import { createSmallEngine, smallEngineFits } from './smallEngine.js';
 import createRepulsionLaw from '../../lib/repulsionLaw.js';
 
+export { gpuBackend } from './backend.js';
+
 const DEFAULT_SETTINGS = {
   timeStep: 0.5,
   springLength: 10,

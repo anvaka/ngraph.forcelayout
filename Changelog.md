@@ -16,6 +16,14 @@ the README):
   `repulsionSensitivity` - feel the push with yet another number.
 * `simulator.addPairRule()` - forces between close nodes, found with one shared grid.
 * `simulator.unit()`, `simulator.iteration()`, `body.degree` and a `'topology'` event.
+* Formulas: `addNodeFormula()`, `addLinkFormula()`, `addPairFormula()` and `addSum()` compile
+  a formula into a loop the simulator owns, so it costs what its arithmetic costs and other
+  engines can run the same text. Laws are written in the same language, which now has
+  conditions, named values, lookup tables, `floor`/`ceil`/`round`/`sign`/`clamp`, and built in
+  values such as `dt`, `step` and `unit`.
+* `addRepulsion()` - more tree passes, each with its own law, charges and sensitivity.
+* `simulator.plan(backend)` - which stages an engine (such as the WebGPU module) can run, and
+  why not. Stages can `replace` another stage.
 
 Steps are 3-35% faster than in 3.3, and layouts are the same to the last bit.
 

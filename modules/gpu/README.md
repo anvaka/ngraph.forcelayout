@@ -38,6 +38,11 @@ for the simulator with `settings`, `unit()`, `iteration()` and getters such as `
 Laws with custom JS `functions`, or with more than 16 numbers, run on the CPU only: the GPU
 layout throws for them when it is created.
 
+`gpuBackend` tells which parts of a library simulator this module can run, before you switch:
+`layout.simulator.plan(gpuBackend)` returns `{runs, reasons, stages}`, with a reason for every
+stage it cannot run (formula stages, JavaScript stages, per-link spring lengths, charges other
+than the default mass, more than 2 dimensions, ...).
+
 The layout also has `setNodePosition(id, x, y)`, `pinNode(id, isPinned)`, `getGraphRect()`,
 `updateSettings(partial)`, `getStats()` and `dispose()`. `await layout.flush()` waits until
 positions include every step queued so far.
