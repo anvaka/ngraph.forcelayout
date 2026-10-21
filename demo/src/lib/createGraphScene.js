@@ -250,7 +250,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     detachPrototype();
     layout = createForceLayout(graph, layoutSettings)
     graph.forEachNode(node => {
-      let prevPos = prevLayout.getNodePosition(node.id);
+      // a plain {x, y, ...} copy: positions are views into the layout's arrays
+      let prevPos = prevLayout.getNodePosition(node.id).toJSON();
       let positions = Object.keys(prevPos).map(name => prevPos[name]);
       for (let i = previousDimensions; i < layoutSettings.dimensions; ++i) {
         // If new layout has more dimensions than the previous layout, fill those with random values:
