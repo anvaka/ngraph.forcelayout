@@ -5,13 +5,17 @@
 // With tau = 2 / (g1 + g2) this is the best single pass (smallest worst-case leftover) for the band
 // [g1, g2] of the spectrum of I - D^-1 A that holds the detail inside groups, while the bands below
 // it (the placement of the groups) shrink much less (Samarsky & Gulin, "Numerical Methods", ch. 2,
-// §4 eq. (12)-(13) and §5 eq. (20)-(21): the polynomial that is 1 at zero and smallest on [a, b]).
-// The degree-weighted centre of each piece does not move.
+// §4 eq. (12)-(13): the degree-1 case of the §5 polynomial that is 1 at zero and smallest on [a, b]).
+// Further passes repeat the same tau; that is not the best polynomial of higher degree, which would
+// change tau from pass to pass (§5 eq. (29)).
+// The degree-weighted centre of each piece does not move (exactly without leaves, nearly with them).
+// The placement of the groups does shrink a little each pass (by about tau * g, g below the gap).
 import { normalizedLaplacianSpectrum } from './spectrum.js';
 
 /**
  * Finds the scale of groups: a clear gap low in the spectrum. Returns null when there is none
- * (grids, trees, random graphs), in which case the touch-up does nothing.
+ * (grids, random graphs), in which case the touch-up does nothing. Trees and stars with many leaves
+ * often do show a gap (eigenvalue 1 repeats once per extra leaf); the detail ratio then leaves them alone.
  */
 export function findGroupBand(neighbors, { minWidth = 0.15, minRatio = 1.5, lanczosSteps = 120 } = {}) {
   const { values, max } = normalizedLaplacianSpectrum(neighbors, lanczosSteps);
@@ -94,7 +98,7 @@ export function smoothGroups(x, neighbors, band, { target = 0.15, maxPasses = 4,
       const r = detailRatio(current, neighbors, tau, keepLeaves);
       if (r <= target) break;
       const full = smoothPass(current, neighbors, tau, keepLeaves);
-      if (detailRatio(full, neighbors, tau, keepLeaves) > target || passes + 1 >= maxPasses) {
+      if (detailRatio(full, neighbors, tau, keepLeaves) > target) {
         current = full;
         passes += 1;
         continue;
