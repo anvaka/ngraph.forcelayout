@@ -1,7 +1,7 @@
 // Push fades slowly with distance (Debye screening). The library's repulsion between two nodes is
 // G m1 m2 / r^2 at any distance. Here it is multiplied by exp(-r / fade), with fade = a number of
 // spring lengths, so groups of nodes stop pushing each other once they are a few fade lengths
-// apart, while nearby nodes push exactly as before.
+// apart. Nearby nodes push almost as before: at one spring length, exp(-1/10) = 0.9 of it.
 import getVariableName from '../../../../lib/codeGenerators/getVariableName.js';
 import getFadingQuadTreeFactory from './fadingQuadTree.js';
 
@@ -10,29 +10,33 @@ export default {
   title: 'Push fades slowly with distance',
   author: 'v2-1 (Feynman Vol. II reader)',
   description: `
-<p><b>Problem.</b> On graphs with big hubs or one big piece, ngraph draws each group as a
-small dense blob, and leaves huge empty space between groups. Every group pushes on the others
-like one big charge, the sum of all its nodes, so the bigger the groups, the farther apart they
-end up. Zoom to fit then shrinks them to dots.</p>
-<p><b>Change.</b> A node's push now fades away with distance: it is the same as before up close,
-and dies out over about ten spring lengths. Far-apart groups stop pushing each other, so the
-few links between them pull them together, and the groups get the room on screen.</p>
-<p><b>Source.</b> Feynman, Vol. II, chapter 7-4: in salt water, each charged particle gathers a
-cloud of opposite charges that cancels its push beyond a short distance (Debye screening).</p>
-<p><b>Look for:</b> on starOfStars and megaStars, large stars with readable spokes filling the
-frame; on EVA, hubs as spoked suns instead of red clumps; grid20 should look the same.</p>
-<p><b>Gets worse:</b> big open loops (powerGrid) fill in, separate pieces (caterpillars) touch,
-and trees lose some white space between branches. Smaller <i>Fade distance</i> packs stars
-tighter but hurts trees more.</p>`,
-  tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: EVA', 'Benchmark: grid20'],
+<p><b>Problem.</b> On graphs with big hubs, ngraph draws each group as a small dense blob with
+wide empty space between groups: every group pushes the others like one big charge, the sum of
+all its nodes, so zoom to fit shrinks the groups to dots.</p>
+<p><b>Change.</b> A node's push now fades with distance: it is about 10% weaker at one spring
+length, and 2.7 times weaker for every <i>Fade distance</i> (10 spring lengths), so far-apart
+groups stop pushing each other and their few links pull them together.</p>
+<p><b>Source.</b> Feynman, Vol. II, chapter 7-4: in salt water, a cloud of opposite charges
+gathers around each charged particle and cancels its push beyond a short distance (Debye
+screening).</p>
+<p><b>Look for:</b> starOfStars and megaStars cover about twice as much of the frame, with
+readable spokes; on EVA the main piece grows and its hubs become spoked suns; er1000, one random
+tangle, should look the same.</p>
+<p><b>Gets worse:</b> big open loops fill in (powerGrid: crossings almost double), separate
+pieces touch (caterpillars), trees lose white space between branches, and grids can stay folded
+(grid20 keeps a folded corner, and from other starts often a big fold).</p>
+<p><b>Cost:</b> 1.3 to 1.9 times the time per step; with the <i>dual tree</i> setting it still
+uses the quad tree, so it runs up to about 9 times slower than none.</p>`,
+  tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: EVA', 'Benchmark: er1000'],
   params: [{
     key: 'fade',
     label: 'Fade distance',
     value: 10,
     step: '1',
     help: 'In spring lengths: how far a push reaches before it fades away (it drops 2.7x per this ' +
-      'distance). 3: stars and pieces pack tight, trees and loops lose their open space. 30 and ' +
-      'more: close to the library. 0 turns the fade off.'
+      'distance). 3: stars and pieces pack tight, trees and loops lose their open space. 30: ' +
+      'closer to the library, but grids can still stay folded. Below about 1 the push is nearly ' +
+      'gone and nodes crowd together. 0 turns the fade off, and so does a spring length of 0.'
   }],
 
   attach({ layout, params }) {
@@ -41,9 +45,15 @@ tighter but hurts trees more.</p>`,
     const fadeInSprings = Number(params.fade);
     if (!(fadeInSprings > 0)) return null;
 
-    const fade = fadeInSprings * settings.springLength;
+    // The fade distance in layout units. A spring length of 0 or less would make it 0 or negative,
+    // which removes the push entirely or makes it grow with distance (typing "0.5" in the panel
+    // passes through 0): then nothing fades, exactly like the library, since exp(-r / Infinity) = 1.
+    const fadeLength = () => {
+      const length = fadeInSprings * settings.springLength;
+      return length > 0 ? length : Infinity;
+    };
     const createQuadTree = getFadingQuadTreeFactory(settings.dimensions);
-    const tree = createQuadTree({ gravity: settings.gravity, theta: settings.theta, fade }, createRandom(42));
+    const tree = createQuadTree({ gravity: settings.gravity, theta: settings.theta, fade: fadeLength() }, createRandom(42));
     const bodies = simulator.bodies;
     // Coordinate names (x, y, z, c4, ...), for the drag on every axis
     const axes = [];
@@ -54,7 +64,7 @@ tighter but hurts trees more.</p>`,
     function fadingPush() {
       if (bodies.length === 0) return;
       // Settings can change while the layout runs (the panel calls the simulator's setters)
-      tree.options({ gravity: settings.gravity, theta: settings.theta, fade: fadeInSprings * settings.springLength });
+      tree.options({ gravity: settings.gravity, theta: settings.theta, fade: fadeLength() });
       const useDrag = settings.integrator !== 'fire';
       const drag = settings.dragCoefficient;
       tree.insertBodies(bodies);
@@ -69,7 +79,8 @@ tighter but hurts trees more.</p>`,
       }
     }
 
-    // Swap 'nbody' for the fading push, keeping the order of every force
+    // Swap 'nbody' for the fading push, keeping the order of every force. With nbody 'dualtree'
+    // this still runs the quad tree: the dual tree's far field has no fading version.
     const forces = Array.from(simulator.getForces().entries());
     forces.forEach(([name]) => simulator.removeForce(name));
     forces.forEach(([name, force]) => simulator.addForce(name, name === 'nbody' ? fadingPush : force));
