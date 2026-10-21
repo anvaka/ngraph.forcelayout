@@ -279,6 +279,10 @@ test('plan() names what a backend cannot run', function (t) {
   var cpu = sim.plan();
   t.ok(cpu.runs, 'the CPU runs everything');
   t.equal(cpu.stages.filter(function (s) { return s.shape === 'js'; }).length, 1);
+  var stock = sim.replaceStage('repulsion', function () {});
+  t.equal(sim.plan().stages[1].shape, 'js', 'a replaced built in stage is JavaScript');
+  sim.replaceStage('repulsion', stock);
+  t.equal(sim.plan().stages[1].shape, 'tree', 'and a built in again when put back');
   var plan = sim.plan({
     name: 'formulas only',
     check: function (description) {
