@@ -7,7 +7,7 @@
  * times exp(-r * min(1 / minReach, crossSection * density)), where `density` is the number of
  * bodies per unit area along the segment from i to j: for a cell, Simpson's rule over three samples
  * of a density grid (at i, at the middle, at the cell's center of mass); for a pair of bodies, which
- * are always close, the mean of the two ends. Sparse parts of the graph (trees, grids) stay almost
+ * are usually close, the mean of the two ends. Sparse parts of the graph (trees, grids) stay almost
  * transparent; crowds (a hub with its leaves, a dense core) dim the push of whatever lies behind
  * them, but never on a scale shorter than `minReach`.
  *
@@ -43,7 +43,8 @@ export default function createScreenedRepulsion() {
 
   /**
    * Adds the repulsion to body.force for every body that is not pinned, after resetting it.
-   * `options`: gravity, theta, crossSection (per unit length), minReach (length), cell (length).
+   * `options`: gravity, theta, crossSection (per unit length, finite, >= 0), minReach (length,
+   * >= 0; 0 = no floor), cell (length).
    */
   function computeForces(bodies, options) {
     n = bodies.length;
@@ -84,8 +85,10 @@ export default function createScreenedRepulsion() {
               let dx = X[j] - xi, dy = Y[j] - yi, r2 = dx * dx + dy * dy;
               if (r2 === 0) { dx = jitter(i, j); dy = jitter(j, i); r2 = dx * dx + dy * dy; }
               const r = Math.sqrt(r2);
-              // The walk reaches single bodies only near i (farther ones come as cells), so the
-              // density at the two ends stands for the density between them
+              // The walk reaches single bodies mostly near i (farther ones usually come as cells),
+              // so the density at the two ends stands for the density between them. In sparse
+              // parts it also reaches lone bodies up to ~20 link lengths away; there the gap
+              // between the two ends is not counted.
               const opacity = Math.min(maxOpacity, sigma * (ri + rho[j]) * 0.5);
               const v = gravity * M[j] * fade(r * opacity) / (r2 * r);
               fx += v * dx; fy += v * dy;
@@ -127,6 +130,9 @@ export default function createScreenedRepulsion() {
     while ((x1 - x0) / gh >= MAX_GRID || (y1 - y0) / gh >= MAX_GRID) gh *= 2;
     gx0 = x0; gy0 = y0; invH = 1 / gh;
     gw = Math.floor((x1 - x0) / gh) + 1; gH = Math.floor((y1 - y0) / gh) + 1;
+    // Bodies at NaN or infinity (the layout already broke down, e.g. at a spring length of 1e300):
+    // a one-cell grid instead of an impossible allocation
+    if (!(gw * gH <= MAX_GRID * MAX_GRID)) gw = gH = 1;
     if (grid.length < gw * gH) grid = new Float32Array(gw * gH);
     else grid.fill(0, 0, gw * gH);
     invArea = 1 / (gh * gh);
