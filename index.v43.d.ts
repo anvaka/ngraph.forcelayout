@@ -2,7 +2,102 @@ declare module "ngraph.forcelayout" {
   import { Graph, NodeId, LinkId, Node, Link } from "ngraph.graph";
   import { EventedType } from "ngraph.events";
 
-  export type ForceFunction = (iterationNumber: number) => void;
+  /**
+   * A stage of a simulator step. `store` holds the numbers of all bodies.
+   */
+  export type StageFunction = (store: BodyStore, simulator: PhysicsSimulator) => void;
+
+  /**
+   * Numbers of bodies in flat typed arrays. Axis `k` of body `i` is `pos[i * D + k]`.
+   * Columns added with `define()` are available by their name too.
+   */
+  export interface BodyStore {
+    /** Number of dimensions */
+    readonly D: number;
+    /** Number of bodies */
+    readonly n: number;
+    pos: Float64Array;
+    velocity: Float64Array;
+    force: Float64Array;
+    mass: Float64Array;
+    pinned: Uint8Array;
+    /** Number of springs attached to each body */
+    degree: Float64Array;
+    /** Spring count and total spring length of the last step (only with an adaptive time step) */
+    springCount: Float64Array;
+    springLength: Float64Array;
+    /**
+     * Adds a column with `size` numbers per body. New bodies get `initial`.
+     */
+    define<T extends TypedArray>(name: string, ArrayType?: { new(length: number): T }, size?: number, initial?: number): T;
+    get(name: string): TypedArray | undefined;
+    has(name: string): boolean;
+    remove(name: string): boolean;
+    names(): string[];
+    [column: string]: any;
+  }
+
+  export type TypedArray = Float64Array | Float32Array | Int32Array | Uint32Array | Int16Array | Uint16Array | Int8Array | Uint8Array;
+
+  /**
+   * Numbers of springs. Spring `i` connects body rows `from[i]` and `to[i]`; `length[i] < 0` and
+   * `coefficient[i] <= 0` mean "use the simulator setting".
+   */
+  export interface SpringStore {
+    readonly n: number;
+    from: Int32Array;
+    to: Int32Array;
+    length: Float64Array;
+    coefficient: Float64Array;
+    define<T extends TypedArray>(name: string, ArrayType?: { new(length: number): T }, size?: number, initial?: number): T;
+    [column: string]: any;
+  }
+
+  /**
+   * How hard two unit charges push each other at distance `r`, e.g. `'exp(-r / L) / r^2'`.
+   */
+  export interface RepulsionLawSpec {
+    /** F(r), an expression of `r`, `D` (dimensions) and the parameters */
+    force: string;
+    /** Parameter values, or functions of the simulator that are read every step */
+    params?: Record<string, number | ((simulator: PhysicsSimulator) => number)>;
+    /** Pairs and tree cells farther apart than this are skipped */
+    range?: number | string | ((simulator: PhysicsSimulator) => number);
+    /** Extra functions the expression can call */
+    functions?: Record<string, { value: (x: number) => number; derivative?: (x: number) => number }>;
+  }
+
+  /**
+   * A compiled repulsion law.
+   */
+  export interface RepulsionLaw {
+    spec: RepulsionLawSpec;
+    isDefault: boolean;
+    hasRange: boolean;
+    paramNames: string[];
+    values: Record<string, number>;
+  }
+
+  export interface PairRule {
+    /** Pairs closer than this are passed to the rule */
+    radius: number | ((simulator: PhysicsSimulator) => number);
+    /**
+     * Returns `s`; the force `s * (pos_i - pos_j)` is added to body `i`, and the opposite one
+     * to body `j` (unless the rule is not symmetric).
+     */
+    rule(i: number, j: number, r: number, store: BodyStore): number;
+    /** false: the rule is asked for (i, j) and (j, i), and each answer moves the first body only */
+    symmetric?: boolean;
+  }
+
+  /**
+   * Grid of bodies for finding close pairs, in any number of dimensions.
+   */
+  export interface NeighborGrid {
+    forEachPair(radius: number, callback: (i: number, j: number, r: number) => void): void;
+    forEachNeighbor(i: number, radius: number, callback: (j: number, r: number) => void): void;
+    cellSize(): number;
+  }
 
   export interface Vector {
     x: number;
@@ -11,11 +106,33 @@ declare module "ngraph.forcelayout" {
     [coord: string]: number | undefined;
   }
 
+  /**
+   * A body's position, force or velocity: reads and writes the simulator's store. Spreading it
+   * or `Object.keys()` does not see the axes; `toJSON()` gives a plain copy.
+   */
+  export interface VectorView {
+    x: number;
+    y: number;
+    z?: number;
+    [coord: string]: number | undefined | (() => Vector);
+    toJSON(): Vector;
+  }
+
+  /**
+   * A body is a view of row `index` of the simulator's body store: its `pos`, `force` and
+   * `velocity` read and write the store.
+   */
   export interface Body {
+    /** Row of this body in the store */
+    readonly index: number;
+    store: BodyStore;
+    id?: NodeId;
+    /** Number of springs attached to the body */
+    readonly degree: number;
     isPinned: boolean;
-    pos: Vector;
-    force: Vector;
-    velocity: Vector;
+    pos: VectorView;
+    force: VectorView;
+    velocity: VectorView;
     mass: number;
     springCount: number;
     springLength: number;
@@ -24,25 +141,12 @@ declare module "ngraph.forcelayout" {
   }
 
   export interface Spring {
+    /** Row of this spring in the simulator's spring store (-1 once removed) */
+    readonly index: number;
     from: Body;
     to: Body;
     length: number;
     coefficient: number;
-  }
-
-  export interface QuadNode {
-    body: Body | null;
-    mass: number;
-    mass_x: number;
-    mass_y: number;
-    mass_z?: number;
-  }
-
-  export interface QuadTree {
-    insertBodies(bodies: Body[]): void;
-    getRoot(): QuadNode & Record<string, number | null>;
-    updateBodyForce(sourceBody: Body): void;
-    options(newOptions: { gravity: number; theta: number }): { gravity: number; theta: number };
   }
 
   export interface BoundingBox {
@@ -122,6 +226,33 @@ declare module "ngraph.forcelayout" {
     nbody: 'quadtree' | 'dualtree';
 
     /**
+     * How hard two unit charges push each other at distance r: an expression like
+     * 'exp(-r / L) / r^2', or a law description. Empty means 1/r^2.
+     */
+    repulsionLaw: string | RepulsionLawSpec | null;
+
+    /**
+     * Name of the body column with charges. Masses are used by default.
+     */
+    repulsionCharge: string;
+
+    /**
+     * Name of the body column with how strongly bodies feel the push of others. Empty (the
+     * default) means the charge. A body with charge 0 is pushed but pushes nobody.
+     */
+    repulsionSensitivity: string;
+
+    /**
+     * Mass (how slowly a node speeds up) for a node. By default 1 + links / 3.
+     */
+    nodeMass: (nodeId: NodeId) => number;
+
+    /**
+     * Charge (how hard a node pushes others) for a node. By default the mass is used.
+     */
+    nodeCharge: (nodeId: NodeId) => number;
+
+    /**
      * This parameter defines number of dimensions of the space where simulation
      * is performed.
      */
@@ -140,22 +271,28 @@ declare module "ngraph.forcelayout" {
    */
   export interface PhysicsSimulator {
     /**
-     * Array of bodies, registered with current simulator
+     * Bodies of this simulator; `bodies[i]` is the body of row `i` while the simulator steps.
      *
-     * Note: To add new body, use addBody() method. This property is only
-     * exposed for testing/performance purposes.
+     * Note: To add new body, use addBody() method.
      */
     bodies: Body[];
 
-    quadTree: QuadTree;
+    /**
+     * Numbers of all bodies.
+     */
+    store: BodyStore;
 
     /**
-     * Array of springs, registered with current simulator
+     * Springs of this simulator.
      *
-     * Note: To add new spring, use addSpring() method. This property is only
-     * exposed for testing/performance purposes.
+     * Note: To add new spring, use addSpring() method.
      */
     springs: Spring[];
+
+    /**
+     * Numbers of all springs.
+     */
+    springStore: SpringStore;
 
     /**
      * Returns settings with which current simulator was initialized
@@ -163,29 +300,82 @@ declare module "ngraph.forcelayout" {
     settings: PhysicsSettings;
 
     /**
-     * Adds a new force to simulation
-     * @param forceName force identifier
-     * @param forceFunction the function to apply
+     * Names of the stages of a step, in the order they run. Built in:
+     * 'clear', 'repulsion', 'drag', 'springs', 'integrate'.
      */
-    addForce(forceName: string, forceFunction: ForceFunction): void;
+    stages(): string[];
 
     /**
-     * Removes a force from the simulation
-     * @param forceName force identifier
+     * Adds a stage to every step. By default it runs just before 'integrate'.
      */
-    removeForce(forceName: string): void;
+    addStage(name: string, run: StageFunction, options?: { before?: string; after?: string }): void;
 
     /**
-     * Returns a map of all registered forces
+     * Replaces a stage, keeping its place. Returns the old function.
      */
-    getForces(): Map<string, ForceFunction>;
+    replaceStage(name: string, run: StageFunction): StageFunction;
+
+    /**
+     * Removes a stage. Returns true when there was such a stage.
+     */
+    removeStage(name: string): boolean;
+
+    /**
+     * Returns the function of a stage.
+     */
+    getStage(name: string): StageFunction | undefined;
+
+    /**
+     * Returns the current repulsion law.
+     */
+    repulsionLaw(): RepulsionLaw;
+    /**
+     * Sets the repulsion law. `null` restores 1/r^2.
+     */
+    repulsionLaw(law: string | RepulsionLawSpec | null): PhysicsSimulator;
+
+    /**
+     * Gets or sets the name of the body column with charges.
+     */
+    repulsionCharge(): string;
+    repulsionCharge(column: string): PhysicsSimulator;
+
+    /**
+     * Gets or sets the name of the body column with how strongly bodies feel the push ('' for
+     * the charge).
+     */
+    repulsionSensitivity(): string;
+    repulsionSensitivity(column: string): PhysicsSimulator;
+
+    /**
+     * Adds a rule for pairs of bodies closer than its radius. Rules run in the stage
+     * 'pairRules', after 'springs'.
+     */
+    addPairRule(name: string, rule: PairRule): void;
+
+    removePairRule(name: string): boolean;
+
+    /**
+     * Grid of the current positions with cells of `cellSize`.
+     */
+    neighbors(cellSize: number): NeighborGrid;
+
+    /**
+     * A length to measure ideas in: the spring length, but never 0.
+     */
+    unit(): number;
+
+    /**
+     * Number of steps performed so far.
+     */
+    iteration(): number;
 
     /**
      * Performs one step of force simulation.
      *
-     * @returns true if system is considered stable; False otherwise.
+     * @returns amount of movement during this step.
      */
-    step(): boolean;
+    step(): number;
 
     /**
      * Adds body to the system
@@ -202,14 +392,14 @@ declare module "ngraph.forcelayout" {
     addBodyAt(pos: Vector): Body;
 
     /**
-     * Removes body from the system
+     * Removes body (and its springs) from the system
      * @param body to remove
      * @returns true if body found and removed. falsy otherwise;
      */
     removeBody(body: Body): boolean;
 
     /**
-     * Adds a spring to this simulation
+     * Adds a spring between two bodies of this simulator
      * @param body1 first body
      * @param body2 second body
      * @param springLength Ideal length for links
@@ -217,7 +407,7 @@ declare module "ngraph.forcelayout" {
      * @returns a handle for a spring. If you want to later remove
      * spring pass it to removeSpring() method.
      */
-    addSpring(body1: Body, body2: Body, springLength: number, springCoefficient: number): Spring;
+    addSpring(body1: Body, body2: Body, springLength?: number, springCoefficient?: number): Spring;
 
     /**
      * Returns amount of movement performed on last step() call
@@ -242,9 +432,6 @@ declare module "ngraph.forcelayout" {
      * Returns bounding box which covers all bodies
      */
     getBoundingBox(): BoundingBox;
-
-    /** @deprecated invalidateBBox() is deprecated, bounds always recomputed on `getBBox()` call */
-    invalidateBBox(): void;
 
     /**
      * Changes the gravity for the system
@@ -280,7 +467,7 @@ declare module "ngraph.forcelayout" {
      * For a given `nodeId` returns position
      * @param nodeId node identifier
      */
-    getNodePosition(nodeId: NodeId): Vector;
+    getNodePosition(nodeId: NodeId): VectorView;
 
     /**
      * Sets position of a node to a given coordinates
@@ -297,7 +484,7 @@ declare module "ngraph.forcelayout" {
      * @returns from: {x, y} coordinates of link start
      * @returns to: {x, y} coordinates of link end
      */
-    getLinkPosition(linkId: LinkId): { from: Vector; to: Vector };
+    getLinkPosition(linkId: LinkId): { from: VectorView; to: VectorView };
 
     /**
      * @returns area required to fit in the graph. Object contains

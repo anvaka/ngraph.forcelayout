@@ -178,6 +178,94 @@ All three settings can also be changed while the layout runs, e.g. `layout.simul
 You can get current physics simulator from layout by checking `layout.simulator`
 property. This is a read only property. 
 
+## Changing the physics
+
+Every step of the simulator runs a list of named stages:
+
+``` js
+layout.simulator.stages();
+// ['clear', 'repulsion', 'drag', 'springs', 'integrate']
+```
+
+`clear` zeroes forces, `repulsion` makes every pair of nodes push apart, `drag` slows bodies
+down (the FIRE integrator skips it), `springs` pulls linked nodes together, and `integrate`
+moves bodies. Numbers of all bodies are kept in flat arrays, so new physics works in any
+number of dimensions without knowing axis names:
+
+``` js
+var simulator = layout.simulator;
+
+// A pull towards the origin. Axis k of body i is pos[i * D + k].
+simulator.addStage('pullToCenter', function (store) {
+  var pos = store.pos, force = store.force, D = store.D;
+  for (var i = 0; i < store.n * D; ++i) force[i] -= 0.01 * pos[i];
+});
+```
+
+New stages run just before `integrate`; pass `{ before: name }` or `{ after: name }` to put
+them elsewhere (`{ after: 'integrate' }` moves bodies after they were integrated).
+`replaceStage(name, fn)` swaps a stage in place, `removeStage(name)` removes it, and
+`getStage(name)` returns its function, e.g. to wrap the built in springs.
+
+The store has columns `pos`, `velocity`, `force` (`D` numbers per body), `mass`, `pinned`
+and `degree` (the number of springs of a body). More columns can be added with
+`store.define(name, Float64Array)`; they grow and shrink with the bodies. When bodies or
+springs are added or removed, the simulator fires `'topology'` before the next step, and
+`simulator.bodies[i]` is the body of row `i` (`body.id` is its node id).
+
+`simulator.unit()` is a length to measure ideas in: the spring length, but never 0.
+
+### Repulsion law
+
+Two nodes push each other with `gravity * charge1 * charge2 * F(r)`. By default
+`F(r) = 1/r^2`. The law can be any expression of the distance `r`:
+
+``` js
+var layout = createLayout(graph, {
+  // A push that fades out past 3 spring lengths. Parameters are read every step.
+  repulsionLaw: {
+    force: 'exp(-r / L) / r^2',
+    params: { L: function (simulator) { return 3 * simulator.unit(); } },
+    // optional: pairs (and tree cells) farther apart than this are skipped
+    range: 'L * 8'
+  }
+});
+// or, while the layout runs:
+layout.simulator.repulsionLaw('r^(1 - D)'); // how charges push in D dimensions
+```
+
+The expression is compiled into both the quad tree and the dual tree (its derivative, which
+the dual tree needs, is derived automatically), so a new law keeps all speed-ups. Expressions
+know `+ - * / ^`, `r`, `D` (number of dimensions), the law's parameters, and `exp`, `log`,
+`sqrt`, `abs`, `min`, `max`, `pow`, `tanh`, `sin`, `cos`. Other functions can be passed as
+`functions: { name: { value: fn, derivative: fn } }`.
+
+A law that fades fast leaves mostly the pushes of near nodes, which the trees approximate less
+well: in 3D, `theta: 0.5` gives such a law the accuracy that 1/r^2 has at the default 0.8.
+
+Charges are masses by default. To push with something else, give the layout a `nodeCharge`
+function, or set `repulsionCharge` to the name of a body column. A body feels the push of
+others with its charge too, unless `repulsionSensitivity` names another column: a body with
+charge 0 and sensitivity 1 is pushed by everyone but pushes nobody, and costs the quad tree
+nothing.
+
+### Rules for close pairs
+
+Forces that only act between close nodes (contact, personal space) are pair rules. The
+simulator finds close pairs with one grid, shared by all rules, in any dimension:
+
+``` js
+simulator.addPairRule('personalSpace', {
+  radius: function (simulator) { return simulator.unit(); },
+  // returns s; the force s * (pos_i - pos_j) is added to i, the opposite one to j
+  rule: function (i, j, r, store) { return 0.5 * (1 / r - 1 / simulator.unit()); }
+});
+```
+
+With `symmetric: false` the rule is asked for both `(i, j)` and `(j, i)` and only moves the
+first body. `simulator.neighbors(cellSize)` gives the grid to stages that need their own
+neighbor queries.
+
 ## Space occupied by graph
 
 Finally, it's often desirable to know how much space does our graph occupy. To

@@ -24,6 +24,12 @@ function createLayout(graph, physicsSettings) {
   if (physicsSettings && typeof physicsSettings.nodeMass === 'function') {
     nodeMass = physicsSettings.nodeMass;
   }
+  // How hard a node pushes others. Without it, the mass is used.
+  var nodeCharge = physicsSettings && typeof physicsSettings.nodeCharge === 'function' ? physicsSettings.nodeCharge : null;
+  if (nodeCharge) {
+    physicsSimulator.store.define('charge', Float64Array, 1, 1);
+    physicsSimulator.repulsionCharge('charge');
+  }
 
   var nodeBodies = new Map();
   var springs = {};
@@ -351,6 +357,11 @@ function createLayout(graph, physicsSettings) {
     body.mass = nodeMass(nodeId);
     if (Number.isNaN(body.mass)) {
       throw new Error('Node mass should be a number');
+    }
+    if (nodeCharge) {
+      var charge = nodeCharge(nodeId);
+      if (Number.isNaN(charge)) throw new Error('Node charge should be a number');
+      physicsSimulator.store.charge[body.index] = charge;
     }
   }
 

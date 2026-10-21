@@ -1,14 +1,17 @@
 // Exact layout for graphs up to 1024 nodes in one persistent workgroup: one dispatch runs many
 // steps, positions live in workgroup memory and steps are separated by barriers instead of
 // dispatches. All-pairs repulsion, same physics and integrators as the grid engine.
+import { LAW_VALUES } from './gridEngine.js';
 
 export const SMALL_MAX_NODES = 1024;
 
-const CODE = /* wgsl */`
+// `law` is a compiled repulsion law (../../lib/repulsionLaw.js), or null for 1/r^2
+const CODE = law => /* wgsl */`
 struct Params {
   n: u32, steps: u32, integrator: u32, pad0: u32,
   gravity: f32, springLength: f32, springK: f32, drag: f32,
-  dt: f32, maxV: f32, pad1: f32, pad2: f32,
+  dt: f32, maxV: f32, pad1: f32, pad2: f32,${law ? `
+  law: array<vec4f, ${LAW_VALUES / 4}>,` : ''}
 };
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var<storage, read_write> pos: array<vec2f>;
@@ -38,7 +41,7 @@ fn main(@builtin(local_invocation_index) i: u32) {
   let moving = live && !pinned;
   sm[i] = mi;
   var st = fire[0];
-  var a = st.x; var npos = st.y;
+  var a = st.x; var npos = st.y;${law ? '\n  ' + law.wgslPrologue(i => `P.law[${i >> 2}].${'xyzw'[i & 3]}`) : ''}
   for (var s = 0u; s < P.steps; s++) {
     sp[i] = p;
     workgroupBarrier();
@@ -49,8 +52,11 @@ fn main(@builtin(local_invocation_index) i: u32) {
         var d = sp[j] - p;
         var r2 = dot(d, d);
         if (r2 == 0.0) { d = jitter(i, j); r2 = dot(d, d); }
-        let r = sqrt(r2);
-        f += (P.gravity * mi * sm[j] / (r2 * r)) * d;
+        ${law ? `${law.hasRange ? `if (r2 > lawRange2) { continue; }
+        ` : ''}let r = sqrt(r2);
+        ${law.emitWGSL(2, 'r', 'k1')}
+        f += (P.gravity * mi * sm[j] * k1) * d;` : `let r = sqrt(r2);
+        f += (P.gravity * mi * sm[j] / (r2 * r)) * d;`}
       }
       for (var e = csr[i]; e < csr[i + 1u]; e++) {
         let j = csr[P.n + 1u + e];
@@ -100,7 +106,7 @@ fn main(@builtin(local_invocation_index) i: u32) {
   if (i == 0u) { fire[0] = vec4f(a, npos, 0.0, 0.0); }
 }`;
 
-const pipelineCache = new WeakMap(); // device -> Map(workgroup size -> pipeline)
+const pipelineCache = new WeakMap(); // device -> Map(workgroup size and law -> pipeline)
 
 function workgroupSize(n) {
   return Math.max(32, Math.ceil(n / 32) * 32);
@@ -113,7 +119,8 @@ export function smallEngineFits(device, n) {
     L.maxComputeWorkgroupSizeX >= wgs && L.maxComputeWorkgroupStorageSize >= 16 * wgs;
 }
 
-export function createSmallEngine(device, { n, edges, init, mass }) {
+export function createSmallEngine(device, { n, edges, init, mass, law = null }) {
+  if (law && law.valueCount > LAW_VALUES) throw new Error(`The GPU takes laws with up to ${LAW_VALUES} numbers`);
   const deg = new Uint32Array(n);
   for (let e = 0; e < edges.length; e += 2) { deg[edges[e]]++; deg[edges[e + 1]]++; }
   const csr = new Uint32Array(n + 1 + edges.length);
@@ -136,27 +143,29 @@ export function createSmallEngine(device, { n, edges, init, mass }) {
   const vel = buf(n * 16, S | CD);
   const massB = upload(mass), csrB = upload(csr);
   const fireB = buf(16, S | CD);
-  const params = buf(48, GPUBufferUsage.UNIFORM | CD);
+  const paramSize = law ? 48 + 4 * LAW_VALUES : 48;
+  const params = buf(paramSize, GPUBufferUsage.UNIFORM | CD);
 
   // the workgroup is sized to the graph, so barriers only wait on live lanes
   const wgs = workgroupSize(n);
   let byDevice = pipelineCache.get(device);
   if (!byDevice) { byDevice = new Map(); pipelineCache.set(device, byDevice); }
-  let pipeline = byDevice.get(wgs);
+  const key = wgs + (law ? '|' + law.key : '');
+  let pipeline = byDevice.get(key);
   if (!pipeline) {
     pipeline = device.createComputePipeline({
       layout: 'auto',
-      compute: { module: device.createShaderModule({ code: CODE, label: 'small' }), entryPoint: 'main', constants: { WGS: wgs } },
+      compute: { module: device.createShaderModule({ code: CODE(law), label: 'small' }), entryPoint: 'main', constants: { WGS: wgs } },
       label: `small-${wgs}`,
     });
-    byDevice.set(wgs, pipeline);
+    byDevice.set(key, pipeline);
   }
   const group = device.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
     entries: [params, pos, vel, massB, csrB, fireB].map((b, i) => ({ binding: i, resource: { buffer: b } })),
   });
 
-  const paramBuf = new ArrayBuffer(48);
+  const paramBuf = new ArrayBuffer(paramSize);
   const pu = new Uint32Array(paramBuf), pf = new Float32Array(paramBuf);
   pu[0] = n;
   const stepsWord = new Uint32Array(1);
@@ -173,7 +182,13 @@ export function createSmallEngine(device, { n, edges, init, mass }) {
       pu[2] = s.integrator === 'fire' ? 1 : 0;
       pf[4] = s.gravity; pf[5] = s.springLength; pf[6] = s.springCoefficient; pf[7] = s.dragCoefficient;
       pf[8] = s.timeStep; pf[9] = s.maxVelocity;
+      if (law) law.writeValues(pf, 12);
       device.queue.writeBuffer(params, 0, paramBuf);
+    },
+    // After law.update(): the law's numbers for the next steps
+    setLawValues() {
+      law.writeValues(pf, 12);
+      device.queue.writeBuffer(params, 48, paramBuf, 48);
     },
     resetFire,
     // One dispatch runs up to 64 steps; the step count is a uniform written before each submit.
@@ -201,4 +216,9 @@ export function createSmallEngine(device, { n, edges, init, mass }) {
     },
     destroy() { for (const b of owned) b.destroy(); },
   };
+}
+
+// For checks: the WGSL for a law (null for 1/r^2)
+export function shaderCode(law = null) {
+  return CODE(law);
 }
