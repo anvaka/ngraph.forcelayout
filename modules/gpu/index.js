@@ -106,6 +106,8 @@ export function createGpuLayout(device, graph, options = {}) {
   if (law && law.isDefault) law = null;
   const lawContext = {
     settings: null,
+    // laws can read the number of bodies as `n`
+    store: { n: 0 },
     unit: () => (settings.springLength > 1e-3 ? settings.springLength : 1e-3),
     iteration: () => stepsSubmitted,
   };
@@ -125,6 +127,8 @@ export function createGpuLayout(device, graph, options = {}) {
   const ids = [];
   graph.forEachNode(node => { ids.push(node.id); });
   const n = ids.length;
+  lawContext.store.n = n;
+  if (law) updateLaw();
   const userIndex = new Map();
   for (let u = 0; u < n; u++) userIndex.set(ids[u], u);
 
