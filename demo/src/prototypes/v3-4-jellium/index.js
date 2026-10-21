@@ -45,7 +45,7 @@ under 8 nodes, or when nodes attract each other (gravity 0 or more).</p>`,
     }
   ],
 
-  attach({ layout, params, settings }) {
+  attach({ layout, params, settings, steps }) {
     if ((settings.dimensions || 2) !== 2) return null;
     const density = Number.isNaN(Number(params.density)) ? 0.25 : Number(params.density);
     if (!(density > 0)) return null; // 0 turns the background off
@@ -54,7 +54,8 @@ under 8 nodes, or when nodes attract each other (gravity 0 or more).</p>`,
     addBackground(layout, {
       density,
       extra: Number.isNaN(extra) ? 0.3 : Math.max(0, extra),
-      startStep: Number.isNaN(startStep) ? 300 : startStep
+      startStep: Number.isNaN(startStep) ? 300 : startStep,
+      stepsBefore: steps || 0
     });
     return null;
   }

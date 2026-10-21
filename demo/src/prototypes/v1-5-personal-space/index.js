@@ -52,14 +52,14 @@ crossings, and steps take 1.1–1.4× as long. It does nothing in 3D.</p>
     }
   ],
 
-  attach({ layout, graph, params, settings }) {
+  attach({ layout, graph, params, settings, steps }) {
     if ((settings.dimensions || 2) !== 2) return {}; // 2D only: does nothing in 3D or more
 
     const simulator = layout.simulator;
     const bodies = simulator.bodies;
     let force = null;
     let knownCount = -1;
-    let stepCount = 0;
+    let stepCount = steps || 0; // the steps the drawing already ran count towards the delay
     // body.mass is both the body's "charge" (how hard it repels) and its inertia (how fast it
     // moves under a force). While the push runs, crowded bodies get extra inertia for the
     // integrator only; `charge` keeps the real masses, which are restored after every step.

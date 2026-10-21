@@ -8,7 +8,8 @@ const FIELD_STEPS = FIELD.length - 1;
  * of the same density would push it. Evenly spread nodes then feel no net force, crowded places
  * still push apart, and empty places pull nodes in.
  *
- * The background's density is measured once, at step `startStep`, as `density` times the typical
+ * The background's density is measured once, at step `startStep` (counting the `stepsBefore` steps
+ * the drawing ran before this layout carried it on), as `density` times the typical
  * local density of the nodes at that moment, and then kept. Re-measuring it every step gave the
  * same picture in a short test (yeast and megaStars, 1500 steps), so measuring once is simply the
  * simpler and cheaper choice. Measured before the graph has unfolded (below about step 50), the
@@ -25,6 +26,7 @@ export default function addBackground(layout, options) {
   const density = options.density;
   const extra = options.extra;
   const startStep = Math.max(0, Math.round(options.startStep));
+  const stepsBefore = options.stepsBefore || 0;
   let sigma = 0, radius = 0, off = false;
 
   simulator.addForce('neutral-background', backgroundForce);
@@ -33,7 +35,7 @@ export default function addBackground(layout, options) {
   };
 
   function backgroundForce(iteration) {
-    if (off || iteration < startStep || bodies.length < 8) return;
+    if (off || iteration + stepsBefore < startStep || bodies.length < 8) return;
     var gravity = simulator.settings.gravity;
     if (!(gravity < 0)) return; // the background only makes sense for repelling nodes
 

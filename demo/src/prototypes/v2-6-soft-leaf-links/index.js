@@ -44,7 +44,7 @@ more, or gravity -2, the bigger stars pile on top of each other.</p>`,
     }
   ],
 
-  attach({ layout, graph, params, settings }) {
+  attach({ layout, graph, params, settings, steps: stepsBefore }) {
     if ((settings.dimensions || 2) !== 2) return null;
     let room = Math.min(MAX_ROOM, Math.max(0, Number(params.room)));
     let soften = Number(params.soften);
@@ -65,7 +65,7 @@ more, or gravity -2, the bigger stars pile on top of each other.</p>`,
     if (fanSprings.length === 0) return null;
 
     let simulator = layout.simulator;
-    let steps = 0;
+    let steps = stepsBefore || 0; // the steps the drawing already ran count towards the growth
     let appliedLength, appliedCoefficient, appliedProgress;
     apply();
     layout.on('step', onStep);
