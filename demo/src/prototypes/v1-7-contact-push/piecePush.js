@@ -5,26 +5,33 @@
 //    longer push each other from afar. This replaces the simulator's 'nbody' force.
 // 2. Contact between pieces. Two nodes of different pieces that come closer than the contact
 //    distance push their pieces apart. The push is applied to the whole piece as one
-//    acceleration, so no piece gets bent.
+//    acceleration, so no piece gets bent. Only nodes outside the largest piece look for
+//    contacts, so the big piece's nodes are never walked against each other.
 // 3. A wall around all pieces, as in the v4 prototype: a piece that pokes out of a circle
 //    sized from the pieces' own areas is pulled back toward the common centre. The pull is
 //    paired (the total momentum stays the same), so the picture doesn't drift away.
+// Pieces that hold a pinned node get neither contact nor wall pushes (as in v4), so the
+// pinned node doesn't hold back one part of its piece while the rest is pushed.
 const SMALL_PIECE = 8; // pieces up to this size use a plain double loop instead of a tree
 const CONTACT_STIFFNESS = 2; // times springCoefficient
+const MAX_CONTACT = 100; // larger contact distances count as 100 (the help text says so)
+const DEFAULT_WALL_SLACK = 1.3;
 
 export default function createPiecePush(simulator, options, kernels) {
   const bodies = simulator.bodies;
   const springs = simulator.springs;
   const settings = simulator.settings;
-  const contact = Math.max(0, Number(options.contact) || 0);
+  const contact = Math.min(MAX_CONTACT, Math.max(0, Number(options.contact) || 0));
   const farPush = !!Number(options.farPush);
-  const wallSlack = Math.max(1, Number(options.wallSlack) || 1.3);
+  // 0 turns the wall off, other values below 1 count as 1, NaN falls back to the default
+  const slack = Number(options.wallSlack);
+  const wallSlack = Number.isNaN(slack) ? DEFAULT_WALL_SLACK : (slack === 0 ? 0 : Math.max(1, slack));
 
   // Pieces (connected components), rebuilt when bodies or springs are added or removed
   let knownBodies = -1, knownSprings = -1;
-  let pieceOf = new Int32Array(0), pieces = [], pieceCount = 0;
+  let pieceOf = new Int32Array(0), pieces = [], pieceCount = 0, largest = 0;
   let quadTrees = [], dualTrees = [];
-  let mass, sumX, sumY, spread, accX, accY;
+  let mass, sumX, sumY, spread, accX, accY, pinnedPiece;
   // Spatial hash for contacts
   let cellX = new Int32Array(0), cellY = new Int32Array(0), next = new Int32Array(0), head = new Int32Array(0);
   // first piece seen in each bucket, or -2 when the bucket holds more than one piece
@@ -71,10 +78,13 @@ export default function createPiecePush(simulator, options, kernels) {
       pieces[id].push(bodies[i]);
     }
     pieceCount = pieces.length;
+    largest = 0;
+    for (let p = 1; p < pieceCount; p++) if (pieces[p].length > pieces[largest].length) largest = p;
     quadTrees = new Array(pieceCount);
     dualTrees = new Array(pieceCount);
     mass = new Float64Array(pieceCount); sumX = new Float64Array(pieceCount); sumY = new Float64Array(pieceCount);
     spread = new Float64Array(pieceCount); accX = new Float64Array(pieceCount); accY = new Float64Array(pieceCount);
+    pinnedPiece = new Uint8Array(pieceCount);
     cellX = new Int32Array(n); cellY = new Int32Array(n); next = new Int32Array(n);
     let size = 1; while (size < 2 * n) size *= 2;
     head = new Int32Array(size);
@@ -135,37 +145,41 @@ export default function createPiecePush(simulator, options, kernels) {
     updatePieces();
     if (pieceCount < 2) return;
     const n = bodies.length;
-    mass.fill(0); sumX.fill(0); sumY.fill(0); spread.fill(0); accX.fill(0); accY.fill(0);
+    mass.fill(0); sumX.fill(0); sumY.fill(0); spread.fill(0); accX.fill(0); accY.fill(0); pinnedPiece.fill(0);
     let totalMass = 0, centerX = 0, centerY = 0;
     for (let i = 0; i < n; i++) {
       const body = bodies[i], p = pieceOf[i], m = body.mass;
       mass[p] += m; sumX[p] += m * body.pos.x; sumY[p] += m * body.pos.y;
       totalMass += m; centerX += m * body.pos.x; centerY += m * body.pos.y;
+      if (body.isPinned) pinnedPiece[p] = 1;
     }
     if (!(totalMass > 0)) return;
     centerX /= totalMass; centerY /= totalMass;
 
     if (!farPush && contact > 0) addContacts();
-    addWall(centerX, centerY, totalMass);
+    if (wallSlack > 0) addWall(centerX, centerY, totalMass);
 
     for (let i = 0; i < n; i++) {
-      const body = bodies[i];
-      if (body.isPinned) continue;
-      const p = pieceOf[i], k = body.mass / mass[p];
+      const body = bodies[i], p = pieceOf[i];
+      if (body.isPinned || pinnedPiece[p]) continue;
+      const k = body.mass / mass[p];
       body.force.x += k * accX[p];
       body.force.y += k * accY[p];
     }
   }
 
-  // Contact pushes, summed per piece into accX/accY (as forces; divided by mass when applied)
-  function addContacts() {
+  function averageEdgeLength() {
     let length = 0;
     for (const spring of springs) {
       const dx = spring.to.pos.x - spring.from.pos.x, dy = spring.to.pos.y - spring.from.pos.y;
       length += Math.sqrt(dx * dx + dy * dy);
     }
-    length = springs.length ? length / springs.length : settings.springLength;
-    const reach = contact * length;
+    return springs.length ? length / springs.length : settings.springLength;
+  }
+
+  // Contact pushes, summed per piece into accX/accY (as forces; divided by mass when applied)
+  function addContacts() {
+    const reach = contact * averageEdgeLength();
     if (!(reach > 0)) return;
     const stiffness = CONTACT_STIFFNESS * settings.springCoefficient;
     const mask = head.length - 1;
@@ -184,7 +198,9 @@ export default function createPiecePush(simulator, options, kernels) {
     }
     for (let i = 0; i < n; i++) {
       const a = bodies[i].pos, pa = pieceOf[i], u0 = cellX[i], v0 = cellY[i];
-      // Most nodes sit among their own piece only: skip them without walking the buckets
+      // The largest piece never starts a pair: its contacts are found from the other side
+      if (pa === largest) continue;
+      // Skip nodes that have no other piece in the 3x3 cells around them
       let nearOther = false;
       for (let du = -1; du <= 1 && !nearOther; du++) {
         for (let dv = -1; dv <= 1; dv++) {
@@ -198,14 +214,19 @@ export default function createPiecePush(simulator, options, kernels) {
           const u = u0 + du, v = v0 + dv;
           for (let j = head[bucket(u, v)]; j !== -1; j = next[j]) {
             // the bucket may also hold other cells; skip them, and count each pair once
-            if (j <= i || cellX[j] !== u || cellY[j] !== v) continue;
+            if (cellX[j] !== u || cellY[j] !== v) continue;
             const pb = pieceOf[j];
-            if (pb === pa) continue;
+            if (pb === pa || (j <= i && pb !== largest)) continue;
             const b = bodies[j].pos;
             let dx = a.x - b.x, dy = a.y - b.y;
             let r = Math.sqrt(dx * dx + dy * dy);
             if (r >= reach) continue;
-            if (r === 0) { dx = 1; dy = 0; r = 1e-9; }
+            // same spot: a random direction, as in the library; (dx, dy) stays r long, so the
+            // push below is stiffness * (reach - r), not divided by a made-up tiny r
+            if (r === 0) {
+              dx = (simulator.random.nextDouble() - 0.5) / 50; dy = (simulator.random.nextDouble() - 0.5) / 50;
+              r = Math.sqrt(dx * dx + dy * dy);
+            }
             const f = stiffness * (reach - r) / r;
             accX[pa] += f * dx; accY[pa] += f * dy;
             accX[pb] -= f * dx; accY[pb] -= f * dy;
@@ -218,7 +239,15 @@ export default function createPiecePush(simulator, options, kernels) {
   // The v4 wall: pieces sticking out of a circle around everyone are pulled back in
   function addWall(centerX, centerY, totalMass) {
     const n = bodies.length;
-    const L = settings.springLength;
+    let L = settings.springLength;
+    let strength = Math.abs(settings.gravity) * (totalMass / n) / (L * L);
+    if (!(L > 0) || !Number.isFinite(strength)) {
+      // spring length 0 (the panel passes through 0 while "0.5" is typed) or tiny:
+      // measure the wall in average edge lengths instead, or skip it if there are no edges
+      L = averageEdgeLength();
+      strength = Math.abs(settings.gravity) * (totalMass / n) / (L * L);
+      if (!(L > 0) || !Number.isFinite(strength)) return;
+    }
     for (let i = 0; i < n; i++) {
       const body = bodies[i], p = pieceOf[i];
       const qx = body.pos.x - sumX[p] / mass[p], qy = body.pos.y - sumY[p] / mass[p];
@@ -230,14 +259,13 @@ export default function createPiecePush(simulator, options, kernels) {
       area += (spread[p] + L / 2) * (spread[p] + L / 2);
     }
     const wallRadius = wallSlack * Math.sqrt(area);
-    const strength = Math.abs(settings.gravity) * (totalMass / n) / (L * L);
     let pullX = 0, pullY = 0;
     const pulls = [];
     for (let p = 0; p < pieceCount; p++) {
       const tx = centerX - sumX[p] / mass[p], ty = centerY - sumY[p] / mass[p];
       const dist = Math.sqrt(tx * tx + ty * ty);
       const out = dist + spread[p] - wallRadius;
-      if (out <= 0 || dist === 0) continue;
+      if (out <= 0 || dist === 0 || pinnedPiece[p]) continue;
       const scale = mass[p] * strength * Math.min(1, out / L) / dist;
       pulls.push(p, scale * tx, scale * ty);
       pullX += scale * tx; pullY += scale * ty;
