@@ -47,6 +47,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     setPlacement,
     setBackend,
     setPrototype,
+    setPrototypeParams,
     finishPrototype,
     restart,
     getStats,
@@ -103,13 +104,21 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     if (graph) restart();
   }
 
-  function attachPrototype() {
+  // New values for the same idea: it carries on from the current drawing instead of starting over
+  function setPrototypeParams(params) {
+    prototypeParams = {...params};
+    if (graph && prototype && !gpuLayout) continueLayout(layoutSettings.dimensions);
+  }
+
+  // `steps` tells the idea how many steps the drawing has already run (0 for a fresh start)
+  function attachPrototype(steps = 0) {
     if (!prototype) return;
     prototypeControl = prototype.attach({
       layout,
       graph,
       params: {...prototypeParams},
-      settings: {...layoutSettings}
+      settings: {...layoutSettings},
+      steps
     }) || null;
   }
 
@@ -226,28 +235,33 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     }
 
     if (layoutSettings.dimensions !== previousDimensions) {
-      let prevLayout = layout;
-      detachPrototype();
-      layout = createForceLayout(graph, layoutSettings)
-      graph.forEachNode(node => {
-        let prevPos = prevLayout.getNodePosition(node.id);
-        let positions = Object.keys(prevPos).map(name => prevPos[name]);
-        for (let i = previousDimensions; i < layoutSettings.dimensions; ++i) {
-          // If new layout has more dimensions than the previous layout, fill those with random values:
-          positions.push(Math.random());
-        }
-        positions.unshift(node.id);
-        layout.setNodePosition.apply(layout, positions);
-      });
-
-      prevLayout.dispose();
-      attachPrototype();
+      continueLayout(previousDimensions);
     } else {
       props.forEach(name => {
         layout.simulator[name](layoutSettings[name]);
       });
       if (gpuLayout) gpuLayout.updateSettings(layoutSettings);
     }
+  }
+
+  // A new layout that starts where the nodes are now, with the idea attached again
+  function continueLayout(previousDimensions) {
+    let prevLayout = layout;
+    detachPrototype();
+    layout = createForceLayout(graph, layoutSettings)
+    graph.forEachNode(node => {
+      let prevPos = prevLayout.getNodePosition(node.id);
+      let positions = Object.keys(prevPos).map(name => prevPos[name]);
+      for (let i = previousDimensions; i < layoutSettings.dimensions; ++i) {
+        // If new layout has more dimensions than the previous layout, fill those with random values:
+        positions.push(Math.random());
+      }
+      positions.unshift(node.id);
+      layout.setNodePosition.apply(layout, positions);
+    });
+
+    prevLayout.dispose();
+    attachPrototype(stats.steps);
   }
 
   function setFixedViewBox(isFixed) {

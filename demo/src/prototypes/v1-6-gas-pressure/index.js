@@ -8,18 +8,21 @@ export default {
   author: 'v1-6 (Feynman Vol 1, Ch. 40)',
   description: `
 <p>In ngraph's pictures of hubs with many leaves (<i>starOfStars</i>, <i>megaStars</i>), each
-star is a thin ring of leaves piled on top of each other: every leaf's spring pulls it to the same
-distance from its hub.</p>
-<p>This idea treats the nodes as a gas. Where nodes are packed closer than about one spring length
-apart, they push outward, from the crowded spot towards emptier space. How hard they push is the
-"temperature". Where nodes are already that far apart, nothing changes.</p>
-<p>It comes from Feynman's Lectures on Physics, Vol. 1, Chapter 40: air spreads up over a height
-because its pressure, which grows with density, holds it up against gravity; with no temperature
-it would all lie flat on the ground, like the leaves on their ring.</p>
-<p>Look for the stars turning from thin rings into filled discs, and for hub blobs in trees
-loosening. A grid should not change at all.</p>
-<p>What gets worse: more edge crossings around big stars and between tree branches, as leaves
-spread into their neighbours' space. Too high a temperature makes crowded parts shake.</p>`,
+star is a ring of leaves with an empty middle, and the stars sit small and far apart.</p>
+<p>This idea, from Feynman's Lectures on Physics, Vol. 1, Ch. 40, treats the nodes as a gas: where
+they are packed denser than about one node per spring-length square, they push from the crowded
+spot towards emptier space, and the "temperature" sets how hard. Crowding is measured on a hidden
+square grid with one spring length per cell, and the push fades in between one and two times that
+density; the round-2 lab version compared nearby pairs instead, but it shook.</p>
+<p>Look for the stars' middles filling in and the stars growing: on <i>starOfStars</i> the drawing
+covers about 2.4 times as much of the frame (1.6 times on <i>megaStars</i>), and <i>grid20</i> ends
+up the same as with <b>none</b>.</p>
+<p>What gets worse: about twice as many edge crossings on <i>starOfStars</i> and nearly four times
+as many on <i>paTree3k</i>, and if you zoom into a filled star, its leaves line up in rows and
+columns along that hidden grid. A temperature above about 10 makes crowded parts shake, so the fire
+integrator, which has no drag, gets half the temperature. With weaker repulsion (gravity -2) or
+longer springs (30), ordinary spacing already counts as crowded and grids change too; it works in
+2D only and does nothing in 3D.</p>`,
   tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: paTree3k', 'Benchmark: grid20'],
   params: [
     {
@@ -32,16 +35,16 @@ spread into their neighbours' space. Too high a temperature makes crowded parts 
       key: 'spacing', label: 'Crowding spacing', value: 1, step: '0.1',
       help: 'Nodes push only where they are, on average, closer than this many spring lengths. ' +
         'Larger values reach more of the graph (trees, sparse parts); smaller values touch only ' +
-        'the most crowded spots.'
+        'the most crowded spots. 0 turns the push off.'
     }
   ],
 
   attach({ layout, params }) {
     const simulator = layout.simulator;
-    const fire = simulator.settings.integrator === 'fire';
+    // the fire halving is applied in gasPressure.js at every step, since the integrator can change
     const gas = createGasPressure(simulator, {
-      temperature: (fire ? 0.5 : 1) * Math.max(0, params.temperature),
-      spacing: Math.max(0.05, params.spacing),
+      temperature: Math.max(0, params.temperature),
+      spacing: Math.max(0, params.spacing),
       radius: 1,
     });
     simulator.addForce('v1-6-gas-pressure', gas.force);

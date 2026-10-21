@@ -55,9 +55,12 @@ function compile() {
   code = replaceOnce(code, 'v = gravity * body.mass * sourceBody.mass / (r * r * r);', law('body.mass'));
   code = replaceOnce(code, 'v = gravity * node.mass * sourceBody.mass / (r * r * r);', law('node.mass'));
   // A cell whose nearest point is beyond the reach adds nothing: don't open it, don't add it.
-  // (0.71 * width is the farthest a square cell's corner can be from any point inside it.)
+  // The nearest point is measured to the cell's box: the centre of mass can sit anywhere inside
+  // the cell, so the distance to it says little about how close the cell's nearest body is.
   code = replaceOnce(code, 'if ((node.max_x - node.min_x) / r < theta) {',
-    'if (r - 0.71 * (node.max_x - node.min_x) > K.cutoff) {\n        } else if ((node.max_x - node.min_x) / r < theta) {');
+    'var bx = Math.max(node.min_x - sourceBody.pos.x, 0, sourceBody.pos.x - node.max_x);\n' +
+    '        var by = Math.max(node.min_y - sourceBody.pos.y, 0, sourceBody.pos.y - node.max_y);\n' +
+    '        if (bx * bx + by * by > K.cutoff * K.cutoff) {\n        } else if ((node.max_x - node.min_x) / r < theta) {');
   // The generated body ends with `return createQuadTree;`
   return new Function('K', code);
 }

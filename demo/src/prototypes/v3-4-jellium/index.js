@@ -5,50 +5,56 @@ export default {
   title: 'Neutral background ("jellium")',
   author: 'v3-4 (Feynman Vol. III reader)',
   description: `
-<p>On graphs with many separate pieces (yeast, sciMet, EVA) ngraph draws the main part as a small
-dense ball, with the pieces on a ring far away, so most of the screen is empty. Graphs made of big
-stars (megaStars, starOfStars) have the same problem: small discs of leaves joined by very long lines.</p>
-<p>The cause is that every node pushes every other node away, however far apart they are, and big
-hubs push hardest. This idea keeps that push, but lays an even "background" under the drawing: a
-disc that pulls each node exactly as hard as an evenly spread crowd of nodes would push it. Where
-nodes are spread evenly the two cancel. Crowded places still push apart, empty places now pull
-nodes in, and nothing gets flung far away.</p>
-<p>It comes from Feynman's <i>Lectures on Physics</i>, Vol. III, chapter 21 (superconductivity).
-In a metal, a fixed background of positive ions balances the electrons' push on each other, and
-that keeps the electrons' density nearly even. Physicists call such a background "jellium".</p>
-<p>The background switches on at step 300. At that moment it measures how closely nodes sit, and it
-keeps that value for the rest of the run. Look for the stars or the main part filling the screen,
-with the pieces close around it. Compare with <b>none</b>.</p>
-<p>What gets worse: more crossing lines where stars now touch. A higher <i>Background density</i>
-packs small pieces so close that you can't tell them apart, and trees get more crossings. It does
-not help communities (sbm8x50 looks the same), and it changes nothing until step 300. 2D only: in
-3D it does nothing.</p>`,
+<p>On graphs with many separate pieces (yeast, sciMet, EVA), ngraph pushes the small pieces far out,
+and on big-star graphs (megaStars, starOfStars) the stars end up as small discs on long lines.</p>
+<p>This idea keeps every node's push, but adds an even "background" disc that pulls each node toward
+the centre about as hard as an evenly spread crowd of nodes would push it, so crowded places still
+push apart and empty space pulls nodes in. It comes from Feynman's <i>Lectures on Physics</i>,
+Vol. III, chapter 21, where a fixed background of positive charge in a metal ("jellium") balances the
+electrons' push on each other.</p>
+<p>At step 300 it measures how closely the nodes sit and fixes the disc's density from that. On
+megaStars the stars become big touching starbursts (the longest hub-to-hub line shrinks from about
+240 to 125); on yeast the main part keeps its size, but the pieces stop drifting away, so zoom-to-fit
+gives it most of the screen; grid20 and sbm8x50 look the same.</p>
+<p>What gets worse: more crossing lines where stars touch (starOfStars: 0.13 to 0.31 per line),
+small pieces packed too close to tell apart at a higher <i>Background density</i>, a crushed
+drawing if it switches on before about step 50, and a short pause at step 300 while it measures.
+It changes nothing before step 300, doesn't help communities, and does nothing in 3D, on graphs
+under 8 nodes, or when nodes attract each other (gravity 0 or more).</p>`,
   tryGraphs: ['Benchmark: megaStars', 'Benchmark: starOfStars', 'Benchmark: yeast', 'Benchmark: sciMet', 'Benchmark: grid20'],
   params: [
     {
       key: 'density', label: 'Background density', value: 0.25, step: '0.05',
       help: 'How dense the background is, as a share of how closely nodes sit at the step it switches on. ' +
-        'Higher packs stars and pieces tighter (fewer gaps, more crossings, pieces start to mix); lower is gentler. ' +
-        'Measured once, then kept: re-measuring would let the drawing shrink without end.'
+        '0 (or less) turns the background off. Higher packs stars and pieces tighter: fewer gaps, more crossings, ' +
+        'and at 0.5 EVA\'s small pieces pack so close that you can\'t tell them apart. Lower is gentler. ' +
+        'Measured once, then kept: re-measuring every step gave the same picture in a short test, ' +
+        'so measuring once is simply the simpler choice.'
     },
     {
       key: 'extra', label: 'Extra pull', value: 0.3, step: '0.1',
-      help: 'Extra background charge, as a share of the nodes\' total mass. Pulls back pieces that were pushed ' +
-        'far away before the background switched on. 0 means an exactly balanced background.'
+      help: 'Extra background charge, as a share of the nodes\' total mass, meant to pull back pieces that start ' +
+        'far away. 0 means an exactly balanced background; below 0 counts as 0. From the demo\'s start it isn\'t ' +
+        'needed: at 0, yeast, sciMet and EVA pull their pieces in just as well.'
     },
     {
       key: 'startStep', label: 'Switch on at step', value: 300, step: '50',
       help: 'The background waits this many steps, so the graph can first unfold, and then measures node density. ' +
-        'Earlier gets pieces in sooner but can freeze an unfinished layout.'
+        'Below about 50 the graph hasn\'t unfolded yet: the background comes out too small and crushes the whole ' +
+        'drawing (at 0, yeast shrinks to a tenth of its width). Below 0 counts as 0.'
     }
   ],
 
   attach({ layout, params, settings }) {
     if ((settings.dimensions || 2) !== 2) return null;
+    const density = Number.isNaN(Number(params.density)) ? 0.25 : Number(params.density);
+    if (!(density > 0)) return null; // 0 turns the background off
+    const extra = Number(params.extra);
+    const startStep = Number(params.startStep);
     addBackground(layout, {
-      density: Number(params.density) > 0 ? Number(params.density) : 0.25,
-      extra: Number(params.extra) >= 0 ? Number(params.extra) : 0.3,
-      startStep: Number(params.startStep) >= 0 ? Number(params.startStep) : 300
+      density,
+      extra: Number.isNaN(extra) ? 0.3 : Math.max(0, extra),
+      startStep: Number.isNaN(startStep) ? 300 : startStep
     });
     return null;
   }

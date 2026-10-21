@@ -9,8 +9,10 @@
 // In stock ngraph the links between groups are as stiff as the links inside them, the pull wins
 // early, and the groups sit on top of each other. Every few steps this prototype measures each
 // group's centre, mass and width, and sets the stiffness of the links between each pair so the
-// tug of war balances when the centres are `gap` group widths apart. It only ever weakens those
-// links (never below 5%), and touches nothing else.
+// tug of war balances when the centres are `gap` group widths apart (never aiming closer than
+// 1.5 link lengths). The other groups push too, so the real distances end up a little closer to
+// the middle than `gap` asks. It only ever weakens those links (never below 5%), and touches
+// nothing else.
 import findGroups from './findGroups.js';
 
 const EVERY = 25;      // steps between updates
@@ -25,54 +27,57 @@ export default {
   author: 'v1-3 (Feynman Vol 1, Ch. 15-23)',
   description: `
 <p>On graphs made of communities (groups of nodes linked mostly among themselves),
-ngraph draws one evenly spread sheet: the groups show only as faint lobes that touch, and
-their edges mix.</p>
-<p>This idea finds the groups once, then every 25 steps it loosens only the links that run
-between two groups. For each pair of groups it picks how loose those links are, so that the
-push between the two whole groups balances their pull when the groups' centres sit
-<b>Gap</b> group widths apart. Links inside a group are never changed.</p>
-<p>It comes from Feynman, Vol 1, chapters 18&ndash;19. The forces inside a body cancel, so only
-outside forces move its centre (the average position of its parts). From far away, a whole
-group pushes like one heavy node at that centre.</p>
-<p>Look for separate blobs with white space between them and long links across the gaps, as
-ForceAtlas2 draws them. Compare with <b>none</b>. On grid20, nothing should change.</p>
-<p>Each group it found has its own color; nodes in no group (or in a group smaller than
-<b>Smallest group</b>) keep the usual color.</p>
-<p>What gets worse: links between groups become long, so they no longer match graph
-distance, and the gaps leave more of the frame empty. Lower <b>Smallest group</b> to 1 and
-weak groups (Miserables) or random clumps (rgg1500) get pulled apart too: the picture turns
-lopsided or gets holes.</p>`,
+ngraph draws one even sheet in which the groups touch and mix.</p>
+<p>This idea finds the groups once and, every 25 steps, loosens only the links between two
+groups, so that the push and pull of the two whole groups balance at about <b>Gap</b> group
+widths apart (those links never get stiffer, keep at least 5% of their stiffness, and never
+aim closer than 1.5 link lengths).</p>
+<p>It comes from Feynman, Vol 1, chapters 18&ndash;19: the forces inside a body cancel, so only
+outside forces move its centre, and from far away a whole group pushes like one heavy node.</p>
+<p>Look for separate colored blobs with long links across white gaps: on sbm8x50 the group
+centres move from about 1.8 to 2.6 group widths apart.</p>
+<p>If nothing is colored, it found no linked groups and the layout is the same as <b>none</b>
+(grid20, or any 3D layout).</p>
+<p>What gets worse: stress (how badly drawn distances match the number of hops between nodes)
+rises 18% on sbm8x50 and 29% on communities, the gaps leave more of the frame empty, and the
+default settings also push apart two or three big groups in sciMet (stress +24%), npmMix4 and
+erdos992.</p>
+<p>Lower <b>Smallest group</b> to 1 and weak groups (Miserables) and random clumps (rgg1500)
+get pulled apart as well.</p>`,
   tryGraphs: ['Benchmark: sbm8x50', 'Benchmark: communities', 'Groups 8x250 (2k)', 'Benchmark: grid20'],
   params: [
     {
       key: 'gap', label: 'Gap', value: 2.5, step: '0.5',
-      help: 'How far apart two linked groups settle: distance between their centres, in group widths ' +
-        '(each width is a group\'s average distance of its nodes from its centre, summed over the two groups). ' +
-        '1.5 is gentle, 2.5 looks like ForceAtlas2, 3.5 gives tight blobs with very long links between them.'
+      help: 'Target distance between the centres of two linked groups, in group widths (a group\'s width ' +
+        'is the root-mean-square distance of its nodes from its centre; the two widths are added). The other ' +
+        'groups push too, so real distances come out closer to the middle: on sbm8x50, 1.5 gives about 2.2, ' +
+        '2.5 about 2.6 (like ForceAtlas2), 3.5 about 3.4 (tight blobs, very long links). 0 or less asks for ' +
+        'no gap, so the links stay as stiff as before.'
     },
     {
       key: 'certainty', label: 'Group certainty', value: 0.75, step: '0.05',
       help: 'Communities are searched 8 times from different random orders. A link counts as running ' +
-        'between groups only if it does so in at least this share of the searches. Lower lets links of ' +
-        'fuzzier groups loosen too; higher keeps only the clearest ones.'
+        'between groups only if it does so in at least this share of the searches, so it moves in steps ' +
+        'of 1/8 (0.75 means 6 of 8). Lower lets links of fuzzier groups loosen too (0: every link between ' +
+        'two groups); higher keeps only the clearest ones (above 1: none, so nothing changes).'
     },
     {
       key: 'minGroup', label: 'Smallest group', value: 2, step: '0.5',
       help: 'Smallest group that counts, as a multiple of the square root of the number of nodes ' +
-        '(400 nodes: 2 means 40). 1 lets smaller groups separate too, but then weak groups ' +
-        '(Miserables) and random clumps (rgg1500) get pulled apart as well.'
+        '(400 nodes: 2 means 40; 0 counts every group, however small). 1 lets smaller groups separate ' +
+        'too, but then weak groups (Miserables) and random clumps (rgg1500) get pulled apart as well.'
     }
   ],
 
   attach({layout, graph, params, settings}) {
     if ((settings.dimensions || 2) !== 2) return null; // 2D only
     const {groups, pairs} = findGroups(graph, {
-      certainty: Number(params.certainty),
-      minGroupFactor: Number(params.minGroup)
+      certainty: numberOr(params.certainty, 0.75),
+      minGroupFactor: numberOr(params.minGroup, 2)
     });
     if (!pairs.length) return null; // no clear communities: leave the layout as it is
 
-    const gap = Number(params.gap) > 0 ? Number(params.gap) : 2.5;
+    const gap = Math.max(0, numberOr(params.gap, 2.5));
     const simulator = layout.simulator;
     const groupBodies = groups.map(nodes => nodes.map(id => layout.getBody(id)));
     const pairSprings = pairs.map(pair => ({
@@ -131,13 +136,21 @@ lopsided or gets holes.</p>`,
       });
       // Stiffness share f that balances push and pull at the target distance R:
       //   push * M_A * M_B / R^2 = f * k * e_AB * (R - rest)
+      // A target no farther than the rest length (gap 0 with springLength 0) has no balance: keep k.
       for (const pair of pairSprings) {
         if (!pair.springs.length) continue;
         const R = Math.max(gap * (width[pair.a] + width[pair.b]), 1.5 * rest);
-        let f = push * mass[pair.a] * mass[pair.b] / (k * pair.springs.length * R * R * (R - rest));
+        let f = R > rest ? push * mass[pair.a] * mass[pair.b] / (k * pair.springs.length * R * R * (R - rest)) : 1;
         f = Math.min(1, Math.max(MIN_SHARE, f));
+        if (Number.isNaN(f)) f = 1;
         for (const spring of pair.springs) spring.coefficient = f * k;
       }
     }
   }
 };
+
+// NaN (e.g. from the URL) falls back to the default; every other value is used as given
+function numberOr(value, fallback) {
+  const number = Number(value);
+  return Number.isNaN(number) ? fallback : number;
+}

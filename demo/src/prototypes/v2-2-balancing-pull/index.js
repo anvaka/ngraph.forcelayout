@@ -4,8 +4,10 @@
 // linearly with distance, -kappa * m * (x - c). kappa is set so the pull exactly balances the
 // bodies' own push when they are spread evenly, one body per springLength^2 (a uniform
 // "background" of opposite charge, as in a plasma). For that balance to hold, the push between
-// far-apart bodies must fall off as 1/r, as in a flat world; slabPush.js does that beyond a
-// distance h and keeps today's 1/r^2 up close. One-piece graphs are left alone.
+// far-apart bodies must fall off as 1/r, as in a flat world; slabPush.js blends today's 1/r^2 at
+// short range into 2/(h r) at long range. The two are equal at r = h/2, so at the default
+// h = 2 spring lengths the push is already 1.4x today's at one spring length. One-piece graphs
+// are left alone.
 import createSlabPush from './slabPush.js';
 
 export default {
@@ -13,36 +15,36 @@ export default {
   title: 'Balancing pull for graphs in pieces',
   author: 'v2-2 (Feynman Vol. 2 reader)',
   description: `
-<p><b>Problem.</b> When a graph comes in several pieces, nothing holds the pieces together: they
-drift far away, and zoom-to-fit shrinks the main piece to a small dense ball in a mostly empty
-picture. A wall around the layout (tried for v4) only moves the pieces onto a ring at the wall.</p>
-<p><b>Change.</b> Instead of a wall, every node gets a gentle pull toward the middle. The pull
-grows with distance and is sized to cancel the nodes' push on each other exactly when they are
-spread evenly. Then pieces stop right at the edge of the main piece. For the cancelling to work,
-the push between far-apart nodes has to weaken more slowly with distance than it does today; up
-close it is unchanged. This only switches on for graphs in more than one piece.</p>
-<p><b>Where it comes from.</b> Feynman Lectures, Vol. 2, ch. 8–12. Things that push each other
-away (like charges) and are kept in by a metal wall all end up pressed against the wall. An even
-background of opposite charge holds them evenly spread instead, as in a plasma.</p>
-<p><b>Look for.</b> The main piece fills the screen and its inner structure shows. The small
-pieces sit just around it, not far away. Compare with <b>none</b>. On grid20 (one piece) nothing
-changes.</p>
-<p><b>Worse.</b> Small pieces get pressed against the main one, and graphs made mostly of tiny
-pieces (try protein) get crowded. A step costs about the same as the stock layout. This always
-uses the plain tree for the push, so it is slower than the "dual tree" setting if you picked that.
-2D only; in 3D it does nothing.</p>`,
+<p><b>Problem.</b> When a graph comes in several pieces, nothing holds them together: they drift
+far off, and zoom-to-fit shrinks the main piece to a small ball (on yeast it gets 10% of the
+picture).</p>
+<p><b>Change.</b> Every node gets a pull toward the middle that grows with distance, sized for all
+the nodes spread evenly at one per spring length², like the even background of opposite charge
+that holds a plasma together (Feynman Lectures, Vol. 2, ch. 8–12). For that balance to work, the
+push between nodes fades as 1/distance far away instead of today's 1/distance²; it is already
+1.4× today's at one spring length and stronger farther out, so on dense graphs the main piece
+also spreads out wider (yeast: 1.7× as wide).</p>
+<p><b>Look for.</b> Compared with <b>none</b>, the main piece fills most of the picture (yeast 10% →
+90%, CSphd 23% → 71%), and the small pieces sit 3–6 spring lengths from it instead of 20–55.
+Graphs in one piece are left alone, so grid20 doesn't change.</p>
+<p><b>Worse.</b> Small pieces get pressed against the main one and lose some of their shape, and
+graphs made mostly of tiny pieces (protein) get crowded and overlap. A step costs about the same
+as stock, but it ignores the Repulsion setting (always the plain tree, about 6× slower than "dual
+tree") and does nothing in 3D.</p>`,
   tryGraphs: ['Benchmark: yeast', 'Benchmark: sciMet', 'Benchmark: CSphd', 'Benchmark: grid20'],
   params: [
     {
       key: 'strength', label: 'Pull strength', value: 1, step: '0.1',
-      help: '1 = the pull exactly cancels the push, so pieces settle at the edge of the main piece. ' +
-        '0 turns the pull off (pieces drift away, as in none). Above 1 the small pieces get squeezed into the main one.'
+      help: '1 = the pull balances the push of all nodes spread evenly at one per spring length², so pieces settle ' +
+        'at the edge of that disc, a few spring lengths outside the main piece. ' +
+        '0 turns the pull off (pieces drift away, as in none). Above 1 the small pieces get pressed closer and start to overlap the main one.'
     },
     {
-      key: 'reach', label: 'Long push from', value: 2, step: '0.5',
-      help: 'In spring lengths. Beyond this distance the push weakens as 1/distance instead of today\'s 1/distance², ' +
-        'like in a flat world; the pull stays the same. Smaller: the main piece opens up more. ' +
-        "0 or large (e.g. 100) brings back today's push, and then the pull drags small pieces inside the main one (try CSphd)."
+      key: 'reach', label: 'Long push scale', value: 2, step: '0.5',
+      help: 'In spring lengths. The push is today\'s 1/distance² at short range and fades only as 1/distance at long ' +
+        'range, like in a flat world; the two parts are equal at half this value. At the default 2 the push is 1.4× ' +
+        'today\'s at one spring length and 2.2× at two. The pull stays the same. Smaller: the main piece opens up more. ' +
+        "0 gives exactly today's push, and large values (e.g. 100) nearly so; then the pull drags small pieces inside the main one (try CSphd)."
     },
     {
       key: 'always', label: 'Also on one-piece graphs', value: 0, step: '1',
@@ -57,7 +59,7 @@ uses the plain tree for the push, so it is slower than the "dual tree" setting i
 
     const simulator = layout.simulator;
     const simSettings = simulator.settings;
-    const strength = Math.max(0, Number(params.strength) || 0);
+    const strength = Number.isFinite(Number(params.strength)) ? Math.max(0, Number(params.strength)) : 0;
     const reach = Math.max(0, Number(params.reach) || 0);
     const getH = () => reach * simSettings.springLength;
 
@@ -98,11 +100,17 @@ function balancingPull(simulator, strength) {
   const flatG = Math.abs(settings.gravity) / L;
   const radius2 = n * L * L / Math.PI;
   const kappa = strength * flatG * charge / radius2;
+  // Spring length 0 (the panel passes through it while you type "0.5") and other extreme settings
+  // make kappa 0, negative, infinite or NaN: then there is no pull, rather than NaN positions.
+  if (!(kappa > 0 && kappa < Infinity)) return;
   for (let i = 0; i < n; ++i) {
     const body = bodies[i];
     if (body.isPinned) continue;
-    body.force.x -= kappa * body.mass * (body.pos.x - cx);
-    body.force.y -= kappa * body.mass * (body.pos.y - cy);
+    const fx = kappa * body.mass * (body.pos.x - cx);
+    const fy = kappa * body.mass * (body.pos.y - cy);
+    if (!Number.isFinite(fx) || !Number.isFinite(fy)) continue; // overflow, only at absurd strengths
+    body.force.x -= fx;
+    body.force.y -= fy;
   }
 }
 

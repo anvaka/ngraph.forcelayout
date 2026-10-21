@@ -7,6 +7,10 @@
 // leaves push each other the same way, both sides. So a big fan no longer shoves distant stars away,
 // while a foreign hub still clears its way through a fan. Drag is applied as in the library (not with
 // the FIRE integrator).
+//
+// Round 2 ("fermi2" in the lab) used a range of two link lengths and gave a leaf near a core node
+// that core node's push twice (once through the tree, once in the near pass). Here the range is one
+// link length, and each push is counted once.
 import generateQuadTree from '../../../../lib/codeGenerators/generateQuadTree.js';
 
 export default function createShortRangeLeaves(layout, isLeafNode, rangeInLinks = 1) {
@@ -32,7 +36,9 @@ export default function createShortRangeLeaves(layout, isLeafNode, rangeInLinks 
       tree.updateBodyForce(body); // core push, felt by core nodes and leaves alike
     }
 
-    nearLeaves(bodies, rangeInLinks * settings.springLength, settings.gravity);
+    // A spring length of 0 (or less) leaves no range, so leaves push nothing
+    const range = rangeInLinks * settings.springLength;
+    if (range > 0) nearLeaves(bodies, range, settings.gravity);
 
     if (settings.integrator === 'fire') return; // FIRE removes energy its own way, as in the library
     const drag = settings.dragCoefficient;
@@ -64,9 +70,18 @@ export default function createShortRangeLeaves(layout, isLeafNode, rangeInLinks 
   // push from core nodes through the tree, so a leaf-core pair adds force to the core node only.
   function nearLeaves(bodies, range, gravity) {
     const n = bodies.length, mask = head.length - 1;
+    // Cells are at least a millionth of the span from the origin to the farthest body: with a tiny
+    // range the cell numbers would overflow the integer arrays and fall into one crowded bucket.
+    // A cell wider than `range` still finds every pair within it.
+    let span = 0;
+    for (let i = 0; i < n; i++) {
+      const p = bodies[i].pos;
+      span = Math.max(span, Math.abs(p.x), Math.abs(p.y));
+    }
+    const cell = Math.max(range, span * 1e-6);
     head.fill(-1);
     for (let i = 0; i < n; i++) {
-      const cx = Math.floor(bodies[i].pos.x / range), cy = Math.floor(bodies[i].pos.y / range);
+      const cx = Math.floor(bodies[i].pos.x / cell), cy = Math.floor(bodies[i].pos.y / cell);
       cellX[i] = cx; cellY[i] = cy;
       const h = hash(cx, cy) & mask;
       next[i] = head[h]; head[h] = i;

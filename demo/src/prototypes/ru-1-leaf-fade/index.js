@@ -7,27 +7,30 @@ export default {
   author: 'ru-1 (Samarsky & Gulin reader)',
   description: `
 <p>On graphs made of hubs with many leaves (starOfStars, megaStars), ngraph draws each hub as a
-tight little disc far from the others, so most of the picture is empty.</p>
-<p>The reason: every node pushes every other node away at any distance. All the leaves of one hub
-push the next hub's fan, so the bigger the fans, the wider the gaps.</p>
+tight little disc far from the others, because every leaf of one hub pushes the next hub away at
+any distance.</p>
 <p>Here a push that involves a leaf (a node with one link, hanging off a node with more) fades
-with distance: three quarters of its strength at one link length, a fifth at three, nothing
-beyond six. Pushes between other nodes stay as they were.</p>
-<p>Look for fans that open into wide sunbursts and sit next to each other, filling the frame.
-Graphs without leaves (grid20) keep the stock layout exactly.</p>
+with distance: three quarters of its strength at one ideal spring length, a fifth at three, and
+nothing beyond six; other pushes stay as they were.</p>
+<p>Look for fans that open into sunbursts and fill the frame: on starOfStars the share of the frame
+holding nodes goes from 0.13 to 0.43, while grid20, which has no leaves, keeps the stock layout
+exactly.</p>
 <p>From Samarsky &amp; Gulin, <i>Numerical Methods</i>, Part I §3–4: a nudge travels down a chain
-of springs with no decay, unless every node is also held by its own spring to a fixed spot; then
-it dies out within a few nodes (a "screened" push).</p>
-<p>What gets worse: in leafy trees (paTree3k) the fans of neighbouring branches overlap, and
-graphs with many pieces (CSphd, EVA) show their main piece smaller. <i>Fade every push</i> = 1
-packs the stars even more tightly, but trees and grids then stop unfolding (try paTree3k,
-rgg1500).</p>`,
+of springs with no decay, unless every node is also tied to a fixed spot, and then it dies out
+within a few nodes.</p>
+<p>What gets worse: links cross about 2.5× more often on the star graphs, neighbouring fans
+overlap in leafy trees (paTree3k: 0.07 → 0.30 crossings per link), graphs with many pieces (CSphd)
+draw their main piece smaller, and each step costs about 1.6–2× stock. <i>Fade every push</i> = 1
+packs the stars tighter, but trees and sheets stop unfolding (paTree3k: 0.85 crossings per link).
+It works in 2D only and ignores the Repulsion setting: with dual tree it still computes the pushes
+its own way, about 8–10× slower than none.</p>`,
   tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: grid20'],
   params: [
     {
       key: 'reach', label: 'Leaf reach', value: 1, step: '0.5',
-      help: 'How far a leaf\'s push reaches, in link lengths. Smaller packs the hub fans closer ' +
-        'together. Larger moves back toward the stock layout. 0 turns the fade off.'
+      help: 'How far a leaf\'s push reaches, in ideal spring lengths. Smaller packs the hub fans ' +
+        'closer together; just above 0, leaves push almost nothing. Larger moves back toward the ' +
+        'stock layout. 0 turns the fade off (stock layout).'
     },
     {
       key: 'fadeAll', label: 'Fade every push', value: 0, step: '1',
@@ -45,8 +48,8 @@ rgg1500).</p>`,
     if (!fadeAll && !hasLeaves(graph)) return null;
     const simulator = layout.simulator;
     const force = createLeafFadeForce(simulator, { reach, fadeAll });
-    // Our push replaces the library's n-body force. Springs must still run after it, because the
-    // n-body pass is the one that clears last step's forces.
+    // Our push replaces the library's n-body force, whichever Repulsion setting is picked. Springs
+    // must still run after it, because the n-body pass is the one that clears last step's forces.
     const springForce = simulator.getForces().get('spring');
     simulator.removeForce('nbody');
     simulator.removeForce('spring');

@@ -3,9 +3,10 @@
 // Two bodies closer than `radius` push each other apart with
 //   F(r) = 2C (1/r^3 - 1/a^3),          a/2 <= r < a
 //   F(r) = F(a/2) + |F'(a/2)| (a/2 - r), r < a/2 (linear, keeps the push bounded)
-// which is the force of the pair energy C (1/r^2 - 1/a^2): squeezing a body into a space r
-// costs energy that grows like 1/r^2 (Feynman, Lectures on Physics I, 38-4). C is chosen so that
-// F(a/2) = strength. Bodies farther apart than `a` feel nothing.
+// This is the force 2C/r^3 of the pair energy C/r^2, shifted down by 2C/a^3 so that it fades to
+// zero at r = a: squeezing a body into a space r costs energy that grows like 1/r^2 (Feynman,
+// Lectures on Physics I, 38-4). C is chosen so that F(a/2) = strength. Bodies farther apart than
+// `a` feel nothing.
 //
 // Neighbours are found with a uniform grid of cells of size `a`, stored in a hash table of linked
 // lists (typed arrays, no allocation per step). Only pairs in neighbouring cells are tested.
@@ -34,6 +35,8 @@ export default function createPersonalSpaceForce(bodies, groupOf) {
       const a = radius, a3 = a * a * a, half = a / 2;
       const C = strength * a3 / 14;            // 2C (8/a^3 - 1/a^3) = strength
       const slope = 6 * C / (half * half * half * half);
+      // absurd radius or strength values overflow or underflow these; then push nothing
+      if (!(C > 0) || !Number.isFinite(C) || !Number.isFinite(slope)) return 0;
 
       head.fill(-1);
       for (let i = 0; i < n; ++i) {
@@ -59,7 +62,7 @@ export default function createPersonalSpaceForce(bodies, groupOf) {
       }
       for (let i = 0; i < n; ++i) {
         const body = bodies[i];
-        if (body.isPinned) continue;
+        if (body.isPinned || !Number.isFinite(fx[i] + fy[i])) continue;
         body.force.x += fx[i];
         body.force.y += fy[i];
       }

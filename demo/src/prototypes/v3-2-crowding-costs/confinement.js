@@ -2,16 +2,18 @@
 // energy it takes to squeeze a quantum particle into a small space. For two nodes closer than h,
 // the pair energy is c * (1/m_i + 1/m_j) * (1 - r/h)^2, so they push apart with
 //   F = c * (1/m_i + 1/m_j) * 2 * (1 - r/h) / h
-// and light nodes (leaves) are pushed harder than heavy ones (hubs). Nodes farther apart than h
-// do not feel it at all.
+// on each of the two, in opposite directions. Two light nodes (leaves) push each other harder
+// than a pair that includes a heavy hub. Nodes farther apart than h do not feel it at all.
 //
 // The push is stiff where nodes are crowded, and the explicit step (v += dt F / m) overshoots
 // once dt^2 * stiffness / m > ~2, which makes nodes shake. So crowded nodes get a larger inertia
-// for this step only: they move in smaller steps. Where the layout comes to rest does not
-// depend on inertia, only how it gets there. The drag rate is kept as it was.
+// for this step only: the whole force, drag included, is divided by it. A steady force still
+// moves them at the same speed, so pieces drift apart as fast as without this.
 //
 // Close pairs are found with a uniform grid of cell size h, stored in a hash table of typed
 // arrays that is reused from step to step: O(n + pairs) work per step, no allocations.
+const MIN_H = 1e-9; // shortest push range, in layout units
+
 export default function createConfinementForce(simulator, options) {
   const bodies = simulator.bodies;
   const settings = simulator.settings;
@@ -27,7 +29,9 @@ export default function createConfinementForce(simulator, options) {
     const n = bodies.length;
     const c = options.strength;
     const h = options.range * settings.springLength;
-    if (!(c > 0) || !(h > 0) || n < 2) return;
+    // A range shorter than MIN_H holds no two distinct nodes in practice, and its push (~ c / h)
+    // and stiffness (~ c / h^2) could overflow, so it counts as off.
+    if (!(c > 0) || !(h >= MIN_H) || !Number.isFinite(c) || !Number.isFinite(h) || n < 2) return;
     ensureCapacity(n);
     bin(n, 1 / h);
     const pairs = push(n, c, h);
@@ -145,20 +149,18 @@ export default function createConfinementForce(simulator, options) {
     return pairs;
   }
 
-  // Heavier inertia for nodes whose step would overshoot: the whole force on such a node is
-  // scaled by m / inertia, with the drag term kept as it was.
+  // Heavier inertia for nodes whose step would overshoot: the whole force on such a node,
+  // drag included, is scaled by m / inertia.
   function limitSteps(n) {
     const dt = settings.timeStep, springK = settings.springCoefficient;
-    const drag = settings.integrator === 'fire' ? 0 : settings.dragCoefficient;
     for (let i = 0; i < n; ++i) {
       const body = bodies[i];
       if (body.isPinned || stiffness[i] === 0) continue;
       const inertia = dt * dt * (stiffness[i] + springK * body.springCount) / bSafe;
       if (inertia <= body.mass) continue;
       const scale = body.mass / inertia;
-      const fx = body.force.x + drag * body.velocity.x, fy = body.force.y + drag * body.velocity.y;
-      body.force.x = scale * fx - drag * body.velocity.x;
-      body.force.y = scale * fy - drag * body.velocity.y;
+      body.force.x *= scale;
+      body.force.y *= scale;
     }
   }
 }

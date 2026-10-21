@@ -2,13 +2,14 @@
 //
 // The library already pushes every pair i, j apart with gravity * m_i * m_j / r^2. On top of
 // that, this adds (boost / 2) * (1 - s_i . s_j) times the same push, where s are the domain
-// arrows from domains.js: zero for two nodes with the same arrow, up to `boost` times the
-// stock push for opposite arrows. Summed over a tree cell C the extra weight is
+// arrows from domains.js: almost zero for two nodes with the same arrow (arrows are a bit
+// shorter than 1, so neighbors in one domain push about 1.2 times the stock push), up to `boost`
+// times the stock push for opposite arrows. Summed over a tree cell C the extra weight is
 //     sum_j m_j (1 - s_i . s_j) = M_C - s_i . S_C,   with S_C = sum_j m_j s_j,
 // so each cell stores one more moment (S_C, Q numbers), and each interaction costs Q more
 // multiply-adds. Opening rule as in the library's quadtree (cell width / distance < theta), with
-// theta at least 1: the extra push is a correction, so a coarser tree is fine (about 7-10% error
-// against an exact sum, versus about 5% at the library's 0.8) and the walk is about 30% cheaper.
+// theta at least 1: the extra push is a correction, so a coarser tree is fine (3-5% error against
+// an exact sum at the demo's theta, 5-7% at theta 1.2) and the walk is cheaper.
 import { Q } from './domains.js';
 
 export default function createDomainRepulsion(bodies, spins, options) {

@@ -9,12 +9,15 @@ const FIELD_STEPS = FIELD.length - 1;
  * still push apart, and empty places pull nodes in.
  *
  * The background's density is measured once, at step `startStep`, as `density` times the typical
- * local density of the nodes at that moment, and then kept. Measuring it every step feeds back:
- * the pull makes the drawing denser, the background follows, and the drawing collapses.
+ * local density of the nodes at that moment, and then kept. Re-measuring it every step gave the
+ * same picture in a short test (yeast and megaStars, 1500 steps), so measuring once is simply the
+ * simpler and cheaper choice. Measured before the graph has unfolded (below about step 50), the
+ * background comes out too small and crushes the drawing.
  * Its total charge is (1 + extra) times the nodes' total mass, so pieces that already drifted
  * far away are pulled back.
  *
- * Works in 2D only. Costs two passes over the bodies per step.
+ * Works in 2D only. Costs two passes over the bodies per step. If the background's density over- or
+ * underflows (a huge or tiny `density`), the background turns itself off.
  */
 export default function addBackground(layout, options) {
   const simulator = layout.simulator;
@@ -22,7 +25,7 @@ export default function addBackground(layout, options) {
   const density = options.density;
   const extra = options.extra;
   const startStep = Math.max(0, Math.round(options.startStep));
-  let sigma = 0, radius = 0;
+  let sigma = 0, radius = 0, off = false;
 
   simulator.addForce('neutral-background', backgroundForce);
   return {
@@ -30,7 +33,7 @@ export default function addBackground(layout, options) {
   };
 
   function backgroundForce(iteration) {
-    if (iteration < startStep || bodies.length < 8) return;
+    if (off || iteration < startStep || bodies.length < 8) return;
     var gravity = simulator.settings.gravity;
     if (!(gravity < 0)) return; // the background only makes sense for repelling nodes
 
@@ -49,6 +52,11 @@ export default function addBackground(layout, options) {
       if (!(nodesPerArea > 0)) return;
       sigma = density * nodesPerArea * totalMass / bodies.length;
       radius = Math.sqrt((1 + extra) * totalMass / (Math.PI * sigma));
+      if (!(sigma > 0 && sigma < Infinity && radius > 0)) {
+        // over- or underflow: the force would be NaN (Infinity * 0) or nothing at all
+        off = true;
+        return;
+      }
     }
 
     for (i = 0; i < bodies.length; ++i) {

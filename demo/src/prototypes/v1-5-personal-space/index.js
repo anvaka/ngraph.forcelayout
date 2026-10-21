@@ -3,6 +3,11 @@ import createPersonalSpaceForce from './createPersonalSpaceForce.js';
 const FORCE_NAME = 'v1-5-personal-space';
 // After the start delay, the push grows from zero to full strength over this many steps
 const FADE_STEPS = 100;
+// "Start after" when the value is not a number
+const DEFAULT_DELAY = 400;
+// Largest Radius, in spring lengths. The work per step grows with the number of nodes inside the
+// radius: on megaStars a step takes about 3x the stock time at 5 and over 20x at 1000.
+const MAX_RADIUS = 5;
 // Largest swing (frequency times time step) a crowded body may have; the integrator becomes
 // unstable at 2
 const MAX_SWING = 1.4;
@@ -12,37 +17,38 @@ export default {
   title: 'Personal space within a piece',
   author: 'v1-5 (from Feynman, Lectures on Physics I, ch. 38)',
   description: `
-<p>In ngraph's pictures a hub with many leaves turns into a solid ball or a tight rim of dots:
-all its leaves crowd onto a few thin rings around it. The only thing that keeps nodes apart is a
-long-range push, and next to a hub it loses to the springs as soon as many nodes share a small space.</p>
-<p>This idea gives every node a little personal space. Two nodes of the same connected piece that
-come closer than <i>Radius</i> spring lengths push each other apart, and the push grows quickly the
-closer they get. Crowded nodes also move more slowly while they are crowded, so the strong push
-does not make them shake; that changes how fast they settle, not where. Nodes with room to spare
-feel nothing extra, so grids, trees and chains stay as they are.</p>
-<p>It comes from Feynman's Lectures on Physics, Vol. 1, chapter 38 ("the size of an atom"): matter
-has a size only because particles cannot all crowd into one spot; squeezing them into a space of
-size r costs energy that grows like 1/r².</p>
-<p>What to look for, compared with <b>none</b>: a few hundred steps in, the rings of leaves on
-starOfStars and megaStars fill in and become sunbursts with visible spokes, and megaStars stops
-trembling. On EVA, zoom into the hubs. grid20 should end up the same as with <b>none</b>.</p>
-<p>What gets worse: more crossings around hubs, leaf fans in dense hairballs (erdos992) blur
-together, and steps take about 1.1–1.3× as long. Starting the push right away
-(<i>Start after</i> 0) can lock small knots into grids and trees that are still unfolding.</p>
+<p>In ngraph's pictures a hub with many leaves turns into a solid ball or a thin rim of dots,
+because all its leaves crowd onto one ring around it.</p>
+<p>This idea gives every node a little personal space: from step 400 on, two nodes of the same
+connected piece that are closer than <i>Radius</i> spring lengths push each other apart, harder the
+closer they are. It comes from Feynman's Lectures on Physics, Vol. 1, chapter 38: matter has a size
+because its particles cannot all crowd into one spot.</p>
+<p>That push alone makes crowded nodes shake, so <i>Calm crowded nodes</i> also gives them extra
+inertia: they respond more slowly to every force. This extra does a large share of the work. The
+calm on megaStars and most of its gain (stars fill more of the frame and sit closer together) come
+from it, not from the push; set it to 0 to see the push alone.</p>
+<p>What to look for, compared with <b>none</b>: on starOfStars, EVA and megaStars the rings of
+leaves open into sunbursts, which is the push itself. grid20 ends up exactly the same.</p>
+<p>What gets worse: crossings around hubs go up 1.1–1.9×, small trees such as binTree8 pick up
+crossings, and steps take 1.1–1.4× as long. It does nothing in 3D.</p>
 `,
   tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: EVA', 'Benchmark: grid20'],
   params: [
     {
       key: 'radius', label: 'Radius', value: 0.8, step: '0.1',
-      help: 'Personal space, in spring lengths: nodes of one piece that are closer push apart. Larger fills the stars more, but spreads leaves into neighbouring fans and adds crossings. 0 turns it off.'
+      help: 'Personal space, in spring lengths: nodes of one piece that are closer push apart. Larger fills the stars more, but spreads leaves into neighbouring fans and adds crossings. 0 turns it off. At most 5: larger values count as 5, because each step gets much slower.'
     },
     {
       key: 'strength', label: 'Strength', value: 2, step: '0.5',
-      help: 'Push at half the radius, in units of a spring stretched by one spring length. Larger opens dense rings more, but crowded parts settle more slowly.'
+      help: 'Push at half the radius, in units of a spring stretched by one spring length. Larger opens dense rings more, but crowded parts settle more slowly. 0 turns it off.'
     },
     {
       key: 'delay', label: 'Start after', value: 400, step: '100',
-      help: 'Steps to wait before the push starts (it then fades in over 100 steps). 0 starts it at once, which can freeze knots into grids and trees that are still unfolding.'
+      help: 'Steps to wait before the push starts (it then fades in over 100 steps). 0 starts it at once, which about doubles the gain on starOfStars (the share of the frame the drawing covers), but can freeze knots into grids and trees that are still unfolding (try grid20).'
+    },
+    {
+      key: 'calm', label: 'Calm crowded nodes', value: 1, step: '1',
+      help: '1: while the push runs, crowded nodes get extra inertia (and matching drag), so they respond more slowly to every force and do not shake. It also calms graphs that tremble with none, such as megaStars, and does most of the work there. 0: the push alone; dense stars then shake.'
     }
   ],
 
@@ -65,16 +71,18 @@ together, and steps take about 1.1–1.3× as long. Starting the push right away
 
     simulator.addForce(FORCE_NAME, () => {
       stepCount += 1;
-      const delay = Math.max(0, Number(params.delay) || 0);
+      const delayValue = Number(params.delay);
+      const delay = Number.isNaN(delayValue) ? DEFAULT_DELAY : Math.max(0, delayValue);
       const fade = Math.min(1, (stepCount - delay) / FADE_STEPS);
       if (fade <= 0) return;
 
       if (bodies.length !== knownCount) rebuild();
       const s = simulator.settings; // read every step, so panel changes apply live
-      const radius = Number(params.radius) * s.springLength;
+      const radius = Math.min(MAX_RADIUS, Number(params.radius)) * s.springLength;
       const strength = fade * Number(params.strength) * s.springCoefficient * s.springLength;
       force.apply(radius, strength, true);
-      slowDownCrowdedBodies(s);
+      const calm = Number(params.calm);
+      if (Number.isNaN(calm) || calm > 0) slowDownCrowdedBodies(s);
     });
 
     return {
@@ -89,22 +97,31 @@ together, and steps take about 1.1–1.3× as long. Starting the push right away
     // A stiff push makes crowded bodies overshoot and shake when the time step is too long for
     // them. Giving a body inertia m >= K dt^2 / MAX_SWING^2 (K: how stiff its surroundings are)
     // keeps every step well inside the stable range. Drag is raised by the same factor, so the
-    // body still slows down at its usual rate. This changes how fast bodies move, not where
-    // they come to rest: at rest all forces are zero, whatever the masses are.
+    // body still slows down at its usual rate. A layout at rest would end up the same, since at
+    // rest all forces are zero whatever the masses are. But a layout that still trembles with
+    // none (megaStars) is calmed too, and that changes the picture: on megaStars it gives most of
+    // the gain on its own. Only bodies the push reaches are touched, so the rest move exactly as
+    // without the idea at any time step.
     function slowDownCrowdedBodies(s) {
       const stiffness = force.stiffness;
       const dt = s.timeStep, springStiffness = 2 * s.springCoefficient;
       const useDrag = s.integrator !== 'fire';
       for (let i = 0; i < bodies.length; ++i) {
+        if (!(stiffness[i] > 0)) continue;
         const body = bodies[i];
         const k = stiffness[i] + springStiffness * body.springCount;
         const inertia = k * dt * dt / (MAX_SWING * MAX_SWING);
-        if (inertia <= charge[i]) continue;
+        // the finiteness tests only matter at absurd settings, where the numbers overflow
+        if (!(inertia > charge[i]) || !Number.isFinite(inertia)) continue;
+        let fx = body.force.x, fy = body.force.y;
         if (useDrag) {
           const extra = s.dragCoefficient * (inertia / charge[i] - 1);
-          body.force.x -= extra * body.velocity.x;
-          body.force.y -= extra * body.velocity.y;
+          fx -= extra * body.velocity.x;
+          fy -= extra * body.velocity.y;
+          if (!Number.isFinite(fx + fy)) continue;
         }
+        body.force.x = fx;
+        body.force.y = fy;
         body.mass = inertia;
         massChanged = true;
       }

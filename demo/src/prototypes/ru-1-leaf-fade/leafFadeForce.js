@@ -7,7 +7,9 @@
 //   fade(r) = (1 + r / reach) * exp(-r / reach),
 //
 // the push of a "screened" charge: about full strength up close, almost nothing beyond a few
-// `reach`. Cells farther than CUTOFF * reach are skipped for leaf pushes.
+// `reach`. Leaf pushes beyond CUTOFF * reach are dropped (the round-2 lab skipped only cells beyond
+// 8 * reach; the push there is under 2% of full strength). `reach` is in spring lengths and
+// follows the spring length setting when it changes while the layout runs.
 //
 // One quad tree holds all bodies. Every cell keeps two charge sums: all bodies, and non-leaf
 // bodies only, so a non-leaf body can take the plain push from the non-leaf part of a cell and
@@ -18,9 +20,9 @@ export default function createLeafFadeForce(simulator, options) {
   const bodies = simulator.bodies;
   const springs = simulator.springs;
   const settings = simulator.settings;
-  const reach = options.reach * settings.springLength;
+  const random = simulator.random; // the library's seeded generator, so runs repeat exactly
   const fadeAll = !!options.fadeAll;
-  const cut = CUTOFF * reach;
+  let reach = 0, cut = 0;
 
   let n = 0, springCount = -1;
   let X, Y, Q, isLeaf;
@@ -32,6 +34,9 @@ export default function createLeafFadeForce(simulator, options) {
 
   function update() {
     if (bodies.length === 0) return;
+    // the demo changes the spring length on a running layout, without attaching again
+    reach = options.reach * settings.springLength;
+    cut = CUTOFF * reach;
     if (bodies.length !== n || springs.length !== springCount) prepare();
     buildTree();
     const G = settings.gravity, theta = settings.theta;
@@ -58,7 +63,7 @@ export default function createLeafFadeForce(simulator, options) {
           for (let k = 4 * c; k < 4 * c + 4; k++) if (child[k] >= 0) stack[top++] = child[k];
           continue;
         }
-        if (r === 0) { dx = (Math.random() - 0.5) / 50; dy = (Math.random() - 0.5) / 50; r = Math.sqrt(dx * dx + dy * dy); }
+        if (r === 0) { dx = (random.nextDouble() - 0.5) / 50; dy = (random.nextDouble() - 0.5) / 50; r = Math.sqrt(dx * dx + dy * dy); }
         if (leaf) {
           if (r < cut) {
             const v = G * all * qi * fade(r) / (r * r * r);
@@ -190,8 +195,8 @@ export default function createLeafFadeForce(simulator, options) {
         cellBody[c] = -1;
         if (X[j] === X[i] && Y[j] === Y[i] || depth > 48) {
           // same spot: nudge the new body inside this cell
-          X[i] = minX[c] + side[c] * Math.random();
-          Y[i] = minY[c] + side[c] * Math.random();
+          X[i] = minX[c] + side[c] * random.nextDouble();
+          Y[i] = minY[c] + side[c] * random.nextDouble();
         }
         const cj = childCell(c, quadrant(c, X[j], Y[j]));
         cellBody[cj] = j;
@@ -208,6 +213,10 @@ export default function createLeafFadeForce(simulator, options) {
       }
       c = next;
       depth += 1;
+      // Many bodies on one exact spot (e.g. spring length 0 starts every body at the origin) can
+      // shrink a cell below float precision, where no nudge separates them. Stop there: this body
+      // then counts only in this cell's charge sums, as the library's tree gives up in that case.
+      if (depth > 64) { addCharge(c, i); return; }
     }
   }
 }

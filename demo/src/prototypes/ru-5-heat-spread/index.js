@@ -11,21 +11,26 @@ export default {
   author: 'ru-5 (Samarsky & Gulin reader)',
   description: `
 <p>In ngraph's pictures crowded spots sit next to empty space: a hub's leaves pile into a small
-solid disc, or the main piece of the graph shrinks to a dot, while most of the frame stays empty.</p>
-<p>Let the layout settle, then press the button below. Crowding spreads out the way heat spreads
-through a metal plate, and every node is carried along with it. Packed areas grow into the empty
-space around them and nearby nodes move together, so the drawing stretches without being shuffled.
-Areas that are already evenly filled have nothing to push against and keep their shape.</p>
-<p>The spreading is the heat equation, solved with the Fourier method and kept well-behaved by the
-"maximum principle" (spreading heat never makes a new hot or cold spot), both from Samarsky &amp;
-Gulin's <i>Numerical Methods</i>, the chapters on the maximum principle and on separation of
-variables. Carrying nodes along with the spreading is Gastner and Newman's density-equalizing map.</p>
-<p>Look at megaStars and starOfStars: solid star discs open into fans of spokes. On yeast the main
-piece grows from a dot into a disc. A grid should keep its shape.</p>
-<p>What gets worse: bigger fans reach the long edges between stars, so edges cross more (about twice
-as many on starOfStars); tightly knit groups blend a little; sharp corners, like a grid's, round off a
-bit; "Fill the frame" bends shapes towards a round outline. It changes the current picture once: press Run afterwards and the forces pull it
-back. 2D only: in 3D the button doesn't appear.</p>`,
+solid disc, and on yeast the main piece shrinks to a dot in a mostly empty frame.</p>
+<p>Let the layout settle, then press the button below (2D only: in 3D it doesn't appear): the crowding
+spreads out the way heat spreads through a metal plate and carries the nodes along, so packed areas
+grow into empty space while nearby nodes move together and keep their order.</p>
+<p>The spreading is the heat equation, solved with the Fourier method so that it never makes a new
+crowded or empty spot (Samarsky &amp; Gulin, <i>Numerical Methods</i>, the chapters on the maximum
+principle and on separation of variables); carrying the nodes along is Gastner and Newman's
+density-equalizing map.</p>
+<p>Unlike the round-2 lab version, which added the drawing's average density everywhere, empty space
+is set to that average, and the density is first blurred over about two grid cells: a grid keeps its
+outline better, but the push is stronger (starOfStars crossings ×1.9 instead of ×1.3). At the end the
+whole picture is shrunk evenly back into its old frame, so it stays in view, and the nodes are left
+at rest.</p>
+<p>Look at megaStars and starOfStars, where the big star discs grow to about twice their size and show
+their spokes, and at yeast, whose main piece grows from a tenth to over a quarter of the frame; grid20
+barely changes.</p>
+<p>What gets worse: edge crossings on starOfStars nearly double, small side pieces (on yeast) shrink and
+the smallest stars don't open, groups blend a little, a grid's corners round off, "Fill the frame"
+bends shapes towards a round outline, and the change lasts only until you press Run: the forces pull
+most of it back within about 200 steps.</p>`,
   tryGraphs: ['Benchmark: megaStars', 'Benchmark: starOfStars', 'Benchmark: yeast', 'Benchmark: grid20'],
   params: [
     {
@@ -37,8 +42,9 @@ back. 2D only: in 3D the button doesn't appear.</p>`,
     },
     {
       key: 'time', label: 'Spreading time', value: 1, step: '0.5',
-      help: 'How long the heat spreads. At 1 the largest density differences fade to about a third. ' +
-        'Bigger values make the density more even everywhere; smaller ones are a gentler touch. 0 does nothing.',
+      help: 'How long the heat spreads. At 1 the broadest density differences, across the whole drawing, ' +
+        'fade to about a third; smaller ones fade more. Bigger values make the density more even everywhere; ' +
+        'smaller ones are a gentler touch. 0 does nothing. The spreading stops after at most 400 flow steps.',
     },
   ],
   finishLabel: 'Spread the crowding like heat',
@@ -61,10 +67,11 @@ back. 2D only: in 3D the button doesn't appear.</p>`,
           points[2 * i + 1] = body.pos.y;
           movable[i] = body.isPinned ? 0 : 1;
         });
-        const fill = Math.min(1, Math.max(0, params.fill));
+        // A missing or NaN parameter falls back to its default (NaN would turn every position into NaN)
+        const fill = Math.min(1, Math.max(0, orDefault(params.fill, 0)));
         const flow = createDensityFlow(points, movable, {
           sea: 1 - 0.8 * fill,
-          amount: Math.max(0, params.time),
+          amount: Math.max(0, orDefault(params.time, 1)),
         });
 
         const frameBefore = boundingBox(points);
@@ -73,8 +80,10 @@ back. 2D only: in 3D the button doesn't appear.</p>`,
         const tick = () => {
           const done = flow.advance(STEPS_PER_FRAME);
           // The flow may push the outermost nodes a little past the old picture. Shrink the whole
-          // drawing to the old bounding box, so it stays in view (skipped when nodes are pinned)
-          const now = boundingBox(points);
+          // drawing evenly to the old bounding box and centre it there, so it stays in view. Both
+          // are skipped when nodes are pinned: the others stay where the flow put them, next to the
+          // pinned ones
+          const now = anyPinned ? frameBefore : boundingBox(points);
           const scale = anyPinned ? 1 : Math.min(1, frameBefore.width / now.width, frameBefore.height / now.height);
           bodies.forEach((body, i) => {
             if (!movable[i]) return;
@@ -97,6 +106,10 @@ back. 2D only: in 3D the button doesn't appear.</p>`,
     }
   },
 };
+
+function orDefault(value, fallback) {
+  return typeof value === 'number' && !Number.isNaN(value) ? value : fallback;
+}
 
 function boundingBox(points) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;

@@ -7,9 +7,10 @@
 export const Q = 4;
 
 export function computeDomains(nodeCount, neighbors, options = {}) {
-  const temperature = options.temperature > 0 ? options.temperature : 0.3;
+  // 0 or less: every arrow at full length (tanh of infinity is 1). Not a number: the default.
+  const temperature = Number.isFinite(options.temperature) ? Math.max(0, options.temperature) : 0.3;
   const antiAlign = 1;
-  // Cap the work on big graphs: about 2e8 multiply-adds at most.
+  // Cap the work on big graphs: about 2e8 multiply-adds, but at least 60 rounds.
   let edgeEnds = 0;
   for (let i = 0; i < nodeCount; ++i) edgeEnds += neighbors[i].length;
   const rounds = Math.min(300, Math.max(60, Math.floor(2e8 / Math.max(1, Q * edgeEnds))));
@@ -52,14 +53,20 @@ export function computeDomains(nodeCount, neighbors, options = {}) {
   return { spins, rounds };
 }
 
-// Is the grouping real? Two numbers, both cheap:
+// Is the grouping real? Three numbers, all cheap:
+//  - magnitude: mean arrow length. Above the "Curie point" the arrows shrink toward 0, but their
+//    directions still follow the graph, so the other two numbers alone can't tell.
 //  - wallShare: share of links whose two arrows clearly disagree (dot < 0.5). On grids, meshes
 //    and trees the arrows turn slowly from place to place, so this is about 0.
 //  - modularity of the domains (each node labeled by its arrow's strongest axis and sign):
 //    random graphs score 0.34-0.43 here, graphs made of groups 0.5-0.65.
 export function describeDomains(nodeCount, neighbors, spins) {
   const labels = new Int32Array(nodeCount);
+  let magnitude = 0;
   for (let i = 0; i < nodeCount; ++i) {
+    let length2 = 0;
+    for (let a = 0; a < Q; ++a) length2 += spins[i * Q + a] * spins[i * Q + a];
+    magnitude += Math.sqrt(length2) / nodeCount;
     let best = 0, bestValue = -1;
     for (let a = 0; a < Q; ++a) {
       const value = Math.abs(spins[i * Q + a]);
@@ -89,6 +96,47 @@ export function describeDomains(nodeCount, neighbors, spins) {
       modularity += insideCount[c] / links - (degreeSum[c] / (2 * links)) ** 2;
     }
   }
-  const domainCount = new Set(labels).size;
-  return { wallShare: links ? walls / links : 0, modularity, domainCount, links, labels };
+  return { wallShare: links ? walls / links : 0, modularity, links, magnitude };
+}
+
+// Domains for the colors: group the arrows by direction. (The strongest axis above would split an
+// arrow that sits between two axes and merge two arrows that share one.) Strongest arrows first;
+// a node joins the first group whose first arrow is within about 25 degrees (cosine > 0.9).
+// Groups under 2% of the nodes join the closest big group. At most 64 groups are started.
+export function arrowGroups(nodeCount, spins) {
+  const length = new Float64Array(nodeCount);
+  for (let i = 0; i < nodeCount; ++i) {
+    let s = 0;
+    for (let a = 0; a < Q; ++a) s += spins[i * Q + a] * spins[i * Q + a];
+    length[i] = Math.sqrt(s) || 1e-12;
+  }
+  const cosine = (i, j) => {
+    let d = 0;
+    for (let a = 0; a < Q; ++a) d += spins[i * Q + a] * spins[j * Q + a];
+    return d / (length[i] * length[j]);
+  };
+  const order = Array.from({ length: nodeCount }, (_, i) => i).sort((a, b) => length[b] - length[a] || a - b);
+  const seeds = [], size = [], group = new Int32Array(nodeCount);
+  for (const i of order) {
+    let match = -1, nearest = -1, nearestCosine = -2;
+    for (let c = 0; c < seeds.length && match < 0; ++c) {
+      const value = cosine(i, seeds[c]);
+      if (value > 0.9) match = c;
+      else if (value > nearestCosine) { nearestCosine = value; nearest = c; }
+    }
+    if (match < 0 && seeds.length < 64) { match = seeds.length; seeds.push(i); size.push(0); }
+    if (match < 0) match = nearest;
+    group[i] = match; size[match] += 1;
+  }
+  const big = seeds.map((_, c) => c).filter(c => size[c] >= 0.02 * nodeCount);
+  for (let i = 0; i < nodeCount; ++i) {
+    if (size[group[i]] >= 0.02 * nodeCount || !big.length) continue;
+    let best = big[0], bestCosine = -2;
+    for (const c of big) {
+      const value = cosine(i, seeds[c]);
+      if (value > bestCosine) { bestCosine = value; best = c; }
+    }
+    group[i] = best;
+  }
+  return group;
 }
