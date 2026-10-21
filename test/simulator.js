@@ -72,6 +72,28 @@ test('throws on no body or no pos', t => {
   t.end();
 });
 
+test('a body that cannot be added leaves nothing behind', function (t) {
+  var simulator = createSimulator();
+  var a = simulator.addBodyAt({ x: 0, y: 0 });
+  var b = simulator.addBodyAt({ x: 50, y: 50 });
+  t.throws(function () { simulator.addBodyAt({ x: 1 }); }, /finite number/);
+  t.equal(simulator.store.n, 2, 'no row was added');
+  simulator.removeBody(a);
+  simulator.step();
+  t.equal(b.index, 0, 'b moved to the first row');
+  t.equal(b.pos.x, 50, 'and reads its own position');
+  t.end();
+});
+
+test('a body is added once', function (t) {
+  var simulator = createSimulator();
+  var body = simulator.addBody(new Body(1, 2));
+  t.throws(function () { simulator.addBody(body); }, /already in this simulator/);
+  t.equal(simulator.store.n, 1, 'one row');
+  t.equal(simulator.bodies.length, 1, 'one body');
+  t.end();
+});
+
 test('throws on no spring', t => {
   var simulator = createSimulator();
   t.throws(() => simulator.addSpring(), /Cannot add null spring to force simulator/);

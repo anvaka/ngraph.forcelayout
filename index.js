@@ -360,7 +360,7 @@ function createLayout(graph, physicsSettings) {
     }
     if (nodeCharge) {
       var charge = nodeCharge(nodeId);
-      if (Number.isNaN(charge)) throw new Error('Node charge should be a number');
+      if (typeof charge !== 'number' || Number.isNaN(charge)) throw new Error('Node charge should be a number');
       physicsSimulator.store.charge[body.index] = charge;
     }
   }
