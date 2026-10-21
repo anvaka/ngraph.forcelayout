@@ -53,6 +53,10 @@ test('formulas check types and names', function (t) {
   var sim = makeSimulator({ dimensions: 2 }, 4);
   function add(text) { sim.addNodeFormula('f' + Math.random(), { formula: text, params: { k: 1 } }); }
   t.throws(function () { add('force += mass < 1'); }, /condition is used as a number/);
+  t.throws(function () { add('mass = mass < 1'); }, /condition is used as a number/);
+  add('light = mass < 2 && pinned == 0; mass = light ? 2 : mass');
+  sim.step();
+  t.same([sim.store.mass[0], sim.store.mass[1], sim.store.mass[2]], [2, 2, 3], 'a named value can hold a condition');
   t.throws(function () { add('force += mass'); }, /vector but gets a number/);
   t.throws(function () { add('mass = pos * pos'); }, /cannot be multiplied/);
   t.throws(function () { add('w = mass; force += pos'); }, /never used/);
