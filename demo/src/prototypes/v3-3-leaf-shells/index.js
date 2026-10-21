@@ -1,24 +1,25 @@
 import computeShells from './computeShells.js';
 
 // Leaves fill rings (stability rule). A hub's leaves sit in rings at growing distances, each
-// ring holding only as many leaves as it can without buckling; the hub's other links start
-// outside its rings. Only link rest lengths change, once when the layout starts.
+// ring holding no more leaves than a lone ring can without buckling; the hub's other links start
+// outside its rings. Only link rest lengths change: when the layout starts, and again when the
+// panel changes spring length, stiffness or gravity.
 export default {
   id: 'v3-3-leaf-shells',
   title: 'Leaves fill rings (stability rule)',
   author: 'v3-3 (Feynman Vol. 3, ch. 13 and 15)',
   description: `
-<p>On star-like graphs ngraph piles each hub's leaves (nodes with a single link) into a dark ball or a thick rim, so stars look like small blots far apart.</p>
-<p>Why: leaves at the same distance from their hub push each other apart. Packed closer than about half a link length, the ring buckles (every other leaf slides in or out) and crumples into a dense disk.</p>
-<p>This gives each hub several rings of leaves at growing distances, like the shells of an atom, and puts in each ring only as many leaves as it holds without buckling. The hub's other links start outside its rings, so they don't cut through them. Only link lengths change, once at the start; hubs with up to about 11 leaves are left alone.</p>
-<p>From Feynman's Lectures, Vol. 3: ch. 13 and 15 (waves on a ring of atoms; the zigzag wave is the first to give way) and ch. 15-6 (electrons filling shells).</p>
-<p>Look for evenly filled sunbursts with visible rays instead of dark balls, and stars that fill the screen. Compare with <b>none</b>. A close sibling, "Fermi fans" (v3-1), uses a fixed gap you set yourself; here the gap follows gravity and spring strength.</p>
-<p>Worse: big stars make the drawing larger, so the rest looks smaller, and links between stars can cut across other stars' rays (more crossings on starOfStars). 2D only: in 3D it does nothing.</p>`,
+<p>On star-like graphs ngraph piles each hub's leaves (nodes with a single link) into a dense ball.</p>
+<p>Leaves on one ring around their hub push each other apart; closer than about half a link, the ring buckles (every other leaf slides in or out) and crumples into a disk.</p>
+<p>Here each hub with more than about 11 leaves gets several rings at growing distances, like the shells of an atom, each holding no more leaves than a lone ring can without buckling. The hub's other links start outside its rings, and only link lengths change.</p>
+<p>From Feynman's Lectures, Vol. 3: ch. 13 and 15 (waves on a ring of atoms, where the zigzag gives way first) and ch. 15-6 (electrons filling shells).</p>
+<p>Look for sunbursts with visible rays instead of balls: the share of the screen in use doubles on starOfStars and grows 1.7× on megaStars. Compare with <b>none</b>, or with the sibling "Fermi fans" (v3-1), where you set the gap yourself.</p>
+<p>Worse: big stars make the drawing larger, so the rest looks smaller (EVA); links between stars cross more (starOfStars 0.13 → 0.20 crossings per link, EVA 8–26% more); hubs that also have many other links (hubLeaves5k) barely change; and in 3D it does nothing.</p>`,
   tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: EVA', 'Benchmark: caterpillars'],
   params: [
     {
       key: 'spacing', label: 'Ring spacing', value: 1.1, step: '0.1',
-      help: 'Gap between neighbouring leaves on a ring, and between rings, as a multiple of the smallest gap that does not buckle (about half a link at default settings). Below 1 the rings buckle again; larger values give bigger, airier stars.'
+      help: 'Gap between neighbouring leaves on a ring, and between rings, as a multiple of the smallest gap a lone ring holds without buckling (about half a link at default settings). The rings settle a bit further out and steady each other, so they stay separate down to about 0.5 and start to blur together below that. Larger values give bigger, airier stars and also reach smaller hubs (from about 1.9 even the 7-leaf hubs of caterpillars change). 0 turns the idea off.'
     },
     {
       key: 'minLeaves', label: 'Smallest hub', value: 0, step: '1',
@@ -33,14 +34,18 @@ export default {
   attach({ layout, graph, params, settings }) {
     if ((settings.dimensions || 2) !== 2) return null;
     const simulator = layout.simulator;
-    let touched = [];
+    const spacing = Number(params.spacing);
+    const original = new Map(); // spring -> its rest length before this idea changed it
     let length, stiffness, gravity;
     apply();
     // The panel can change spring length, stiffness or gravity without a restart: redo the rings.
     layout.on('step', onStep);
 
     return {
-      dispose() { layout.off('step', onStep); }
+      dispose() {
+        layout.off('step', onStep);
+        restore();
+      }
     };
 
     function onStep() {
@@ -48,26 +53,31 @@ export default {
           simulator.gravity() !== gravity) apply();
     }
 
+    function restore() {
+      original.forEach((rest, spring) => { spring.length = rest; });
+      original.clear();
+    }
+
     function apply() {
       length = simulator.springLength();
       stiffness = simulator.springCoefficient();
       gravity = simulator.gravity();
-      for (const spring of touched) spring.length = -1;
+      restore();
       const plan = computeShells(graph, {
         springLength: length,
         springCoefficient: stiffness,
         gravity,
         leafCharge: leafId => layout.getBody(leafId).mass,
-        spacing: Number(params.spacing) > 0 ? Number(params.spacing) : 1.1,
+        // NaN or infinite falls back to the default; 0 or less turns the idea off
+        spacing: Number.isFinite(spacing) ? spacing : 1.1,
         minLeaves: Number(params.minLeaves) || 0,
         bondsOutside: Number(params.bondsOutside) !== 0,
       });
-      touched = [];
       for (const [link, rest] of plan.lengths) {
         const spring = layout.getSpring(link);
         if (!spring) continue;
+        original.set(spring, spring.length);
         spring.length = rest;
-        touched.push(spring);
       }
     }
   },
