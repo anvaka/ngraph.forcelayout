@@ -1,39 +1,50 @@
-// 2D spring force, written like the one lib/codeGenerators/generateCreateSpringForce.js generates,
-// with one change: a stretched spring (r > L) pulls with an extra factor 1 + (d / (onset * L))^power.
-// Like the stock force it reads springLength and springCoefficient from the simulator settings on
-// every step, honours per-link length and coefficient, and keeps springCount / springLength up to
-// date for the adaptive time step.
+// Spring stage written like the library's own (lib/codeGenerators/generateCreateSpringForce.js), in
+// any number of dimensions, with one change: a stretched spring (r > L) pulls with an extra factor
+// 1 + (d / (onset * L))^power. Like the stock stage it reads springLength and springCoefficient from
+// the simulator settings on every step, honours per-link length and coefficient, and keeps
+// springCount / springLength up to date when the adaptive time step needs them.
 // Safety limit on the extra factor, so extreme settings (a tiny spring length, a huge Steepness)
 // can't overflow to Infinity and turn positions into NaN. Normal settings never reach it.
 const MAX_EXTRA = 1e9;
 
-export default function createStiffSpringForce(simulator, { onset, power }) {
-  const settings = simulator.settings;
-  const random = simulator.random;
+export default function createStiffSprings({ onset, power }) {
   const squared = power === 2;
+  let delta = new Float64Array(0);
 
-  return function stiffSpringForce() {
-    const springs = simulator.springs;
+  return function stiffSprings(store, simulator) {
+    const settings = simulator.settings;
+    const springs = simulator.springStore;
+    const from = springs.from, to = springs.to, restLength = springs.length, coefficients = springs.coefficient;
+    const D = store.D, pos = store.pos, force = store.force;
+    const springCount = store.springCount, springLength = store.springLength;
+    const withStats = settings.adaptiveTimeStepWeight !== 0;
     const defaultLength = settings.springLength;
     const defaultCoefficient = settings.springCoefficient;
+    if (delta.length !== D) delta = new Float64Array(D);
 
-    for (let i = springs.length - 1; i >= 0; --i) {
-      const spring = springs[i];
-      const body1 = spring.from;
-      const body2 = spring.to;
-      const length = spring.length < 0 ? defaultLength : spring.length;
-      let dx = body2.pos.x - body1.pos.x;
-      let dy = body2.pos.y - body1.pos.y;
-      let r = Math.sqrt(dx * dx + dy * dy);
-
-      if (r === 0) {
-        dx = (random.nextDouble() - 0.5) / 50;
-        dy = (random.nextDouble() - 0.5) / 50;
-        r = Math.sqrt(dx * dx + dy * dy);
+    for (let i = springs.n - 1; i >= 0; --i) {
+      const body1 = from[i], body2 = to[i];
+      const offset1 = body1 * D, offset2 = body2 * D;
+      const length = restLength[i] < 0 ? defaultLength : restLength[i];
+      let r2 = 0;
+      for (let k = 0; k < D; ++k) {
+        const d = pos[offset2 + k] - pos[offset1 + k];
+        delta[k] = d;
+        r2 += d * d;
       }
 
+      if (r2 === 0) {
+        // ends at the same point: pull along a random direction, as the stock springs do
+        for (let k = 0; k < D; ++k) {
+          const d = (simulator.random.nextDouble() - 0.5) / 50;
+          delta[k] = d;
+          r2 += d * d;
+        }
+      }
+      const r = Math.sqrt(r2);
+
       const d = r - length;
-      let pull = ((spring.coefficient > 0) ? spring.coefficient : defaultCoefficient) * d;
+      let pull = ((coefficients[i] > 0) ? coefficients[i] : defaultCoefficient) * d;
       // A spring of length 0 (or less) has no "spring lengths" to count stretch in: keep it stock.
       if (d > 0 && power > 0 && length > 0) {
         const u = d / (onset * length);
@@ -43,15 +54,16 @@ export default function createStiffSpringForce(simulator, { onset, power }) {
       }
       const coefficient = pull / r;
 
-      body1.force.x += coefficient * dx;
-      body1.force.y += coefficient * dy;
-      body1.springCount += 1;
-      body1.springLength += r;
-
-      body2.force.x -= coefficient * dx;
-      body2.force.y -= coefficient * dy;
-      body2.springCount += 1;
-      body2.springLength += r;
+      for (let k = 0; k < D; ++k) {
+        force[offset1 + k] += coefficient * delta[k];
+        force[offset2 + k] -= coefficient * delta[k];
+      }
+      if (withStats) {
+        springCount[body1] += 1;
+        springLength[body1] += r;
+        springCount[body2] += 1;
+        springLength[body2] += r;
+      }
     }
   };
 }

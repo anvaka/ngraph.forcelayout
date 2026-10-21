@@ -38,17 +38,17 @@ export default function createLeafFadeTree() {
   return { build, force };
 
   /**
-   * Builds the tree. `isLeaf[i]` (0 or 1) says how body i pushes.
+   * Builds the tree over the bodies of a 2D simulator store. `isLeaf[i]` (0 or 1) says how
+   * body i pushes.
    */
-  function build(bodies, isLeaf) {
-    const n = bodies.length;
+  function build(store, isLeaf) {
+    const n = store.n, pos = store.pos, bodyMass = store.mass;
     if (n > bodyCapacity) growBodies(n);
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (let i = 0; i < n; ++i) {
-      const pos = bodies[i].pos;
-      const x = pos.x, y = pos.y;
+      const x = pos[2 * i], y = pos[2 * i + 1];
       px[i] = x; py[i] = y;
-      mass[i] = bodies[i].mass;
+      mass[i] = bodyMass[i];
       leaf[i] = isLeaf[i];
       if (x < x0) x0 = x;
       if (x > x1) x1 = x;

@@ -42,15 +42,16 @@ longer springs (30), ordinary spacing already counts as crowded and grids change
   attach({ layout, params }) {
     const simulator = layout.simulator;
     // the fire halving is applied in gasPressure.js at every step, since the integrator can change
-    const gas = createGasPressure(simulator, {
+    const gas = createGasPressure({
       temperature: Math.max(0, params.temperature),
       spacing: Math.max(0, params.spacing),
       radius: 1,
     });
-    simulator.addForce('v1-6-gas-pressure', gas.force);
+    // after the springs, just before bodies move
+    simulator.addStage('v1-6-gas-pressure', gas.force);
     return {
       dispose() {
-        simulator.removeForce('v1-6-gas-pressure');
+        simulator.removeStage('v1-6-gas-pressure');
       }
     };
   },

@@ -19,8 +19,9 @@ gives it most of the screen; grid20 and sbm8x50 look the same.</p>
 <p>What gets worse: more crossing lines where stars touch (starOfStars: 0.13 to 0.31 per line),
 small pieces packed too close to tell apart at a higher <i>Background density</i>, a crushed
 drawing if it switches on before about step 50, and a short pause at step 300 while it measures.
-It changes nothing before step 300, doesn't help communities, and does nothing in 3D, on graphs
-under 8 nodes, or when nodes attract each other (gravity 0 or more).</p>`,
+It changes nothing before step 300, doesn't help communities, and does nothing in 1D or above 3D,
+on graphs under 8 nodes, or when nodes attract each other (gravity 0 or more). In 3D the disc is a
+ball, whose pull is exact.</p>`,
   tryGraphs: ['Benchmark: megaStars', 'Benchmark: starOfStars', 'Benchmark: yeast', 'Benchmark: sciMet', 'Benchmark: grid20'],
   params: [
     {
@@ -46,7 +47,8 @@ under 8 nodes, or when nodes attract each other (gravity 0 or more).</p>`,
   ],
 
   attach({ layout, params, settings, steps }) {
-    if ((settings.dimensions || 2) !== 2) return null;
+    const dimensions = settings.dimensions || 2;
+    if (dimensions !== 2 && dimensions !== 3) return null;
     const density = Number.isNaN(Number(params.density)) ? 0.25 : Number(params.density);
     if (!(density > 0)) return null; // 0 turns the background off
     const extra = Number(params.extra);
@@ -57,6 +59,6 @@ under 8 nodes, or when nodes attract each other (gravity 0 or more).</p>`,
       startStep: Number.isNaN(startStep) ? 300 : startStep,
       stepsBefore: steps || 0
     });
-    return null;
+    return { dispose() { layout.simulator.removeStage('neutral-background'); } };
   }
 };

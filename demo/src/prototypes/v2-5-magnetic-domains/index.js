@@ -109,7 +109,7 @@ nothing, and the browser console says why.</p>`,
       getGravity: () => simulator.gravity()
     });
     const forceName = 'v2-5-domain-repulsion';
-    simulator.addForce(forceName, repulsion.apply);
+    simulator.addStage(forceName, repulsion.apply);
 
     // The domains are final from the start (computed above), so colors don't change while it runs
     const size = new Map();
@@ -125,7 +125,7 @@ nothing, and the browser console says why.</p>`,
         return colorOfNode.get(nodeId) || 0;
       },
       dispose() {
-        simulator.removeForce(forceName);
+        simulator.removeStage(forceName);
       }
     };
   }

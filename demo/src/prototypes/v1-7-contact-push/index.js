@@ -1,8 +1,4 @@
-import generateQuadTree from '../../../../lib/codeGenerators/generateQuadTree.js';
-import generateDualTree from '../../../../lib/codeGenerators/generateDualTree.js';
 import createPiecePush from './piecePush.js';
-
-let kernels = null; // the library's 2D n-body kernels, generated once
 
 export default {
   id: 'v1-7-contact-push',
@@ -23,7 +19,7 @@ ring returns (stock <b>none</b> has no wall, so there the pieces keep drifting a
 <p>What gets worse: pieces that start on top of each other stay crossed, because touching pieces only
 slide apart (caterpillars gets several times more crossings between pieces; the fire integrator
 with a pivot start helps), and on graphs of many small pieces the first second runs 2–3× slower,
-then faster than stock. 2D only; in 3D the layout stays stock.</p>`,
+then faster than stock. The same works in 3D, with a ball for the wall.</p>`,
   tryGraphs: ['Benchmark: yeast', 'Benchmark: erdos992', 'Benchmark: sciMet', 'Benchmark: sbm8x50'],
   params: [
     {
@@ -41,9 +37,6 @@ then faster than stock. 2D only; in 3D the layout stays stock.</p>`,
   ],
 
   attach({ layout, params }) {
-    const simulator = layout.simulator;
-    if ((simulator.settings.dimensions || 2) !== 2) return null; // 2D only: in 3D the layout stays stock
-    if (!kernels) kernels = { createQuadTree: generateQuadTree(2), createDualTree: generateDualTree(2) };
-    return createPiecePush(simulator, params, kernels);
+    return createPiecePush(layout.simulator, params);
   }
 };

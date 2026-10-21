@@ -17,14 +17,13 @@
 const CUTOFF = 6;
 
 export default function createLeafFadeForce(simulator, options) {
-  const bodies = simulator.bodies;
-  const springs = simulator.springs;
-  const settings = simulator.settings;
   const random = simulator.random; // the library's seeded generator, so runs repeat exactly
   const fadeAll = !!options.fadeAll;
   let reach = 0, cut = 0;
 
-  let n = 0, springCount = -1;
+  // Leaf flags are found again after bodies or springs were added or removed
+  let n = 0, leavesKnown = false;
+  simulator.on('topology', () => { leavesKnown = false; });
   let X, Y, Q, isLeaf;
   // tree, flat arrays: corner, side, all-body charge sums, non-leaf charge sums, children, body
   let cap = 0, count = 0;
@@ -32,20 +31,20 @@ export default function createLeafFadeForce(simulator, options) {
 
   return { update };
 
-  function update() {
-    if (bodies.length === 0) return;
+  // Runs as the simulator's repulsion stage: adds the pushes to `store.force` of every body that
+  // is not pinned (the clear stage has zeroed them, and the drag stage runs next).
+  function update(store) {
+    if (store.n === 0) return;
     // the demo changes the spring length on a running layout, without attaching again
-    reach = options.reach * settings.springLength;
+    reach = options.reach * simulator.settings.springLength;
     cut = CUTOFF * reach;
-    if (bodies.length !== n || springs.length !== springCount) prepare();
-    buildTree();
+    if (store.n !== n || !leavesKnown) prepare(store);
+    buildTree(store);
+    const settings = simulator.settings;
     const G = settings.gravity, theta = settings.theta;
-    const useDrag = settings.integrator !== 'fire';
-    const drag = settings.dragCoefficient;
+    const force = store.force, pinned = store.pinned;
     for (let i = 0; i < n; i++) {
-      const body = bodies[i];
-      if (body.isPinned) continue;
-      body.reset();
+      if (pinned[i]) continue;
       const leaf = fadeAll || isLeaf[i];
       const x = X[i], y = Y[i], qi = Q[i];
       let fx = 0, fy = 0, top = 0;
@@ -89,12 +88,8 @@ export default function createLeafFadeForce(simulator, options) {
           }
         }
       }
-      body.force.x += fx;
-      body.force.y += fy;
-      if (useDrag) {
-        body.force.x -= drag * body.velocity.x;
-        body.force.y -= drag * body.velocity.y;
-      }
+      force[2 * i] += fx;
+      force[2 * i + 1] += fy;
     }
   }
 
@@ -103,20 +98,15 @@ export default function createLeafFadeForce(simulator, options) {
     return (1 + t) * Math.exp(-t);
   }
 
-  // Leaf flags and buffers; redone when bodies or springs are added or removed.
-  function prepare() {
-    n = bodies.length;
-    springCount = springs.length;
+  // Leaf flags and buffers
+  function prepare(store) {
+    n = store.n;
+    leavesKnown = true;
     X = new Float64Array(n); Y = new Float64Array(n); Q = new Float64Array(n);
     isLeaf = new Uint8Array(n);
-    const index = new Map();
-    for (let i = 0; i < n; i++) index.set(bodies[i], i);
-    const degree = new Int32Array(n), neighbor = new Int32Array(n);
-    for (const spring of springs) {
-      const a = index.get(spring.from), b = index.get(spring.to);
-      if (a === undefined || b === undefined) continue;
-      degree[a] += 1; degree[b] += 1; neighbor[a] = b; neighbor[b] = a;
-    }
+    const degree = store.degree, neighbor = new Int32Array(n);
+    const springs = simulator.springStore, from = springs.from, to = springs.to;
+    for (let s = 0; s < springs.n; s++) { neighbor[from[s]] = to[s]; neighbor[to[s]] = from[s]; }
     // a leaf hangs off a node with more links; an isolated pair of nodes keeps the plain push
     for (let i = 0; i < n; i++) isLeaf[i] = degree[i] === 1 && degree[neighbor[i]] > 1 ? 1 : 0;
     const want = 2 * n + 16; // a quad tree has about 1.5-2.5 cells per body; grow() adds more
@@ -129,12 +119,12 @@ export default function createLeafFadeForce(simulator, options) {
     }
   }
 
-  function buildTree() {
+  function buildTree(store) {
+    const pos = store.pos, mass = store.mass;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (let i = 0; i < n; i++) {
-      const body = bodies[i];
-      const x = X[i] = body.pos.x, y = Y[i] = body.pos.y;
-      Q[i] = body.mass;
+      const x = X[i] = pos[2 * i], y = Y[i] = pos[2 * i + 1];
+      Q[i] = mass[i];
       if (x < x0) x0 = x;
       if (x > x1) x1 = x;
       if (y < y0) y0 = y;

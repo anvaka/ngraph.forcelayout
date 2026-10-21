@@ -16,18 +16,18 @@ export default function createGridPressure() {
 
   return { apply };
 
-  // Adds -strength * grad(pressure) to body.force for every body that is not pinned.
-  function apply(bodies, { strength, range, cellSize, maxCells }) {
-    let n = bodies.length;
+  // Adds -strength * grad(pressure) to the force of every body of `store` that is not pinned.
+  function apply(store, { strength, range, cellSize, maxCells }) {
+    let { n, pos, force, pinned } = store;
     if (n === 0 || !(strength > 0) || !(range > 0)) return;
 
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (let i = 0; i < n; ++i) {
-      let pos = bodies[i].pos;
-      if (pos.x < x0) x0 = pos.x;
-      if (pos.x > x1) x1 = pos.x;
-      if (pos.y < y0) y0 = pos.y;
-      if (pos.y > y1) y1 = pos.y;
+      let x = pos[2 * i], y = pos[2 * i + 1];
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
     }
     // Leave room for the pressure to fade out around the drawing.
     let margin = 3 * range;
@@ -41,8 +41,7 @@ export default function createGridPressure() {
     // Cloud-in-cell deposit: each node shares one unit between its 4 surrounding cells.
     let unit = 1 / (cell * cell);
     for (let i = 0; i < n; ++i) {
-      let pos = bodies[i].pos;
-      let gx = (pos.x - x0) / cell, gy = (pos.y - y0) / cell;
+      let gx = (pos[2 * i] - x0) / cell, gy = (pos[2 * i + 1] - y0) / cell;
       let ix = Math.floor(gx), iy = Math.floor(gy);
       let fx = gx - ix, fy = gy - iy;
       let o = iy * width + ix;
@@ -59,18 +58,16 @@ export default function createGridPressure() {
 
     // Push each node downhill, using the gradient of the same bilinear interpolation.
     for (let i = 0; i < n; ++i) {
-      let body = bodies[i];
-      if (body.isPinned) continue;
-      let pos = body.pos;
-      let gx = (pos.x - x0) / cell, gy = (pos.y - y0) / cell;
+      if (pinned[i]) continue;
+      let gx = (pos[2 * i] - x0) / cell, gy = (pos[2 * i + 1] - y0) / cell;
       let ix = Math.floor(gx), iy = Math.floor(gy);
       let fx = gx - ix, fy = gy - iy;
       let o = iy * width + ix;
       let p00 = rho[o], p10 = rho[o + 1], p01 = rho[o + width], p11 = rho[o + width + 1];
       let dpx = ((p10 - p00) * (1 - fy) + (p11 - p01) * fy) / cell;
       let dpy = ((p01 - p00) * (1 - fx) + (p11 - p10) * fx) / cell;
-      body.force.x -= strength * dpx;
-      body.force.y -= strength * dpy;
+      force[2 * i] -= strength * dpx;
+      force[2 * i + 1] -= strength * dpy;
     }
   }
 

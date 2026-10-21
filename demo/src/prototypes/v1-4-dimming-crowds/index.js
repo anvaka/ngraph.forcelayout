@@ -38,20 +38,17 @@ ignores the <i>Repulsion</i> setting.</p>`,
     // 2D only: in other dimensions the layout runs unchanged
     if ((settings.dimensions || 2) !== 2) return null;
     const simulator = layout.simulator;
-    const forces = simulator.getForces();
-    const libraryRepulsion = forces.get('nbody');
-    const springs = forces.get('spring');
-    if (!libraryRepulsion || !springs) return null;
 
     // 0 or less: no dimming, and no floor on the reach. NaN (never sent by the panel): the default.
     const cloudiness = Math.max(0, finite(params.cloudiness, 0.05));
     const minReach = Math.max(0, finite(params.minReach, 3));
     const repulsion = createScreenedRepulsion();
-    function dimmedRepulsion() {
+    // Swap the library's repulsion stage for the dimmed one; drag and springs run after it
+    const libraryRepulsion = simulator.replaceStage('repulsion', store => {
       const s = simulator.settings;
       // A spring length of 0 or less gives no length scale, so nothing dims
       const L = Math.max(0, s.springLength);
-      repulsion.computeForces(simulator.bodies, {
+      repulsion.computeForces(store, {
         gravity: s.gravity,
         theta: s.theta,
         // in the panel both are per link length; here per unit length and in units of length.
@@ -60,31 +57,10 @@ ignores the <i>Repulsion</i> setting.</p>`,
         minReach: minReach * L,
         cell: L,
       });
-      // Like the library: drag, unless the FIRE integrator handles the slowing down
-      if (s.integrator === 'fire') return;
-      const bodies = simulator.bodies, drag = s.dragCoefficient;
-      for (let i = 0; i < bodies.length; i++) {
-        const body = bodies[i];
-        if (body.isPinned) continue;
-        body.force.x -= drag * body.velocity.x;
-        body.force.y -= drag * body.velocity.y;
-      }
-    }
-
-    // Swap the library's repulsion for the dimmed one, keeping the order: repulsion first
-    // (it resets the forces), then springs.
-    simulator.removeForce('nbody');
-    simulator.removeForce('spring');
-    simulator.addForce('nbody', dimmedRepulsion);
-    simulator.addForce('spring', springs);
+    });
 
     return {
-      dispose() {
-        simulator.removeForce('nbody');
-        simulator.removeForce('spring');
-        simulator.addForce('nbody', libraryRepulsion);
-        simulator.addForce('spring', springs);
-      }
+      dispose() { simulator.replaceStage('repulsion', libraryRepulsion); }
     };
   },
 };

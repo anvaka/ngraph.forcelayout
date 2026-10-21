@@ -25,9 +25,7 @@
 // moves every step, removes it, but the first leaves a hole in each star and the second shakes.
 //
 // Cost per step: 9 weighted deposits and 9 reads per body, O(n) whatever the crowding.
-export default function createGasPressure(simulator, options = {}) {
-  const settings = simulator.settings;
-  const bodies = simulator.bodies;
+export default function createGasPressure(options = {}) {
   const stats = { cells: 0, crowded: 0 };
 
   // grid hash: open addressing over (x, y) cell keys, cleared lazily with a stamp
@@ -60,10 +58,13 @@ export default function createGasPressure(simulator, options = {}) {
 
   return { force, stats };
 
-  function force() {
-    if (settings.dimensions !== 2) return;
-    const n = bodies.length;
+  // A simulator stage: adds the push to the forces in `store`
+  function force(store, simulator) {
+    const settings = simulator.settings;
+    if (store.D !== 2) return;
+    const n = store.n;
     if (n === 0) return;
+    const pos = store.pos, bodyForce = store.force, pinned = store.pinned;
     const L0 = settings.springLength;
     const h = (options.radius || 1) * L0;
     const fireScale = settings.integrator === 'fire' ? 0.5 : 1;
@@ -84,8 +85,7 @@ export default function createGasPressure(simulator, options = {}) {
 
     // 1. spread every body over its 3 x 3 nearest grid points
     for (let i = 0; i < n; i++) {
-      const pos = bodies[i].pos;
-      const u = pos.x / h, v = pos.y / h;
+      const u = pos[2 * i] / h, v = pos[2 * i + 1] / h;
       const base = 9 * i;
       // cell numbers must fit the hash's 32-bit keys; a body farther out (or at NaN) is left alone
       if (!(Math.abs(u) < 1e9 && Math.abs(v) < 1e9)) { slots[base] = -1; continue; }
@@ -104,14 +104,13 @@ export default function createGasPressure(simulator, options = {}) {
         }
       }
       // keep the load factor under 1/2 (a body touches at most 9 new cells)
-      if (2 * used > capacity - 18) { allocate(2 * capacity); force(); return; }
+      if (2 * used > capacity - 18) { allocate(2 * capacity); force(store, simulator); return; }
     }
     stats.cells = used;
 
     // 2. density of the other bodies and its slope at every body, then the push
     let crowded = 0;
     for (let i = 0; i < n; i++) {
-      const body = bodies[i];
       const base = 9 * i;
       if (slots[base] < 0) continue; // out of the grid's range
       const dx = offX[i], dy = offY[i];
@@ -134,15 +133,15 @@ export default function createGasPressure(simulator, options = {}) {
           gradY += wx * sy * others;
         }
       }
-      if (rho <= rho0 || body.isPinned) continue;
+      if (rho <= rho0 || pinned[i]) continue;
       crowded++;
       const ramp = rho >= 2 * rho0 ? 1 : (rho - rho0) / rho0;
       const c = -kT * ramp / ((rho + floor) * h);
       const fx = c * gradX, fy = c * gradY;
       // a huge temperature or spring constant can still overflow here: never add Infinity or NaN
       if (!(Math.abs(fx) + Math.abs(fy) < Infinity)) continue;
-      body.force.x += fx;
-      body.force.y += fy;
+      bodyForce[2 * i] += fx;
+      bodyForce[2 * i + 1] += fy;
     }
     stats.crowded = crowded / n;
   }

@@ -36,7 +36,8 @@ export default {
   // at step 300"), count from it.
   attach({ layout, graph, params, settings, steps }) {
     // Change the layout here, e.g.:
-    //   layout.simulator.addForce('my-force', iteration => { ... });
+    //   layout.simulator.addStage('my-force', store => { ... });
+    //   layout.simulator.repulsionLaw('exp(-r / 30) / r^2');
     //   layout.getSpring(fromId, toId).length = 20;
     //   layout.on('step', onStep);
     return {
@@ -52,8 +53,9 @@ export default {
 };
 ```
 
-To reuse library internals, import them by relative path, e.g.
-`import generateQuadTree from '../../../../lib/codeGenerators/generateQuadTree.js'`;
-the demo's Vite config bundles them like the library itself.
+The library's README ("Changing the physics") shows the tools: stages that run every step, a
+repulsion law, charges, columns of your own on the bodies, and rules for close pairs. Write
+forces over `store.pos` and `store.force` (axis `k` of body `i` is at `i * D + k`) and they work
+in any number of dimensions.
 
 Prototypes run on the CPU only; the WebGPU backend ignores them.

@@ -2,7 +2,7 @@
 // The stock spring pulls with k * (r - L). This one pulls with k * (r - L) * (1 + (d / (onset * L))^power)
 // when d = r - L > 0, and is unchanged when the spring is shorter than L. Near its length it is the
 // stock spring; a link stretched to many spring lengths is pulled back hard.
-import createStiffSpringForce from './stiffSpringForce.js';
+import createStiffSprings from './stiffSpringForce.js';
 
 export default {
   id: 'ru-3-stiff-springs',
@@ -24,8 +24,8 @@ with <b>none</b>.</p>
 hub jumps back and forth on every step and the outer stars keep shimmering, and megaStars shakes more
 than with <b>none</b>; on starOfStars, time step 0.25 stops it and gives the same picture. On community
 graphs (sbm8x50, communities) links cross 5–8% more often, and in sbm8x50 the groups mix more.</p>
-<p>2D only: in 3D the layout is left unchanged. A safety limit keeps the pull finite at extreme
-settings; normal settings never reach it.</p>`,
+<p>Works in any number of dimensions. A safety limit keeps the pull finite at extreme settings;
+normal settings never reach it.</p>`,
   tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: java', 'Benchmark: grid20'],
   params: [
     {
@@ -43,27 +43,17 @@ settings; normal settings never reach it.</p>`,
     }
   ],
 
-  attach({ layout, params, settings }) {
-    if ((settings.dimensions || 2) !== 2) return null;
+  attach({ layout, params }) {
     const simulator = layout.simulator;
-    const forces = simulator.getForces();
-    const stockSpring = forces.get('spring');
-    if (!stockSpring) return null;
-
     // NaN falls back to the defaults. Stiffen after is at least 0.1; Steepness 0 or less is off.
     const onset = Number.isFinite(params.onset) ? Math.max(params.onset, 0.1) : 3;
     const power = Number.isFinite(params.power) ? Math.max(params.power, 0) : 2;
-    const stiffSpring = createStiffSpringForce(simulator, { onset, power });
-
-    // Same slot and order as the stock spring force: it runs after repulsion, which resets forces.
-    simulator.removeForce('spring');
-    simulator.addForce('spring', stiffSpring);
+    const stiffSprings = createStiffSprings({ onset, power });
+    const stockSprings = simulator.replaceStage('springs', stiffSprings);
 
     return {
       dispose() {
-        if (simulator.getForces().get('spring') !== stiffSpring) return;
-        simulator.removeForce('spring');
-        simulator.addForce('spring', stockSpring);
+        if (simulator.getStage('springs') === stiffSprings) simulator.replaceStage('springs', stockSprings);
       }
     };
   }

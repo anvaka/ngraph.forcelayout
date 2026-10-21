@@ -77,7 +77,7 @@ function smoothLayout(layout, graph, { target, maxPasses, checks }) {
     neighbors[a].push(b);
     neighbors[b].push(a);
   });
-  const axes = Object.keys(layout.getNodePosition(ids[0]));
+  const axes = Object.keys(layout.getNodePosition(ids[0]).toJSON());
   const start = performance.now();
   const report = [];
 

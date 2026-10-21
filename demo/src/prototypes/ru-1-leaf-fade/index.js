@@ -46,15 +46,9 @@ its own way, about 8–10× slower than none.</p>`,
     const fadeAll = Number(params.fadeAll) > 0;
     // Without leaves there is nothing to fade: keep the stock force, so the layout is identical
     if (!fadeAll && !hasLeaves(graph)) return null;
-    const simulator = layout.simulator;
-    const force = createLeafFadeForce(simulator, { reach, fadeAll });
-    // Our push replaces the library's n-body force, whichever Repulsion setting is picked. Springs
-    // must still run after it, because the n-body pass is the one that clears last step's forces.
-    const springForce = simulator.getForces().get('spring');
-    simulator.removeForce('nbody');
-    simulator.removeForce('spring');
-    simulator.addForce('ru1-leaf-fade', force.update);
-    simulator.addForce('spring', springForce);
+    // Our push replaces the library's repulsion, whichever Repulsion setting is picked
+    const force = createLeafFadeForce(layout.simulator, { reach, fadeAll });
+    layout.simulator.replaceStage('repulsion', force.update);
     return {};
   },
 };

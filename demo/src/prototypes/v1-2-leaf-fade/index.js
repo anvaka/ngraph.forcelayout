@@ -1,6 +1,6 @@
 import createLeafFadeTree from './createLeafFadeTree.js';
 
-// Replaces the layout's repulsion with one where pushes that involve a leaf fade with
+// Replaces the layout's repulsion stage with one where pushes that involve a leaf fade with
 // distance. Springs, drag and the integrator stay as they are; the Repulsion (nbody) setting
 // is ignored, since this uses its own quad tree.
 export default {
@@ -38,8 +38,7 @@ as long as the dual tree.</p>`,
   attach({ layout, params, settings }) {
     if ((settings.dimensions || 2) !== 2) return null;
     const simulator = layout.simulator;
-    const forces = simulator.getForces();
-    if (!forces.has('nbody')) return null;
+    if (!simulator.getStage('repulsion')) return null;
 
     const tree = createLeafFadeTree();
     const random = simulator.random;
@@ -47,57 +46,31 @@ as long as the dual tree.</p>`,
     const fadeLength = numberOr(params.fade, 3, 0);         // 0: leaves don't push at all
     const leafLinks = numberOr(params.leafLinks, 1, 0);     // 0: nothing fades
     let isLeaf = new Uint8Array(0);
-    let knownBodies = -1, knownSprings = -1, sinceRefresh = 0;
 
-    // Swap the repulsion in place: it resets forces, so every force after it (springs, and
-    // anything added later) must still run after it.
-    const names = [...forces.keys()];
-    const later = names.slice(names.indexOf('nbody') + 1).map(name => [name, forces.get(name)]);
-    simulator.removeForce('nbody');
-    later.forEach(([name]) => simulator.removeForce(name));
-    simulator.addForce('nbody', leafFadeRepulsion);
-    later.forEach(([name, force]) => simulator.addForce(name, force));
+    // Swap the repulsion in place: the drag stage and springs still run after it
+    simulator.replaceStage('repulsion', leafFadeRepulsion);
     return {};
 
-    function leafFadeRepulsion() {
-      const bodies = simulator.bodies;
-      const n = bodies.length;
+    function leafFadeRepulsion(store) {
+      const n = store.n;
       if (n === 0) return;
       const s = simulator.settings;
-      refreshLeaves(bodies);
-      tree.build(bodies, isLeaf);
+      // A body is a leaf when it has 1..leafLinks springs
+      if (isLeaf.length < n) isLeaf = new Uint8Array(store.capacity);
+      const degree = store.degree;
+      for (let i = 0; i < n; ++i) isLeaf[i] = degree[i] >= 1 && degree[i] <= leafLinks ? 1 : 0;
+      tree.build(store, isLeaf);
       // A spring length of 0 or less (e.g. while typing in the panel) gives no reach at all
       const fade = s.springLength > 0 ? fadeLength * s.springLength : 0;
       const cutoff = 6 * fade; // exp(-6) is 0.25%: farther faded pushes are dropped
-      const drag = s.integrator === 'fire' ? 0 : s.dragCoefficient; // FIRE uses no drag
+      const force = store.force, pinned = store.pinned;
       for (let i = 0; i < n; ++i) {
-        const body = bodies[i];
-        if (body.isPinned) continue;
-        body.reset();
+        if (pinned[i]) continue;
         out[0] = 0; out[1] = 0;
         tree.force(i, s.gravity, s.theta, fade, cutoff, random, out);
-        body.force.x = out[0] - drag * body.velocity.x;
-        body.force.y = out[1] - drag * body.velocity.y;
+        force[2 * i] += out[0];
+        force[2 * i + 1] += out[1];
       }
-    }
-
-    // A body is a leaf when it has 1..leafLinks springs. Recounted when bodies or springs change.
-    function refreshLeaves(bodies) {
-      const springs = simulator.springs;
-      sinceRefresh += 1;
-      if (bodies.length === knownBodies && springs.length === knownSprings && sinceRefresh < 200) return;
-      sinceRefresh = 0;
-      knownBodies = bodies.length; knownSprings = springs.length;
-      const index = new Map();
-      for (let i = 0; i < bodies.length; ++i) index.set(bodies[i], i);
-      const degree = new Int32Array(bodies.length);
-      for (const spring of springs) {
-        const a = index.get(spring.from), b = index.get(spring.to);
-        if (a !== undefined) degree[a] += 1;
-        if (b !== undefined) degree[b] += 1;
-      }
-      isLeaf = new Uint8Array(bodies.length);
-      for (let i = 0; i < bodies.length; ++i) isLeaf[i] = degree[i] >= 1 && degree[i] <= leafLinks ? 1 : 0;
     }
   },
 };

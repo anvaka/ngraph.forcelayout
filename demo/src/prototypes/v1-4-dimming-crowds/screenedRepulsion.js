@@ -42,21 +42,22 @@ export default function createScreenedRepulsion() {
   return { computeForces, stats };
 
   /**
-   * Adds the repulsion to body.force for every body that is not pinned, after resetting it.
+   * Adds the repulsion to the forces of a 2D simulator store, for every body that is not pinned.
    * `options`: gravity, theta, crossSection (per unit length, finite, >= 0), minReach (length,
    * >= 0; 0 = no floor), cell (length).
    */
-  function computeForces(bodies, options) {
-    n = bodies.length;
+  function computeForces(store, options) {
+    n = store.n;
     if (n === 0) return;
     if (!X || X.length < n) {
       X = new Float64Array(n); Y = new Float64Array(n); M = new Float64Array(n);
       rho = new Float64Array(n); next = new Int32Array(n);
     }
+    const pos = store.pos, mass = store.mass, force = store.force, pinned = store.pinned;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (let i = 0; i < n; i++) {
-      const b = bodies[i], x = b.pos.x, y = b.pos.y;
-      X[i] = x; Y[i] = y; M[i] = b.mass;
+      const x = pos[2 * i], y = pos[2 * i + 1];
+      X[i] = x; Y[i] = y; M[i] = mass[i];
       if (x < x0) x0 = x;
       if (x > x1) x1 = x;
       if (y < y0) y0 = y;
@@ -69,9 +70,7 @@ export default function createScreenedRepulsion() {
     const sigma = options.crossSection, maxOpacity = 1 / options.minReach;
     let interactions = 0, skipped = 0;
     for (let i = 0; i < n; i++) {
-      const body = bodies[i];
-      if (body.isPinned) continue;
-      body.reset();
+      if (pinned[i]) continue;
       const xi = X[i], yi = Y[i], ri = rho[i];
       let fx = 0, fy = 0, top = 0;
       stack[top++] = 0;
@@ -118,8 +117,8 @@ export default function createScreenedRepulsion() {
           if (child[k + 3] >= 0) stack[top++] = child[k + 3];
         }
       }
-      body.force.x += M[i] * fx;
-      body.force.y += M[i] * fy;
+      force[2 * i] += M[i] * fx;
+      force[2 * i + 1] += M[i] * fy;
     }
     stats.interactions = interactions;
     stats.skipped = skipped;

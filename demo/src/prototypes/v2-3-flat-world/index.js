@@ -1,21 +1,16 @@
 // "Flat-world push plus balancing pull" (reader v2-3). See the description below and README.md.
 //
 // Today every pair of nodes pushes apart with a force that falls off as 1/r^2. That is how charges
-// push in a 3D world. In a flat (2D) world, Gauss's law (Feynman Vol. II, Ch. 18, Table 18-1,
-// eq. I: the flux of the field through a closed curve equals the charge inside) makes the push of
-// one charge fall off as 1/r instead. This prototype uses that flat-world push, plus a uniform
-// disc of opposite total charge ("background") centred on the layout. By the same law the disc
-// pulls each node toward its centre with a force that grows linearly inside the disc and falls
-// off as 1/r outside it, and it cancels the push exactly wherever the nodes are as dense as the
-// disc. The layout as a whole is then neutral: big clumps stop pushing everything else away.
+// push in a 3D world. In a world of D dimensions, Gauss's law (Feynman Vol. II, Ch. 18, Table 18-1,
+// eq. I: the flux of the field through a closed surface equals the charge inside) makes the push
+// of one charge fall off as 1/r^(D-1): 1/r in a flat (2D) world. This prototype uses that push,
+// plus a uniform ball (a disc in 2D) of opposite total charge ("background") centred on the
+// layout. By the same law the ball pulls each node toward its centre with a force that grows
+// linearly inside the ball and falls off as 1/r^(D-1) outside it, and it cancels the push exactly
+// wherever the nodes are as dense as the ball. The layout as a whole is then neutral: big clumps
+// stop pushing everything else away.
 //
-// The push reuses the library's own generated quad tree code with only the distance power
-// changed, so a step costs about the same as before; the pull is one pass over the bodies.
-import generateQuadTree from '../../../../lib/codeGenerators/generateQuadTree.js';
-import generateCreateDragForce from '../../../../lib/codeGenerators/generateCreateDragForce.js';
-
-const treeCache = {};
-
+// The push is a repulsion law, so it runs in both trees; the pull is one pass over the bodies.
 export default {
   id: 'v2-3-flat-world',
   title: 'Flat-world push plus balancing pull',
@@ -27,7 +22,8 @@ most of the picture is empty.</p>
 <p><b>Change.</b> Nodes push each other apart with a force that weakens as 1/distance, the way
 charges push in a flat world, instead of 1/distance², and an even pull toward the middle (as if
 the nodes stood on a disc of opposite charge) cancels that push wherever the nodes are spread as
-evenly as the disc.</p>
+evenly as the disc. In D dimensions the push weakens as 1/distance^(D-1) and the disc is a ball,
+so in 3D the push is the library's own.</p>
 <p><b>Where it comes from.</b> Feynman's Lectures, Vol. II, Ch. 18 and 20: Gauss's law, and how
 the push of a charge follows from the dimension of space.</p>
 <p><b>What to look for.</b> Compare with <b>none</b> after about 1500 steps: the big piece's share
@@ -36,7 +32,7 @@ CSphd, and the eight communities of sbm8x50 separate.</p>
 <p><b>What gets worse.</b> Grids bow outward into a pillow shape, isolated nodes pile up in a band
 at the rim (protein), and star fans are not helped. Spacing is tuned for spring length 10 and
 gravity -12: with longer springs or weaker gravity the effect fades unless you lower it (see its
-help). It always uses the quad tree, ignoring the dual-tree setting, and does nothing in 3D.</p>`,
+help).</p>`,
   tryGraphs: ['Benchmark: yeast', 'Benchmark: CSphd', 'Benchmark: sciMet', 'Benchmark: sbm8x50', 'Benchmark: starOfStars'],
   params: [
     {
@@ -55,90 +51,62 @@ help). It always uses the quad tree, ignoring the dual-tree setting, and does no
 
   attach({ layout, params }) {
     const simulator = layout.simulator;
-    const dimensions = simulator.settings.dimensions;
-    // 2D only. In 3D the library's 1/r^2 push already is the "right" law, but the balancing ball
-    // is not implemented here; other dimensions are left untouched.
-    if (dimensions !== 2) return null;
-
     const spacing = Math.max(0.1, numberOr(params.spacing, 1.5));
     // Capped so a huge value from the URL can't overflow the pull to Infinity (and NaN)
     const balance = Math.min(100, Math.max(0, numberOr(params.balance, 1)));
     const falloff = numberOr(params.falloff, 1) === 2 ? 2 : 1;
-    const bodies = simulator.bodies;
-    // The panel sets springLength live, so it is 0 for a moment while "0.5" is typed; dividing by 0
-    // would turn every position into NaN.
-    const unitLength = () => Math.max(simulator.springLength(), 1e-3);
 
-    if (falloff === 1) {
-      // Replace the n-body force by the flat-world one; keep the springs after it. This is always
-      // a quad tree: the dual-tree setting is ignored.
-      const springForce = simulator.getForces().get('spring');
-      const tree = getFlatWorldTree()({ gravity: simulator.gravity(), theta: simulator.theta() }, simulator.random);
-      const drag = generateCreateDragForce(2)(simulator.settings);
-      simulator.removeForce('nbody');
-      simulator.removeForce('spring');
-      simulator.addForce('nbody', () => {
-        // Same pair force as today at one spring length: |G| m m / L^2 = G1 m m / L, so G1 = G / L
-        const gravity = simulator.gravity() / unitLength();
-        tree.options({ gravity, theta: simulator.theta() });
-        tree.insertBodies(bodies);
-        const useDrag = simulator.integrator() !== 'fire';
-        for (let i = 0; i < bodies.length; ++i) {
-          const body = bodies[i];
-          if (body.isPinned) continue;
-          body.reset();
-          tree.updateBodyForce(body);
-          if (useDrag) drag.update(body);
-        }
-        if (balance > 0) addBalancingPull(-gravity);
-      });
-      simulator.addForce('spring', springForce);
-    } else if (balance > 0) {
-      // Control: today's 1/r^2 push plus the same linear pull (centre gravity)
-      simulator.addForce('v2-3-pull', () => addBalancingPull(-simulator.gravity() / unitLength()));
-    }
+    // The push 1/r^(D-1), scaled to equal the library's 1/r^2 at one spring length L
+    const push = 'r^(1 - D) * L^(D - 3)';
+    const previousLaw = simulator.repulsionLaw().spec;
+    if (falloff === 1) simulator.repulsionLaw({ force: push, params: { L: sim => sim.unit() } });
+    const dispose = () => {
+      simulator.repulsionLaw(previousLaw);
+      if (simulator.getStage('v2-3-pull')) simulator.removeStage('v2-3-pull');
+    };
+    if (balance === 0) return { dispose };
 
-    function addBalancingPull(strength) {
-      // A uniform disc with total charge -balance * Q, centred on the charge centroid. Inside it the
-      // pull on body i is strength * q_i * Q * d / R^2 (grows linearly with the distance d from the
-      // centre), outside it strength * q_i * Q * d / |d|^2 (falls off as 1/|d|).
-      let Q = 0, cx = 0, cy = 0;
-      for (let i = 0; i < bodies.length; ++i) {
-        const body = bodies[i];
-        Q += body.mass; cx += body.mass * body.pos.x; cy += body.mass * body.pos.y;
+    const center = [];
+    simulator.addStage('v2-3-pull', (store, sim) => {
+      const { n, D, pos, force, pinned } = store;
+      const charge = store[sim.repulsionCharge()];
+      // A uniform ball with total charge -balance * Q, centred on the charge centroid. Inside it
+      // the pull on body i is k q_i d / R^D (grows linearly with the distance d from the centre),
+      // outside it k q_i d / |d|^D (falls off as 1/|d|^(D-1)).
+      let Q = 0;
+      for (let k = 0; k < D; ++k) center[k] = 0;
+      for (let i = 0; i < n; ++i) {
+        Q += charge[i];
+        for (let k = 0; k < D; ++k) center[k] += charge[i] * pos[i * D + k];
       }
       if (!(Q > 0)) return;
-      cx /= Q; cy /= Q;
-      const R = spacing * unitLength() * Math.sqrt(bodies.length / Math.PI);
-      const R2 = R * R;
-      const k = strength * balance * Q;
-      for (let i = 0; i < bodies.length; ++i) {
-        const body = bodies[i];
-        if (body.isPinned) continue;
-        const dx = body.pos.x - cx, dy = body.pos.y - cy;
-        const r2 = dx * dx + dy * dy;
-        const f = -k * body.mass / (r2 > R2 ? r2 : R2);
-        body.force.x += f * dx;
-        body.force.y += f * dy;
+      for (let k = 0; k < D; ++k) center[k] /= Q;
+      const L = sim.unit();
+      // The ball holds the n nodes at one node per cube of side spacing * L
+      const R = spacing * L * Math.pow(n / ballVolume(D), 1 / D);
+      const RD = Math.pow(R, D);
+      // Same strength as the push between two nodes: |G| L^(D-3), or |G| with the stock push
+      const strength = -sim.gravity() * (falloff === 1 ? Math.pow(L, D - 3) : 1 / L);
+      const scale = strength * balance * Q;
+      for (let i = 0; i < n; ++i) {
+        if (pinned[i]) continue;
+        let r2 = 0;
+        for (let k = 0; k < D; ++k) r2 += (pos[i * D + k] - center[k]) ** 2;
+        const rD = Math.pow(r2, D / 2);
+        const f = -scale * charge[i] / (rD > RD ? rD : RD);
+        for (let k = 0; k < D; ++k) force[i * D + k] += f * (pos[i * D + k] - center[k]);
       }
-    }
-
-    return {};
+    });
+    return { dispose };
   }
 };
+
+// Volume of a ball of radius 1 in D dimensions: 2, pi, 4/3 pi, ...
+function ballVolume(D) {
+  return D === 0 ? 1 : D === 1 ? 2 : ballVolume(D - 2) * 2 * Math.PI / D;
+}
 
 function numberOr(value, fallback) {
   const number = Number(value);
   return value === undefined || value === '' || !Number.isFinite(number) ? fallback : number;
-}
-
-// The library's 2D quad tree with the push changed from 1/r^2 to 1/r: the generated code divides
-// by r^3 (force vector = d / r^3); dividing by r^2 instead gives |F| ~ 1 / r.
-function getFlatWorldTree() {
-  if (treeCache.flat) return treeCache.flat;
-  const code = generateQuadTree.generateQuadTreeFunctionBody(2);
-  const patched = code.split('/ (r * r * r)').join('/ (r * r)');
-  if (patched === code) throw new Error('v2-3-flat-world: quad tree kernel not found');
-  treeCache.flat = (new Function(patched))();
-  return treeCache.flat;
 }
