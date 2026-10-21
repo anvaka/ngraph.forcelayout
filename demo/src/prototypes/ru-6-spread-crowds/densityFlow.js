@@ -3,13 +3,19 @@
 // In plain words: lay a grid over the picture and count how many nodes fall into each cell
 // (the density). Cells more crowded than `crowding` times the average act like places of high
 // pressure, and the pressure pushes nodes out of them, the way a gas spreads from high pressure
-// to low. The frame is a closed box: nothing flows out of it. The push is smooth, so the picture
-// is stretched like a rubber sheet and no node changes its neighbours.
+// to low. The nodes pushed out spread evenly over every emptier part of the frame, the gaps
+// between groups included. The frame is a closed box: nothing flows out of it. The push is
+// smooth, so the picture is stretched almost like a rubber sheet; only where two spreading
+// regions meet (two fans, say) do their tips run into each other and interleave.
 //
 // The pressure phi solves Poisson's equation in the frame, with no flow through its sides:
 //     Lap(phi) = s,  s = max(rho - crowding * mean, 0) - (average of that over the frame),
-// and nodes move with velocity grad(phi) / rho. With that velocity, every cell loses the
+// and nodes move with velocity grad(phi) / rho. With that velocity, every cell would lose the
 // nodes it has above the limit at a steady rate (continuity: d rho/dt = -div(rho v) = -s).
+// Two extras change that: the speed limit of one grid cell per pass, which early on holds back
+// a third to a half of the nodes on graphs with a small central ball (there it, with `passes`,
+// decides how far the ball grows), and a floor of 1/20 of the average density in the division,
+// so nodes at the edge of empty space don't get an endless speed.
 //
 // Source: A. A. Samarskii, A. V. Gulin, «Численные методы» (1989), ch. 5 of the difference
 // schemes part. Poisson's equation in a rectangle is its model problem (p. 379, eq. 2), and it
@@ -23,22 +29,25 @@
  * @param {Float64Array} xs node x coordinates, changed in place
  * @param {Float64Array} ys node y coordinates, changed in place
  * @param {object} options
- *   crowding   only density above crowding * average pushes (2)
- *   passes     how many passes step() runs before it reports done (40)
+ *   crowding   only density above crowding * average pushes (2); 0 or less: every cell
+ *              with nodes pushes, which evens out the whole picture
+ *   passes     how many passes step() runs before it reports done (40, at most 1000)
  *   grid       cells per side of the grid (about 1.5 * sqrt(n), at most 128)
  *   movable    Uint8Array, 0 for nodes that must not move (pinned)
  *   piece      Int32Array, piece (connected component) id of every node
  *   pieceSize  Int32Array, nodes in every piece
- *   rigidBelow pieces with fewer nodes move as a whole, keeping their shape (30)
+ *   rigidBelow pieces with fewer nodes move as a whole, keeping their shape, and stop as a
+ *              whole at the frame (30); the largest piece always stretches. A small piece
+ *              with a pinned node stays where it is.
  */
 export default function createDensityFlow(xs, ys, options = {}) {
   const n = xs.length;
-  const crowding = options.crowding > 0 ? options.crowding : 2;
-  const passes = Math.max(0, Math.round(options.passes === undefined ? 40 : options.passes));
+  const crowding = given(options.crowding) ? Math.max(0, options.crowding) : 2;
+  const passes = Math.min(MAX_PASSES, Math.max(0, Math.round(given(options.passes) ? options.passes : 40)));
   const M = options.grid || Math.max(16, Math.min(128, Math.round(1.5 * Math.sqrt(n))));
   const movable = options.movable || null;
   const piece = options.piece || null, pieceSize = options.pieceSize || null;
-  const rigidBelow = options.rigidBelow === undefined ? 30 : options.rigidBelow;
+  const rigidBelow = given(options.rigidBelow) ? options.rigidBelow : 30;
   const tau = 0.25; // fraction of the excess removed per pass
   const maxCells = 1; // no node moves more than one grid cell per pass
 
@@ -52,6 +61,7 @@ export default function createDensityFlow(xs, ys, options = {}) {
   }
   const side = Math.max(x1 - x0, y1 - y0, 1e-9) * 1.0001;
   const fx0 = (x0 + x1) / 2 - side / 2, fy0 = (y0 + y1) / 2 - side / 2;
+  const frameOk = Number.isFinite(fx0) && Number.isFinite(fy0) && Number.isFinite(side); // no positions to work with otherwise
   const h = side / M;
   const mean = n / (M * M);
 
@@ -69,6 +79,9 @@ export default function createDensityFlow(xs, ys, options = {}) {
   const dx = new Float64Array(n), dy = new Float64Array(n);
   const pieceCount = pieceSize ? pieceSize.length : 0;
   const pieceDx = new Float64Array(pieceCount), pieceDy = new Float64Array(pieceCount), pieceMovable = new Float64Array(pieceCount);
+  // room between every piece and the four sides of the frame
+  const roomLeft = new Float64Array(pieceCount), roomRight = new Float64Array(pieceCount);
+  const roomDown = new Float64Array(pieceCount), roomUp = new Float64Array(pieceCount);
   let largest = -1;
   for (let c = 0; c < pieceCount; c++) if (largest < 0 || pieceSize[c] > pieceSize[largest]) largest = c;
 
@@ -77,7 +90,7 @@ export default function createDensityFlow(xs, ys, options = {}) {
 
   // One pass of the flow. Returns true when all passes are done.
   function step() {
-    if (done >= passes) return true;
+    if (done >= passes || !frameOk) return true;
     countNodes();
     blur(); blur();
     if (!solvePressure()) { done = passes; return true; } // nothing is crowded
@@ -183,7 +196,7 @@ export default function createDensityFlow(xs, ys, options = {}) {
   function moveNodes() {
     for (let i = 0; i < n; i++) {
       const u = (xs[i] - fx0) / h - 0.5, w = (ys[i] - fy0) / h - 0.5;
-      const density = Math.max(sample(rho, u, w), 0.05 * mean);
+      const density = Math.max(sample(rho, u, w), 0.05 * mean); // the density floor (see the top)
       let mx = tau * sample(gx, u, w) / density, my = tau * sample(gy, u, w) / density; // in cells
       const length = Math.hypot(mx, my);
       if (length > maxCells) { mx *= maxCells / length; my *= maxCells / length; }
@@ -193,16 +206,21 @@ export default function createDensityFlow(xs, ys, options = {}) {
     if (piece) {
       // Small separate pieces move as a whole: every node gets the piece's average move
       pieceDx.fill(0); pieceDy.fill(0); pieceMovable.fill(0);
+      roomLeft.fill(Infinity); roomRight.fill(Infinity); roomDown.fill(Infinity); roomUp.fill(Infinity);
       for (let i = 0; i < n; i++) {
         if (movable && !movable[i]) continue;
         const c = piece[i];
         pieceDx[c] += dx[i]; pieceDy[c] += dy[i]; pieceMovable[c] += 1;
+        roomLeft[c] = Math.min(roomLeft[c], xs[i] - fx0); roomRight[c] = Math.min(roomRight[c], fx0 + side - xs[i]);
+        roomDown[c] = Math.min(roomDown[c], ys[i] - fy0); roomUp[c] = Math.min(roomUp[c], fy0 + side - ys[i]);
       }
       for (let i = 0; i < n; i++) {
         const c = piece[i];
         if (c === largest || pieceSize[c] >= rigidBelow || !pieceMovable[c]) continue;
-        dx[i] = pieceDx[c] / pieceMovable[c];
-        dy[i] = pieceDy[c] / pieceMovable[c];
+        if (pieceMovable[c] < pieceSize[c]) { dx[i] = 0; dy[i] = 0; continue; } // a pinned node holds its piece
+        // the whole piece stops at the frame, instead of its nodes being flattened onto it one by one
+        dx[i] = Math.max(-roomLeft[c], Math.min(roomRight[c], pieceDx[c] / pieceMovable[c]));
+        dy[i] = Math.max(-roomDown[c], Math.min(roomUp[c], pieceDy[c] / pieceMovable[c]));
       }
     }
     for (let i = 0; i < n; i++) {
@@ -223,4 +241,11 @@ export default function createDensityFlow(xs, ys, options = {}) {
   function clampCell(c) {
     return c < 0 ? 0 : c > M - 1 ? M - 1 : c;
   }
+}
+
+const MAX_PASSES = 1000;
+
+// NaN (or a missing value) means "use the default"; any other number is taken as given
+function given(value) {
+  return typeof value === 'number' && !Number.isNaN(value);
 }
