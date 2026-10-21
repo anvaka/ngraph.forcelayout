@@ -31,6 +31,17 @@ function positions(sim) {
   return Array.from(sim.store.pos.subarray(0, sim.store.n * sim.settings.dimensions));
 }
 
+test('settings win over the adaptive time step counters', function (t) {
+  var sim = makeSimulator({ dimensions: 2, springLength: 7 }, 3);
+  sim.store.define('out');
+  sim.addNodeFormula('f', { formula: 'out = springLength' });
+  sim.step();
+  t.equal(sim.store.out[0], 7, 'springLength is the setting');
+  sim.store.define('step');
+  t.throws(function () { sim.addNodeFormula('g', { formula: 'out = step' }); }, /both a column and a built in value/);
+  t.end();
+});
+
 test('formulas parse with the usual precedence', function (t) {
   var tree = formula.parse('-r^2 + a * b < c && !(d >= 1) || e == f ? 1 : 2');
   t.equal(tree.type, 'call', '?: is a choice');
