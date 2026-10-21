@@ -72,7 +72,8 @@ export default function createLeafFadeTree() {
 
   /**
    * Adds the push on body `i` to `out` ([fx, fy]). `gravity` is the library's (negative)
-   * coefficient, `theta` the Barnes-Hut opening ratio, `fade` the fade length.
+   * coefficient, `theta` the Barnes-Hut opening ratio, `fade` the fade length (0 drops every
+   * faded push, when `cutoff` is 0 too).
    */
   function force(i, gravity, theta, fade, cutoff, random, out) {
     if (cellCount === 0) return;
@@ -81,7 +82,7 @@ export default function createLeafFadeTree() {
     const cMass = coreMass, cX = coreX, cY = coreY, lMass = leafMass, lX = leafX, lY = leafY, aX = allX, aY = allY;
     const bodyNext = next, bx = px, by = py, bodyMass = mass, bodyLeaf = leaf, table = fadeTable;
     const x = bx[i], y = by[i], gi = gravity * bodyMass[i], sourceIsLeaf = bodyLeaf[i] === 1;
-    const cutoff2 = cutoff * cutoff, toTable = TABLE_SIZE / (TABLE_RANGE * fade);
+    const cutoff2 = cutoff * cutoff, toTable = fade > 0 ? TABLE_SIZE / (TABLE_RANGE * fade) : 0;
     let fx = 0, fy = 0;
     let todo = stack, top = 0;
     todo[top++] = 0;
