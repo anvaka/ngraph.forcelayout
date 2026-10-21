@@ -1,7 +1,5 @@
 import {FIELD, FIELD_MAX_U} from './diskField.js';
 
-const FIELD_STEPS = FIELD.length - 1;
-
 /**
  * Adds an even "background" of opposite charge under the nodes: a disk (a ball in 3D), centred at
  * the nodes' charge-weighted centre, that pulls on every node exactly as hard as an evenly spread
@@ -17,9 +15,12 @@ const FIELD_STEPS = FIELD.length - 1;
  * Its total charge is (1 + extra) times the nodes' total charge, so pieces that already drifted
  * far away are pulled back.
  *
- * Works in 2D and 3D with the library's 1/r^2 push. Costs two passes over the bodies per step. If
- * the background's density over- or underflows (a huge or tiny `density`), the background turns
- * itself off.
+ * Works in 2D and 3D with the library's 1/r^2 push. If the background's density over- or
+ * underflows (a huge or tiny `density`), the background turns itself off.
+ *
+ * Written as formulas, so the simulator runs the loops: two sums (the total charge and the
+ * charge-weighted position, for the centre) and a formula for every body. Only the measurement
+ * runs in JS, once. Returns {getRadius, dispose}.
  */
 export default function addBackground(layout, options) {
   const simulator = layout.simulator;
@@ -27,77 +28,79 @@ export default function addBackground(layout, options) {
   const extra = options.extra;
   const startStep = Math.max(0, Math.round(options.startStep));
   const stepsBefore = options.stepsBefore || 0;
-  let sigma = 0, radius = 0, off = false;
-  const center = [];
+  const D = simulator.settings.dimensions;
+  // The charges are the column the layout pushes with when the idea is attached
+  const charge = simulator.repulsionCharge();
+  let sigma = 0, radius = 0, off = false, triedAt = -1;
 
-  simulator.addStage('neutral-background', backgroundForce);
+  simulator.addSum('jelliumCharge', { formula: charge });
+  simulator.addSum('jelliumMoment', { formula: `${charge} * pos` });
+  simulator.addNodeFormula('neutral-background', {
+    params: {
+      sigma: sim => measure(sim),
+      radius: sim => { measure(sim); return radius; },
+      start: startStep,
+      before: stepsBefore,
+      edge: FIELD[FIELD.length - 1],
+      maxU: FIELD_MAX_U
+    },
+    tables: { field: { from: 0, to: FIELD_MAX_U, values: FIELD } },
+    formula: `
+      d = pos - jelliumMoment / jelliumCharge;
+      s = length(d);
+      u = s / radius;
+      // How hard the background pushes a node of unit charge at distance s from its centre
+      push = ${D === 2 ? DISK_PUSH : BALL_PUSH};
+      // gravity < 0, so this points toward the centre
+      f = gravity * ${charge} * sigma * push * (D == 3 ? radius : 1) / s;
+      // The background switches on at the start step, once it is measured (sigma > 0), and only
+      // when nodes repel each other
+      force += select(sigma > 0 && step + before >= start && n >= 8 && gravity < 0 && pinned == 0 && s != 0,
+        f * d, 0 * pos)`
+  });
   return {
-    getRadius: () => radius
+    getRadius: () => radius,
+    dispose() {
+      ['jelliumCharge', 'jelliumMoment', 'neutral-background'].forEach(name => {
+        if (simulator.getStage(name)) simulator.removeStage(name);
+      });
+    }
   };
 
-  function backgroundForce(store, sim) {
-    const { n, D, pos, force, pinned } = store;
-    if (off || sim.iteration() + stepsBefore < startStep || n < 8) return;
-    const gravity = sim.gravity();
-    if (!(gravity < 0)) return; // the background only makes sense for repelling nodes
-    const charge = store[sim.repulsionCharge()];
-
+  // The background's density: measured once, at the start step, as `density` times the typical
+  // local density of the nodes. This runs on the CPU and reads positions (a GPU engine has to
+  // hand them over at this step).
+  function measure(sim) {
+    if (sigma || off || sim.iteration() === triedAt) return sigma;
+    triedAt = sim.iteration();
+    const n = sim.store.n;
+    if (sim.iteration() + stepsBefore < startStep || n < 8 || !(sim.gravity() < 0)) return 0;
+    const nodesPerVolume = typicalDensity(sim, 6);
+    if (!(nodesPerVolume > 0)) return 0;
+    const q = sim.store[charge];
     let total = 0;
-    for (let k = 0; k < D; ++k) center[k] = 0;
-    for (let i = 0; i < n; ++i) {
-      total += charge[i];
-      for (let k = 0; k < D; ++k) center[k] += charge[i] * pos[i * D + k];
+    for (let i = 0; i < n; ++i) total += q[i];
+    sigma = density * nodesPerVolume * total / n;
+    radius = Math.pow((1 + extra) * total / (ballVolume(D) * sigma), 1 / D);
+    if (!(sigma > 0 && sigma < Infinity && radius > 0)) {
+      // over- or underflow: the force would be NaN (Infinity * 0) or nothing at all
+      off = true;
+      sigma = 0;
     }
-    for (let k = 0; k < D; ++k) center[k] /= total;
-
-    if (!sigma) {
-      const nodesPerVolume = typicalDensity(sim, 6);
-      if (!(nodesPerVolume > 0)) return;
-      sigma = density * nodesPerVolume * total / n;
-      radius = Math.pow((1 + extra) * total / (ballVolume(D) * sigma), 1 / D);
-      if (!(sigma > 0 && sigma < Infinity && radius > 0)) {
-        // over- or underflow: the force would be NaN (Infinity * 0) or nothing at all
-        off = true;
-        return;
-      }
-    }
-
-    for (let i = 0; i < n; ++i) {
-      if (pinned[i]) continue;
-      let s2 = 0;
-      for (let k = 0; k < D; ++k) s2 += (pos[i * D + k] - center[k]) ** 2;
-      const s = Math.sqrt(s2);
-      if (s === 0) continue;
-      // gravity < 0, so this points toward the centre
-      const f = gravity * charge[i] * sigma * backgroundPush(D, s / radius) * (D === 3 ? radius : 1) / s;
-      for (let k = 0; k < D; ++k) force[i * D + k] += f * (pos[i * D + k] - center[k]);
-    }
+    return sigma;
   }
 }
 
-// Push of the background of radius 1 and density 1 at distance u from its centre (in 3D it then
-// grows with the radius, so the caller multiplies by it)
-function backgroundPush(D, u) {
-  return D === 2 ? diskPush(u) : ballPush(u);
-}
+// The push of an evenly filled disk of radius 1 at distance u from its centre: sampled in
+// diskField.js up to FIELD_MAX_U, and falling off as 1/u^2 past it
+const DISK_PUSH = 'u >= maxU ? edge * maxU * maxU / (u * u) : field(u)';
 
-function diskPush(u) {
-  if (u >= FIELD_MAX_U) return FIELD[FIELD_STEPS] * FIELD_MAX_U * FIELD_MAX_U / (u * u);
-  const x = u / FIELD_MAX_U * FIELD_STEPS;
-  const i = Math.floor(x), t = x - i;
-  return FIELD[i] * (1 - t) + FIELD[i + 1] * t;
-}
-
-// In 3D the push of a ball is exact (Gauss's law): it grows as u inside and falls as 1/u^2
-// outside. The edge is soft like the disk's: averaged over radii 0.85..1.15.
-function ballPush(u) {
-  let sum = 0;
-  for (let step = 0; step <= 6; ++step) {
-    const a = 0.85 + 0.05 * step;
-    sum += u < a ? u : a * a * a / (u * u);
-  }
-  return 4 / 3 * Math.PI * sum / 7;
-}
+// The push of an evenly filled ball of radius 1 whose edge is soft, as the disk's is: the average
+// over radii a = 0.85 ... 1.15 of the push of a sharp ball, u inside it and a^3/u^2 outside
+// (Gauss's law)
+const BALL_RADII = [0, 1, 2, 3, 4, 5, 6].map(step => 0.85 + 0.05 * step);
+const BALL_PUSH = '4 / 3 * pi * (' +
+  BALL_RADII.map(a => `(u < ${a} ? u : ${a} * ${a} * ${a} / (u * u))`).join(' + ') + ') / 7';
 
 /**
  * Median over (up to 1500 sampled) nodes of k / (V d^D), where d is the distance to the node's

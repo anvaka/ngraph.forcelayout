@@ -4,6 +4,8 @@
 import computeShells from './shells.js';
 import addShortRangeLeaves from './shortRangeLeaves.js';
 
+const SHELLS = 'v3-1-shells';
+
 export default {
   id: 'v3-1-fermi-fans',
   title: 'Leaves fill shells (Fermi fans)',
@@ -67,10 +69,7 @@ links" (v2-6) gives a node's leaves one longer, softer link.</p>`,
       computeShells(graph, layout, { spacing, rimBonds: Number(params.rimBonds) !== 0 }) :
       { lengths: new Map(), seats: [] };
 
-    // Rest lengths are multiples of the panel's spring length, so they follow it when it changes
-    let appliedLength = NaN;
-    applyLengths();
-    layout.on('step', applyLengths);
+    const removeShells = shells.lengths.size ? addShellLengths(layout.simulator, shells.lengths) : null;
 
     let removeShortRange = null;
     if (Number(params.shortRange) > 0) {
@@ -87,19 +86,31 @@ links" (v2-6) gives a node's leaves one longer, softer link.</p>`,
 
     return {
       dispose() {
-        layout.off('step', applyLengths);
         if (removeShortRange) removeShortRange();
+        if (removeShells) removeShells();
       }
     };
-
-    function applyLengths() {
-      const length = layout.simulator.springLength();
-      if (length === appliedLength) return;
-      appliedLength = length;
-      shells.lengths.forEach((multiple, spring) => { spring.length = multiple * length; });
-    }
   }
 };
+
+// Rest lengths of the shell links are multiples of the panel's spring length, so they follow it
+// when it changes. The multiples go in a link column (0 for links that keep their length), and a
+// link formula takes the place of the stock springs. Like the stock springs, it reads a negative
+// rest length as the spring length.
+function addShellLengths(simulator, lengths) {
+  const springs = simulator.springStore;
+  springs.define('shellLength', Float64Array);
+  lengths.forEach((multiple, spring) => { springs.shellLength[spring.index] = multiple; });
+  simulator.addLinkFormula(SHELLS, {
+    replace: 'springs',
+    formula: `shell = shellLength * springLength;
+      pull = coefficient * (r - (shellLength > 0 ? (shell < 0 ? springLength : shell) : length))`
+  });
+  return function remove() {
+    simulator.removeStage(SHELLS); // the stock springs come back
+    springs.remove('shellLength');
+  };
+}
 
 // A one-link node whose neighbour has other links (a lone pair of nodes is not a fan)
 function isFanLeaf(graph, nodeId) {

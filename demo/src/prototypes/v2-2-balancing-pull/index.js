@@ -83,12 +83,12 @@ as stock, with either Repulsion setting. It does nothing in 3D.</p>`,
         }
       });
     }
-    if (strength > 0) simulator.addStage('v2-2-balancing-pull', (store, sim) => balancingPull(store, sim, strength));
+    const stages = strength > 0 ? addBalancingPull(simulator, strength) : [];
 
     return {
       dispose() {
         simulator.repulsionLaw(previousLaw);
-        if (simulator.getStage('v2-2-balancing-pull')) simulator.removeStage('v2-2-balancing-pull');
+        stages.forEach(name => { if (simulator.getStage(name)) simulator.removeStage(name); });
       }
     };
   }
@@ -100,34 +100,28 @@ as stock, with either Repulsion setting. It does nothing in 3D.</p>`,
 // far-field constant of the default slab push (h = 2 spring lengths): G' = 2G/h = G/L. The
 // 'reach' parameter changes only the push, so a large reach shows the pull without the
 // flat-world push.
-function balancingPull(store, simulator, strength) {
-  const n = store.n;
-  if (n < 2) return;
-  const settings = simulator.settings;
-  const L = settings.springLength;
-  const mass = store.mass, pos = store.pos, force = store.force, pinned = store.pinned;
-  let charge = 0, cx = 0, cy = 0;
-  for (let i = 0; i < n; ++i) {
-    charge += mass[i];
-    cx += mass[i] * pos[2 * i];
-    cy += mass[i] * pos[2 * i + 1];
-  }
-  cx /= charge;
-  cy /= charge;
-  const flatG = Math.abs(settings.gravity) / L;
-  const radius2 = n * L * L / Math.PI;
-  const kappa = strength * flatG * charge / radius2;
-  // Spring length 0 (the panel passes through it while you type "0.5") and other extreme settings
-  // make kappa 0, negative, infinite or NaN: then there is no pull, rather than NaN positions.
-  if (!(kappa > 0 && kappa < Infinity)) return;
-  for (let i = 0; i < n; ++i) {
-    if (pinned[i]) continue;
-    const fx = kappa * mass[i] * (pos[2 * i] - cx);
-    const fy = kappa * mass[i] * (pos[2 * i + 1] - cy);
-    if (!Number.isFinite(fx) || !Number.isFinite(fy)) continue; // overflow, only at absurd strengths
-    force[2 * i] -= fx;
-    force[2 * i + 1] -= fy;
-  }
+//
+// Written as formulas, so the simulator runs the loops: two sums (the total charge and the
+// charge-weighted position) and a formula for every body. Returns the names of the stages.
+function addBalancingPull(simulator, strength) {
+  simulator.addSum('balancingCharge', { formula: 'mass' });
+  simulator.addSum('balancingMoment', { formula: 'mass * pos' });
+  simulator.addNodeFormula('v2-2-balancing-pull', {
+    params: { strength },
+    formula: `
+      center = balancingMoment / balancingCharge;
+      d = pos - center;
+      // the pull balances the push of n bodies spread evenly over a disc, one per springLength^2
+      flatG = abs(gravity) / springLength;
+      radius2 = n * springLength * springLength / pi;
+      kappa = strength * flatG * balancingCharge / radius2;
+      // Spring length 0 (the panel passes through it while you type "0.5") and other extreme
+      // settings make kappa 0, negative, infinite or NaN: then there is no pull, rather than NaN
+      // positions. A body whose pull would overflow (only at absurd strengths) is left alone.
+      force -= select(n >= 2 && kappa > 0 && kappa < 1e300 && pinned == 0 && kappa * mass * length(d) < 1e300,
+        kappa * mass * d, 0 * pos)`
+  });
+  return ['balancingCharge', 'balancingMoment', 'v2-2-balancing-pull'];
 }
 
 // Number of connected pieces (isolated nodes count as pieces)

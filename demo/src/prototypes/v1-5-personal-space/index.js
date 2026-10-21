@@ -4,7 +4,8 @@
 // This is the force 2C/r^3 of the pair energy C/r^2, shifted down by 2C/a^3 so that it fades to
 // zero at r = a: squeezing a body into a space r costs energy that grows like 1/r^2 (Feynman,
 // Lectures on Physics I, 38-4). C is chosen so that F(a/2) = strength. Bodies farther apart than
-// `a` feel nothing. The push is a pair rule, so the library finds close pairs, in any dimension.
+// `a` feel nothing. The push is a pair formula, so the library finds close pairs, in any
+// dimension, and runs the formula inside its own loop.
 // After the start delay, the push grows from zero to full strength over this many steps
 const FADE_STEPS = 100;
 // "Start after" when the value is not a number
@@ -64,59 +65,42 @@ crossings, and steps take 1.1–1.4× as long. It works in any number of dimensi
     simulator.store.define('piece', Int32Array);
     simulator.store.define('pushStiffness', Float64Array);
     simulator.store.define('trueMass', Float64Array);
-    let active = false, radius = 0, strength = 0, C = 0, slope = 0, calmed = false;
 
-    simulator.on('topology', findPieces);
-    simulator.addPairRule('personalSpace', {
-      radius: () => active ? radius : 0,
-      rule(i, j, r, { piece, pushStiffness }) {
-        if (piece[i] !== piece[j]) return 0;
-        const half = radius / 2;
-        let f, k;
-        if (r >= half) {
-          const r3 = r * r * r;
-          f = 2 * C * (1 / r3 - 1 / (radius * radius * radius));
-          k = 6 * C / (r3 * r);
-        } else {
-          f = strength + slope * (half - r);
-          k = slope;
-        }
-        pushStiffness[i] += 2 * k;
-        pushStiffness[j] += 2 * k;
-        // On the same spot (r = 0) the simulator pushes along a fixed axis by what we return
-        return f / (r || 1);
-      }
-    });
-    // Reads the settings every step, so panel changes apply live
-    simulator.addStage('personalSpaceSize', ({ n, pushStiffness }, sim) => {
+    // Sizes of the push this step. They are read every step, so panel changes apply live.
+    function sizes(sim) {
       const delayValue = Number(params.delay);
       const delay = Number.isNaN(delayValue) ? DEFAULT_DELAY : Math.max(0, delayValue);
       const fade = Math.min(1, (sim.iteration() + 1 + stepsBefore - delay) / FADE_STEPS);
       const s = sim.settings;
-      radius = Math.min(MAX_RADIUS, Number(params.radius)) * s.springLength;
-      strength = fade * Number(params.strength) * s.springCoefficient * s.springLength;
-      C = strength * radius * radius * radius / 14; // 2C (8/a^3 - 1/a^3) = strength
-      slope = 6 * C / Math.pow(radius / 2, 4);
+      const radius = Math.min(MAX_RADIUS, Number(params.radius)) * s.springLength;
+      const strength = fade * Number(params.strength) * s.springCoefficient * s.springLength;
+      const C = strength * radius * radius * radius / 14; // 2C (8/a^3 - 1/a^3) = strength
+      const slope = 6 * C / Math.pow(radius / 2, 4);
       // absurd radius or strength values overflow or underflow these; then push nothing
-      active = fade > 0 && radius > 0 && strength > 0 && C > 0 && Number.isFinite(C) && Number.isFinite(slope);
-      pushStiffness.fill(0, 0, n);
-    }, { before: 'pairRules' });
-
-    const calm = Number(params.calm);
-    if (Number.isNaN(calm) || calm > 0) {
-      simulator.addStage('calmCrowdedBodies', calmCrowdedBodies);
-      simulator.addStage('restoreMasses', restoreMasses, { after: 'integrate' });
+      const active = fade > 0 && radius > 0 && strength > 0 && C > 0 && Number.isFinite(C) && Number.isFinite(slope);
+      return { active, radius, strength, C, slope };
     }
-    return {
-      dispose() {
-        simulator.off('topology', findPieces);
-        simulator.removePairRule('personalSpace');
-        ['personalSpaceSize', 'calmCrowdedBodies', 'restoreMasses'].forEach(name => {
-          if (simulator.getStage(name)) simulator.removeStage(name);
-        });
-        ['piece', 'pushStiffness', 'trueMass'].forEach(name => simulator.store.remove(name));
-      }
-    };
+
+    simulator.on('topology', findPieces);
+    // On the same spot (r = 0) the simulator pushes along a fixed axis by `push`. Pairs of
+    // different pieces push nothing and add no stiffness.
+    simulator.addPairFormula('personalSpace', {
+      radius: sim => { const size = sizes(sim); return size.active ? size.radius : 0; },
+      params: {
+        half: sim => sizes(sim).radius / 2,
+        inv3: sim => { const a = sizes(sim).radius; return 1 / (a * a * a); },
+        strength: sim => sizes(sim).strength,
+        C: sim => sizes(sim).C,
+        slope: sim => sizes(sim).slope
+      },
+      formula: `
+        r3 = r * r * r;
+        f = r >= half ? 2 * C * (1 / r3 - inv3) : strength + slope * (half - r);
+        k = r >= half ? 6 * C / (r3 * r) : slope;
+        pushStiffness_i += piece_i == piece_j ? 2 * k : 0;
+        pushStiffness_j += piece_i == piece_j ? 2 * k : 0;
+        push = piece_i == piece_j ? f : 0`
+    });
 
     // A stiff push makes crowded bodies overshoot and shake when the time step is too long for
     // them. Giving a body inertia m >= K dt^2 / MAX_SWING^2 (K: how stiff its surroundings are)
@@ -126,36 +110,40 @@ crossings, and steps take 1.1–1.4× as long. It works in any number of dimensi
     // none (megaStars) is calmed too, and that changes the picture: on megaStars it gives most of
     // the gain on its own. Only bodies the push reaches are touched, so the rest move exactly as
     // without the idea at any time step. The push has already used the true masses; only the
-    // integrator sees the bigger ones, and they are put back right after it.
-    function calmCrowdedBodies({ n, D, force, velocity, mass, degree, pushStiffness, trueMass }, sim) {
-      if (!active) return;
-      trueMass.set(mass.subarray(0, n));
-      calmed = true;
-      const s = sim.settings;
-      const dt = s.timeStep, springStiffness = 2 * s.springCoefficient;
-      const useDrag = s.integrator !== 'fire';
-      for (let i = 0; i < n; ++i) {
-        if (!(pushStiffness[i] > 0)) continue;
-        const k = pushStiffness[i] + springStiffness * degree[i];
-        const inertia = k * dt * dt / (MAX_SWING * MAX_SWING);
-        // the finiteness tests only matter at absurd settings, where the numbers overflow
-        if (!(inertia > mass[i]) || !Number.isFinite(inertia)) continue;
-        if (useDrag) {
-          const extra = s.dragCoefficient * (inertia / mass[i] - 1);
-          let finite = true;
-          for (let a = 0; a < D; ++a) finite = finite && Number.isFinite(force[i * D + a] - extra * velocity[i * D + a]);
-          if (!finite) continue;
-          for (let a = 0; a < D; ++a) force[i * D + a] -= extra * velocity[i * D + a];
-        }
-        mass[i] = inertia;
+    // integrator sees the bigger ones: every mass is saved before the integration and put back
+    // right after it. A body is left alone if the numbers overflow (only at absurd settings; a
+    // force longer than about 1e154 counts as overflowing too).
+    const calm = Number(params.calm);
+    if (Number.isNaN(calm) || calm > 0) {
+      simulator.addNodeFormula('calmCrowdedBodies', {
+        params: {
+          active: sim => sizes(sim).active ? 1 : 0,
+          springStiffness: sim => 2 * sim.settings.springCoefficient,
+          useDrag: sim => sim.settings.integrator !== 'fire' ? 1 : 0,
+          swing2: MAX_SWING * MAX_SWING
+        },
+        formula: `
+          trueMass = mass;
+          k = pushStiffness + springStiffness * degree;
+          inertia = k * dt * dt / swing2;
+          raise = active > 0 && pushStiffness > 0 && inertia > mass && inertia <= ${Number.MAX_VALUE} ? 1 : 0;
+          extra = dragCoefficient * (inertia / mass - 1);
+          slowed = force - extra * velocity;
+          calm = raise > 0 && (useDrag == 0 || length(slowed) <= ${Number.MAX_VALUE}) ? 1 : 0;
+          force = calm > 0 && useDrag > 0 ? slowed : force;
+          mass = calm > 0 ? inertia : mass`
+      });
+      simulator.addNodeFormula('restoreMasses', { after: 'integrate', formula: 'mass = trueMass' });
+    }
+    return {
+      dispose() {
+        simulator.off('topology', findPieces);
+        ['personalSpace', 'calmCrowdedBodies', 'restoreMasses'].forEach(name => {
+          if (simulator.getStage(name)) simulator.removeStage(name);
+        });
+        ['piece', 'pushStiffness', 'trueMass'].forEach(name => simulator.store.remove(name));
       }
-    }
-
-    function restoreMasses({ n, mass, trueMass }) {
-      if (!calmed) return;
-      mass.set(trueMass.subarray(0, n));
-      calmed = false;
-    }
+    };
 
     // Numbers every body by its connected piece, so that only bodies of the same piece push
     // each other. Pushing across pieces makes pieces that start on top of each other jam.

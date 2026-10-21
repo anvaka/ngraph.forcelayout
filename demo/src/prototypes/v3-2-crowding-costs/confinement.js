@@ -10,58 +10,50 @@
 // for this step only: the whole force, drag included, is divided by it. A steady force still
 // moves them at the same speed, so pieces drift apart as fast as without this.
 //
-// The push is a pair rule: the simulator finds the close pairs with its grid, in any number of
-// dimensions. It runs after the library's repulsion and springs, so the inertia sees each node's
-// whole force.
+// Both parts are formulas: the push is a pair formula (the simulator finds the close pairs with
+// its grid, in any number of dimensions) that also adds up how stiff the push is around each
+// node, and the inertia is a node formula. The push runs after the library's repulsion and
+// springs, and the inertia just before the integration, so it sees each node's whole force.
 const MIN_H = 1e-9; // shortest push range, in layout units
 const B_SAFE = 1.5;
 
 export default function addCrowdingCost(simulator, name, options) {
-  // How stiff the push is around each body, summed over its pairs every step
+  // How stiff the push is around each body, added up over its pairs every step
   simulator.store.define('crowdingStiffness', Float64Array);
-  let c = 0, h = 0, inv = 0, pairStiffness = 0, active = false;
+  // Read every step, so panel changes to the spring length apply live
+  const h = sim => options.range * sim.settings.springLength;
+  const inv = sim => 1 / h(sim);
 
-  simulator.addPairRule(name, {
-    radius: () => active ? h : 0,
-    rule(i, j, r, { mass, crowdingStiffness }) {
-      const weight = c * (1 / mass[i] + 1 / mass[j]);
-      crowdingStiffness[i] += weight * pairStiffness;
-      crowdingStiffness[j] += weight * pairStiffness;
-      // On the same spot (r = 0) the simulator pushes along a fixed axis by what we return
-      return weight * 2 * (1 - r * inv) * inv / (r || 1);
-    }
-  });
-  // Reads the spring length every step, so panel changes apply live
-  simulator.addStage(name + '-range', ({ n, crowdingStiffness }, sim) => {
-    c = options.strength;
-    h = options.range * sim.settings.springLength;
+  simulator.addPairFormula(name, {
     // A range shorter than MIN_H holds no two distinct nodes in practice, and its push (~ c / h)
     // and stiffness (~ c / h^2) could overflow, so it counts as off.
-    active = c > 0 && h >= MIN_H && Number.isFinite(c) && Number.isFinite(h) && n >= 2;
-    inv = 1 / h;
-    pairStiffness = 2 * inv * inv;
-    crowdingStiffness.fill(0, 0, n);
-  }, { before: 'pairRules' });
-  simulator.addStage(name + '-inertia', limitSteps);
+    radius: sim => {
+      const c = options.strength, range = h(sim);
+      const active = c > 0 && range >= MIN_H && Number.isFinite(c) && Number.isFinite(range) && sim.store.n >= 2;
+      return active ? range : 0;
+    },
+    params: {
+      c: () => options.strength,
+      inv,
+      pairStiffness: sim => 2 * inv(sim) * inv(sim)
+    },
+    formula: `
+      weight = c * (1 / mass_i + 1 / mass_j);
+      crowdingStiffness_i += weight * pairStiffness;
+      crowdingStiffness_j += weight * pairStiffness;
+      push = weight * 2 * (1 - r * inv) * inv`
+  });
+  // Heavier inertia for nodes whose step would overshoot: the whole force on such a node, drag
+  // included, is scaled by m / inertia. Without the push every stiffness is 0, and nothing changes.
+  simulator.addNodeFormula(name + '-inertia', {
+    formula: `
+      inertia = dt * dt * (crowdingStiffness + springCoefficient * degree) / ${B_SAFE};
+      force *= pinned == 0 && crowdingStiffness != 0 && inertia > mass ? mass / inertia : 1`
+  });
 
   return function remove() {
-    simulator.removePairRule(name);
-    simulator.removeStage(name + '-range');
+    simulator.removeStage(name);
     simulator.removeStage(name + '-inertia');
     simulator.store.remove('crowdingStiffness');
   };
-
-  // Heavier inertia for nodes whose step would overshoot: the whole force on such a node,
-  // drag included, is scaled by m / inertia.
-  function limitSteps({ n, D, force, mass, pinned, degree, crowdingStiffness }, sim) {
-    if (!active) return;
-    const dt = sim.settings.timeStep, springK = sim.settings.springCoefficient;
-    for (let i = 0; i < n; ++i) {
-      if (pinned[i] || crowdingStiffness[i] === 0) continue;
-      const inertia = dt * dt * (crowdingStiffness[i] + springK * degree[i]) / B_SAFE;
-      if (inertia <= mass[i]) continue;
-      const scale = mass[i] / inertia;
-      for (let k = 0; k < D; ++k) force[i * D + k] *= scale;
-    }
-  }
 }

@@ -7,7 +7,8 @@
 // clears its way through a fan.
 //
 // A leaf gets charge 0 but keeps its charge as its sensitivity: the trees hold only core nodes,
-// and leaves still feel them. The near push is a pair rule. Both trees work.
+// and leaves still feel them. The charges are a node formula and the near push a one-sided pair
+// formula, so the library runs both loops. Both trees work.
 //
 // Round 2 ("fermi2" in the lab) used a range of two link lengths and gave a leaf near a core node
 // that core node's push twice (once through the tree, once in the near pass). Here the range is one
@@ -24,33 +25,27 @@ export default function addShortRangeLeaves(layout, isLeafNode, rangeInLinks = 1
   findLeaves();
   sim.on('topology', findLeaves);
 
-  // Read once per step, for the pair rule below
-  let range = 0, range2 = 0, gravity = 0, leaf = null, charge = null;
-  sim.addStage('fanCharges', ({ n, fanCharge }) => {
-    // A spring length of 0 (or less) leaves no range, so leaves push nothing
-    range = Math.max(0, rangeInLinks * sim.springLength());
-    range2 = range * range;
-    gravity = sim.gravity();
-    leaf = store.fanLeaf;
-    charge = store[baseCharge];
-    for (let i = 0; i < n; i++) fanCharge[i] = leaf[i] ? 0 : charge[i];
-  }, { before: 'repulsion' });
+  sim.addNodeFormula('fanCharges', {
+    before: 'repulsion',
+    formula: `fanCharge = fanLeaf != 0 ? 0 : ${baseCharge}`
+  });
 
-  // The push from leaves closer than `range`. A leaf already got the push from core nodes through
-  // the trees, so a leaf-core pair moves the core node only.
-  sim.addPairRule('fanLeaves', {
-    radius: () => range,
+  // The push from leaves closer than `range` (read once per step, so it follows the spring
+  // length; a spring length of 0 or less leaves no range, so leaves push nothing). The formula
+  // runs for (i, j) and for (j, i), and each run pushes body i only, by the push of j if j is a
+  // leaf: a leaf already got the push from core nodes through the trees, so a leaf-core pair moves
+  // the core node only.
+  sim.addPairFormula('fanLeaves', {
+    radius: 'range',
     symmetric: false,
-    rule(i, j, r) {
-      if (!leaf[j]) return 0;
-      const fade = 1 - r * r / range2;
-      return -gravity * charge[i] * charge[j] * fade * fade / (r * r * r);
-    }
+    params: { range: simulator => Math.max(0, rangeInLinks * simulator.springLength()) },
+    formula: `fade = 1 - r * r / (range * range);
+      push = fanLeaf_j != 0 ? -gravity * ${baseCharge}_i * ${baseCharge}_j * fade * fade / (r * r) : 0`
   });
 
   return function remove() {
     sim.off('topology', findLeaves);
-    sim.removePairRule('fanLeaves');
+    sim.removeStage('fanLeaves');
     sim.removeStage('fanCharges');
     sim.repulsionCharge(baseCharge);
     sim.repulsionSensitivity(baseSensitivity);

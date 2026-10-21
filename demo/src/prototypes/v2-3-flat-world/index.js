@@ -10,7 +10,8 @@
 // wherever the nodes are as dense as the ball. The layout as a whole is then neutral: big clumps
 // stop pushing everything else away.
 //
-// The push is a repulsion law, so it runs in both trees; the pull is one pass over the bodies.
+// The push is a repulsion law, so it runs in both trees; the pull is two sums and a formula for
+// every body, so the simulator runs the loops.
 export default {
   id: 'v2-3-flat-world',
   title: 'Flat-world push plus balancing pull',
@@ -60,42 +61,34 @@ help).</p>`,
     const push = 'r^(1 - D) * L^(D - 3)';
     const previousLaw = simulator.repulsionLaw().spec;
     if (falloff === 1) simulator.repulsionLaw({ force: push, params: { L: sim => sim.unit() } });
+    const stages = ['flatWorldCharge', 'flatWorldMoment', 'v2-3-pull'];
     const dispose = () => {
       simulator.repulsionLaw(previousLaw);
-      if (simulator.getStage('v2-3-pull')) simulator.removeStage('v2-3-pull');
+      stages.forEach(name => { if (simulator.getStage(name)) simulator.removeStage(name); });
     };
     if (balance === 0) return { dispose };
 
-    const center = [];
-    simulator.addStage('v2-3-pull', (store, sim) => {
-      const { n, D, pos, force, pinned } = store;
-      const charge = store[sim.repulsionCharge()];
-      // A uniform ball with total charge -balance * Q, centred on the charge centroid. Inside it
-      // the pull on body i is k q_i d / R^D (grows linearly with the distance d from the centre),
-      // outside it k q_i d / |d|^D (falls off as 1/|d|^(D-1)).
-      let Q = 0;
-      for (let k = 0; k < D; ++k) center[k] = 0;
-      for (let i = 0; i < n; ++i) {
-        Q += charge[i];
-        for (let k = 0; k < D; ++k) center[k] += charge[i] * pos[i * D + k];
-      }
-      if (!(Q > 0)) return;
-      for (let k = 0; k < D; ++k) center[k] /= Q;
-      const L = sim.unit();
-      // The ball holds the n nodes at one node per cube of side spacing * L
-      const R = spacing * L * Math.pow(n / ballVolume(D), 1 / D);
-      const RD = Math.pow(R, D);
-      // Same strength as the push between two nodes: |G| L^(D-3), or |G| with the stock push
-      const strength = -sim.gravity() * (falloff === 1 ? Math.pow(L, D - 3) : 1 / L);
-      const scale = strength * balance * Q;
-      for (let i = 0; i < n; ++i) {
-        if (pinned[i]) continue;
-        let r2 = 0;
-        for (let k = 0; k < D; ++k) r2 += (pos[i * D + k] - center[k]) ** 2;
-        const rD = Math.pow(r2, D / 2);
-        const f = -scale * charge[i] / (rD > RD ? rD : RD);
-        for (let k = 0; k < D; ++k) force[i * D + k] += f * (pos[i * D + k] - center[k]);
-      }
+    // A uniform ball with total charge -balance * Q, centred on the charge centroid. Inside it the
+    // pull on body i is k q_i d / R^D (grows linearly with the distance d from the centre), outside
+    // it k q_i d / |d|^D (falls off as 1/|d|^(D-1)). The charges are the column the layout pushes
+    // with when the idea is attached.
+    const charge = simulator.repulsionCharge();
+    simulator.addSum('flatWorldCharge', { formula: charge });
+    simulator.addSum('flatWorldMoment', { formula: `${charge} * pos` });
+    simulator.addNodeFormula('v2-3-pull', {
+      params: { spacing, balance, falloff, ballVolume: ballVolume(simulator.settings.dimensions) },
+      formula: `
+        Q = flatWorldCharge;
+        d = pos - flatWorldMoment / Q;
+        // The ball holds the n nodes at one node per cube of side spacing * L
+        R = spacing * unit * pow(n / ballVolume, 1 / D);
+        RD = pow(R, D);
+        // Same strength as the push between two nodes: |G| L^(D-3), or |G| with the stock push
+        strength = -gravity * (falloff == 1 ? pow(unit, D - 3) : 1 / unit);
+        scale = strength * balance * Q;
+        rD = pow(dot(d, d), D / 2);
+        f = -scale * ${charge} / (rD > RD ? rD : RD);
+        force += select(Q > 0 && pinned == 0, f * d, 0 * pos)`
     });
     return { dispose };
   }

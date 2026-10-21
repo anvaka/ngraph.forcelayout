@@ -8,6 +8,24 @@ const FLAT_BALL = 7;
 const MAX_BRANCH = 7;
 // Room per leaf above this counts as this, so the stretched links stay finite for any typed value
 const MAX_ROOM = 100;
+const NAME = 'v2-6-soft-leaf-links';
+
+// The springs, with fan links grown and softened. `fanStretch` is a link column: how many times
+// longer a fan link gets in the end (1 for every other link). `step` counts the steps of this
+// layout and `before` the steps the drawing ran before it, so the growth carries on across them.
+// A fan link is `current` times the spring length and softer by current^soften, like a longer
+// rod (Hooke); every other link is the stock spring. The library reads a negative length as
+// "use the spring length", and a stiffness of 0 or less as "use the global one", so the fan
+// links do the same. A huge softening that rounds the stiffness down to 0 keeps the smallest
+// positive number instead.
+const SOFT_LEAF_LINKS = `
+  progress = grow > 0 ? min(1, (step + before) / grow) : 1;
+  current = 1 + (fanStretch - 1) * progress;
+  fanLength = springLength * current;
+  fanCoefficient = max(5e-324, springCoefficient / current^soften);
+  pull = fanStretch > 1 ?
+    (springCoefficient > 0 && fanCoefficient > 0 ? fanCoefficient : springCoefficient) * (r - (fanLength < 0 ? springLength : fanLength)) :
+    coefficient * (r - length)`;
 
 export default {
   id: 'v2-6-soft-leaf-links',
@@ -65,42 +83,21 @@ more, or gravity -2, the bigger stars pile on top of each other.</p>`,
     if (fanSprings.length === 0) return null;
 
     let simulator = layout.simulator;
-    let steps = stepsBefore || 0; // the steps the drawing already ran count towards the growth
-    let appliedLength, appliedCoefficient, appliedProgress;
-    apply();
-    layout.on('step', onStep);
+    let springs = simulator.springStore;
+    springs.define('fanStretch', Float64Array, 1, 1);
+    fanSprings.forEach(({spring, factor}) => { springs.fanStretch[spring.index] = factor; });
+    simulator.addLinkFormula(NAME, {
+      replace: 'springs',
+      // the steps the drawing already ran count towards the growth
+      params: {before: stepsBefore || 0, grow, soften},
+      formula: SOFT_LEAF_LINKS
+    });
 
     return {
       dispose() {
-        layout.off('step', onStep);
+        simulator.removeStage(NAME); // the stock springs come back
+        springs.remove('fanStretch');
       }
     };
-
-    function onStep() {
-      steps += 1;
-      apply();
-    }
-
-    // While the links grow this touches every fan link once per step (a few thousand
-    // multiplications). After that it only checks whether the panel changed the global link length
-    // or stiffness, and keeps the fan links in proportion if it did.
-    function apply() {
-      let length = simulator.springLength();
-      let coefficient = simulator.springCoefficient();
-      let progress = grow > 0 ? Math.min(1, steps / grow) : 1;
-      if (length === appliedLength && coefficient === appliedCoefficient && progress === appliedProgress) return;
-      appliedLength = length;
-      appliedCoefficient = coefficient;
-      appliedProgress = progress;
-      for (let i = 0; i < fanSprings.length; ++i) {
-        let {spring, factor} = fanSprings[i];
-        let current = 1 + (factor - 1) * progress;
-        spring.length = length * current;
-        // The library reads a stiffness of 0 as "use the global one", so a huge softening that
-        // rounds down to 0 is kept at the smallest positive number instead
-        let soft = coefficient / Math.pow(current, soften);
-        spring.coefficient = coefficient > 0 ? Math.max(Number.MIN_VALUE, soft) : soft;
-      }
-    }
   },
 };
