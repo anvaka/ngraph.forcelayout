@@ -28,7 +28,8 @@
         <template v-else>
           Experimental changes to the layout, one per folder in <code>demo/src/prototypes</code>.
           Picking an idea restarts the layout from the same start as <b>none</b>; the <b>on</b> box
-          turns it off and on again, so you can compare the two. Its parameters are under Settings.
+          turns it off and on again, so you can compare the two. Its parameters are under Settings;
+          changing one carries on from the current drawing, and Reset starts over.
         </template>
       </div>
       <div class='stats'>
@@ -362,10 +363,16 @@ export default {
     },
     prototypeConfig: {
       deep: true,
-      handler(config) {
+      handler(config, oldConfig) {
+        clearTimeout(this.paramsTimer);
         // Wait while a parameter is being typed (an empty input gives NaN)
         if (!Object.values(config.params).every(Number.isFinite)) return;
-        this.scene.setPrototype(this.activePrototype, config.params);
+        if (oldConfig && config.id === oldConfig.id) {
+          // Same idea, new values: carry on from the current drawing once the typing stops
+          this.paramsTimer = setTimeout(() => this.scene.setPrototypeParams(config.params), 300);
+        } else {
+          this.scene.setPrototype(this.activePrototype, config.params);
+        }
       }
     }
   },
@@ -419,6 +426,7 @@ export default {
 
   beforeUnmount() {
     clearInterval(this.statsTimer);
+    clearTimeout(this.paramsTimer);
     if (this.scene) {
       this.scene.dispose();
     }

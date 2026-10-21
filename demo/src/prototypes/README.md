@@ -6,7 +6,8 @@ and each one changes the layout only through the library's public API.
 
 Picking an idea restarts the layout from the same start as **none**, and the **on** box next to
 the picker turns the idea off and on again, so switching compares the two directly. Changing a
-parameter (under Settings) restarts the layout too.
+parameter (under Settings) carries on from the current drawing: the demo makes a new layout at the
+current positions and attaches the idea again with the new values. Reset starts over.
 
 ## Adding one
 
@@ -27,10 +28,13 @@ export default {
   // Label of the final-step button, when attach() returns finish()
   finishLabel: 'Run final step',
 
-  // Called for every new layout: graph load, Reset, picking the idea, changing a parameter.
-  // `layout` is the ngraph.forcelayout instance, `graph` the ngraph.graph, `params` the current
-  // parameter values, `settings` the layout settings from the panel.
-  attach({ layout, graph, params, settings }) {
+  // Called for every new layout: graph load, Reset, picking the idea, changing a parameter or the
+  // number of dimensions. `layout` is the ngraph.forcelayout instance, `graph` the ngraph.graph,
+  // `params` the current parameter values, `settings` the layout settings from the panel.
+  // `steps` is how many steps the drawing has already run: 0 for a fresh start, more when the
+  // new layout carries on from the current positions. If the idea counts steps (e.g. "switch on
+  // at step 300"), count from it.
+  attach({ layout, graph, params, settings, steps }) {
     // Change the layout here, e.g.:
     //   layout.simulator.addForce('my-force', iteration => { ... });
     //   layout.getSpring(fromId, toId).length = 20;
