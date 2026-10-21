@@ -229,7 +229,8 @@ test('layout respects proposed original position', function (t) {
   var layout = createLayout(graph);
   layout.step();
 
-  t.same(layout.getNodePosition(node.id), initialPosition, 'original position preserved');
+  var position = layout.getNodePosition(node.id);
+  t.same({x: position.x, y: position.y}, initialPosition, 'original position preserved');
 
   t.end();
 });

@@ -78,17 +78,42 @@ test('throws on no spring', t => {
   t.end();
 });
 
-test('Can add and remove forces', function (t) {
+test('Can add and remove stages', function (t) {
   var simulator = createSimulator();
-  var testForce = function () {};
-  simulator.addForce('foo', testForce);
-  t.equal(simulator.getForces().get('foo'), testForce);
+  t.same(simulator.stages(), ['clear', 'repulsion', 'drag', 'springs', 'integrate'], 'Built in stages');
 
-  simulator.removeForce('foo');
-  t.equal(simulator.getForces().get('foo'), undefined);
+  var testStage = function () {};
+  simulator.addStage('foo', testStage);
+  t.equal(simulator.getStage('foo'), testStage);
+  t.same(simulator.stages(), ['clear', 'repulsion', 'drag', 'springs', 'foo', 'integrate'], 'New stages run before integrate');
 
-  simulator.removeForce('foo');
-  // should still be good
+  simulator.addStage('first', testStage, { before: 'clear' });
+  simulator.addStage('last', testStage, { after: 'integrate' });
+  t.same(simulator.stages(), ['first', 'clear', 'repulsion', 'drag', 'springs', 'foo', 'integrate', 'last']);
+  t.throws(() => simulator.addStage('foo', testStage), /already added/);
+  t.throws(() => simulator.addStage('bar', testStage, { after: 'nope' }), /No stage named nope/);
+
+  t.ok(simulator.removeStage('foo'));
+  t.equal(simulator.getStage('foo'), undefined);
+  t.notOk(simulator.removeStage('foo'), 'removing twice is fine');
+  t.end();
+});
+
+test('Stages get the store and the simulator', function (t) {
+  var simulator = createSimulator();
+  simulator.addBodyAt({x: 0, y: 0});
+  simulator.addBodyAt({x: 10, y: 0});
+  var seen;
+  simulator.addStage('look', function (store, sim) { seen = {n: store.n, D: store.D, same: sim === simulator}; });
+  simulator.step();
+  t.same(seen, {n: 2, D: 2, same: true});
+
+  // replacing a stage keeps its place
+  var calls = [];
+  var springs = simulator.replaceStage('springs', function () { calls.push('springs'); });
+  t.equal(typeof springs, 'function', 'returns the old stage');
+  simulator.step();
+  t.same(calls, ['springs']);
   t.end();
 });
 
@@ -173,11 +198,10 @@ test('add spring should not add bodies', function (t) {
   var body1 = new Body(-1, 0);
   var body2 = new Body(1, 0);
 
-  simulator.addSpring(body1, body2, 10);
+  t.throws(() => simulator.addSpring(body1, body2, 10), /Use addBody\(\) first/, 'Springs connect bodies of the simulator only');
 
   t.equal(simulator.bodies.length, 0, 'Should not add two bodies');
-  t.equal(simulator.bodies.length, 0, 'Should not add two bodies');
-  t.equal(simulator.springs.length, 1, 'Should have a spring');
+  t.equal(simulator.springs.length, 0, 'Should not have a spring');
   t.end();
 });
 
@@ -244,7 +268,6 @@ test('it updates bounding box', function (t) {
   t.ok(bbox.max_y === 10, 'bottom is 10');
 
   body1.setPosition(15, 15);
-  simulator.invalidateBBox();
   bbox = simulator.getBBox();
 
   t.ok(bbox.min_x === 10, 'Left is 10');
