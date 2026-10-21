@@ -10,37 +10,36 @@ export default {
   author: 'v3-1 (Feynman Lectures Vol. 3, Ch. 4)',
   description: `
 <p>When a node has hundreds of <i>leaves</i> (neighbours with no other link), ngraph puts every
-leaf at the same distance from it. They pile up on one thin ring, so the whole star shows as a
-small solid ball, while the long links between stars leave most of the screen empty (megaStars,
-starOfStars, EVA).</p>
-<p>Here the leaves of one node take turns filling rings, like seats in a stadium. The first ring,
-one link length out, takes as many leaves as fit half a link length apart, the next ring is half a
-link farther out and has more seats, and so on. The star becomes an evenly filled disc, and the
-node's other links start at the edge of that disc so they don't cut through it. All of this is set
-once when the layout starts.</p>
-<p>The idea comes from Feynman's Lectures, Vol. 3, Ch. 4 (identical particles). Two electrons can't
-share one state, so they fill shells outward instead of crowding at the nucleus. His drawing of
-atoms with crowding electrons looks just like ngraph's stars.</p>
-<p>Look for solid red balls turning into dandelions, with visible dots and spokes of different
-lengths. Turning on "Leaves push only nearby nodes" also lets the stars move close together. With
-the default settings, graphs where no node has more than about 12 leaves don't change at all
-(caterpillars).</p>
-<p>What gets worse: a leaf's link length now says which ring it sits in, not how far it is in the
-graph, and lines that pass over a big disc cross more spokes. "Leaves push only nearby nodes" makes
-fans lean away from their neighbours, packs trees tighter and adds crossings. 2D only; in 3D this
-does nothing.</p>
-<p>Close relatives: "leaf shells" (v3-3) uses nearly the same rings but picks the gap from a
-stability rule; "soft leaf links" (v2-6) gives all leaves of a node one longer, softer link. What
-only this one has is "Leaves push only nearby nodes".</p>`,
+leaf one link length from it, so the star shows as a small bright ball and the long links between
+stars leave most of the screen empty.</p>
+<p>Here the leaves take turns filling rings, like seats in a stadium: the first ring is one link
+length out with a seat every half link length, each next ring is half a link farther out, and the
+node's other links start just past its outer ring so they don't cut through the disc. This comes
+from Feynman's Lectures, Vol. 3, Ch. 4: two electrons can't share one state, so they fill shells
+outward instead of crowding at the nucleus.</p>
+<p>Look for balls turning into dandelions with spokes of different lengths: after 1500 steps at the
+demo's defaults, the share of the picture that holds dots goes from 0.13 to 0.25 on starOfStars,
+0.10 to 0.17 on megaStars and 0.27 to 0.29 on EVA, while caterpillars (no node has more than 12
+leaves) doesn't change at all.</p>
+<p>What gets worse: a leaf's link length shows its ring, not its distance in the graph, and more
+links cross (starOfStars 0.13 to 0.21 crossings per link, paTree3k about 20% more, and much more
+at a larger spacing); 2D only, in 3D it does nothing.</p>
+<p>"Leaves push only nearby nodes" is an optional extra in which a leaf pushes only what is within
+one link length (round 2 tried two) and starts on its seat: stars move close together (megaStars
+fill 0.29), but fans lean, trees cross more, a step costs about 1.3 times as much (2 times in the
+first hundred steps), and the Repulsion setting is ignored.</p>
+<p>Close relatives: "leaf shells" (v3-3) picks the ring gap from a stability rule, and "soft leaf
+links" (v2-6) gives a node's leaves one longer, softer link.</p>`,
   tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: EVA', 'Benchmark: caterpillars'],
   params: [
     {
       key: 'spacing', label: 'Leaf spacing (link lengths)', value: 0.5, step: '0.1',
       help: 'Distance between neighbouring leaves and between rings. Larger gives bigger stars ' +
         'with longer spokes (starOfStars fills the screen at 1), but trees with many small fans ' +
-        'get tangled (paTree3k crosses 4 times more at 1). Smaller packs leaves into tighter ' +
+        'get tangled (paTree3k crossed 6 times more at 1). Smaller packs leaves into tighter ' +
         'discs. A node keeps the normal layout while all its leaves fit in the first ring ' +
-        '(about 6.3 / spacing leaves).'
+        '(about 6.3 / spacing leaves). 0 turns the rings off. Values above 6.28 count as 6.28, ' +
+        'so the first ring always has a seat.'
     },
     {
       key: 'rimBonds', label: 'Links leave from the rim (1 on, 0 off)', value: 1, step: '1',
@@ -50,27 +49,35 @@ only this one has is "Leaves push only nearby nodes".</p>`,
     {
       key: 'shortRange', label: 'Leaves push only nearby nodes (1 on, 0 off)', value: 0, step: '1',
       help: 'With 1, a leaf pushes other nodes only when they are closer than one link length ' +
-        '(leaves still get pushed by everything else), so big stars stop shoving each other ' +
-        'apart and fill the screen. Fans lean and trees get tighter, with more crossings. ' +
-        'Leaves start on their rings. Uses the quad tree whatever the Repulsion setting says.'
+        '(round 2 tried two). Every node that is not a leaf still pushes leaves from any ' +
+        'distance. Big stars stop shoving each other apart and fill the screen. Fans lean and ' +
+        'trees get tighter, with more crossings. Leaves start on their rings. Uses the quad tree ' +
+        'whatever the Repulsion setting says. A step costs about 1.3 times as much, 2 times in ' +
+        'the first hundred steps.'
     }
   ],
 
   attach({ layout, graph, params, settings }) {
     if (settings.dimensions !== 2) return null;
-    const spacing = Math.max(0.05, Number(params.spacing) || 0.5);
-    const shells = computeShells(graph, layout, { spacing, rimBonds: Number(params.rimBonds) !== 0 });
+    // 0 or less turns the rings off. Above 2 * PI the first ring would have no seat at all, so a
+    // node with a single leaf would move it outward: count those as 2 * PI (the help says so).
+    const rawSpacing = Number(params.spacing);
+    const spacing = Number.isFinite(rawSpacing) ? Math.min(rawSpacing, 2 * Math.PI) : 0.5;
+    const shells = spacing > 0 ?
+      computeShells(graph, layout, { spacing, rimBonds: Number(params.rimBonds) !== 0 }) :
+      { lengths: new Map(), seats: [] };
 
     // Rest lengths are multiples of the panel's spring length, so they follow it when it changes
     let appliedLength = NaN;
     applyLengths();
     layout.on('step', applyLengths);
 
-    if (Number(params.shortRange) !== 0) {
+    if (Number(params.shortRange) > 0) {
       // Seat the leaves on their rings first. Leaves start piled on their hub, and a short-range
       // push among thousands of piled leaves costs far more than the tree it replaces.
       const length = layout.simulator.springLength();
       shells.seats.forEach(({ hub, leaf, radius, angle }) => {
+        if (layout.getBody(leaf).isPinned) return; // a pinned node stays where it is
         const center = layout.getNodePosition(hub);
         layout.setNodePosition(leaf, center.x + radius * length * Math.cos(angle), center.y + radius * length * Math.sin(angle));
       });
