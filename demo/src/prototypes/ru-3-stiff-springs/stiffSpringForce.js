@@ -3,6 +3,10 @@
 // Like the stock force it reads springLength and springCoefficient from the simulator settings on
 // every step, honours per-link length and coefficient, and keeps springCount / springLength up to
 // date for the adaptive time step.
+// Safety limit on the extra factor, so extreme settings (a tiny spring length, a huge Steepness)
+// can't overflow to Infinity and turn positions into NaN. Normal settings never reach it.
+const MAX_EXTRA = 1e9;
+
 export default function createStiffSpringForce(simulator, { onset, power }) {
   const settings = simulator.settings;
   const random = simulator.random;
@@ -30,9 +34,12 @@ export default function createStiffSpringForce(simulator, { onset, power }) {
 
       const d = r - length;
       let pull = ((spring.coefficient > 0) ? spring.coefficient : defaultCoefficient) * d;
-      if (d > 0 && power > 0) {
+      // A spring of length 0 (or less) has no "spring lengths" to count stretch in: keep it stock.
+      if (d > 0 && power > 0 && length > 0) {
         const u = d / (onset * length);
-        pull *= 1 + (squared ? u * u : Math.pow(u, power));
+        let extra = squared ? u * u : Math.pow(u, power);
+        if (!(extra <= MAX_EXTRA)) extra = MAX_EXTRA;
+        pull *= 1 + extra;
       }
       const coefficient = pull / r;
 
