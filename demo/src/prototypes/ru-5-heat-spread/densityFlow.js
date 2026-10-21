@@ -66,6 +66,7 @@ export default function createDensityFlow(points, movable, options = {}) {
   const vxNow = new Float64Array(cells), vyNow = new Float64Array(cells);
   const vxMid = new Float64Array(cells), vyMid = new Float64Array(cells);
   const endTime = amount / lambda[1];
+  // A safety cap: the end time normally comes much sooner (about 20-170 steps on the benchmark graphs)
   const MAX_STEPS = 400;
   let time = 0, steps = 0;
 
