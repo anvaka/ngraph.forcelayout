@@ -34,6 +34,8 @@ declare module "ngraph.forcelayout" {
     has(name: string): boolean;
     remove(name: string): boolean;
     names(): string[];
+    /** Numbers per body of a column (D for pos, velocity and force) */
+    sizeOf(name: string): number | undefined;
     [column: string]: any;
   }
 
@@ -57,14 +59,109 @@ declare module "ngraph.forcelayout" {
    * How hard two unit charges push each other at distance `r`, e.g. `'exp(-r / L) / r^2'`.
    */
   export interface RepulsionLawSpec {
-    /** F(r), an expression of `r`, `D` (dimensions) and the parameters */
+    /**
+     * F(r): a formula of `r`, the parameters, tables and built in values (`D`, `dt`, `unit`, ...),
+     * optionally after named values: `'u = r / L; exp(-u) / r^2'`
+     */
     force: string;
     /** Parameter values, or functions of the simulator that are read every step */
     params?: Record<string, number | ((simulator: PhysicsSimulator) => number)>;
     /** Pairs and tree cells farther apart than this are skipped */
     range?: number | string | ((simulator: PhysicsSimulator) => number);
-    /** Extra functions the expression can call */
+    /** Lookup tables the expression can call */
+    tables?: Record<string, FormulaTable>;
+    /** Extra JS functions the expression can call (they keep the law on the CPU) */
     functions?: Record<string, { value: (x: number) => number; derivative?: (x: number) => number }>;
+  }
+
+  /**
+   * Samples of a function at evenly spaced points, from `from` to `to`. Formulas read it as
+   * `name(x)`: interpolated linearly, and the nearest end value outside.
+   */
+  export interface FormulaTable {
+    from: number;
+    to: number;
+    values: ArrayLike<number>;
+  }
+
+  /**
+   * What every formula stage takes. `formula` is a list of statements separated by `;` (see
+   * lib/formula.js); `before`, `after` and `replace` place the stage.
+   */
+  export interface FormulaStageOptions {
+    formula: string;
+    /** Numbers, or functions of the simulator read once per step */
+    params?: Record<string, number | ((simulator: PhysicsSimulator) => number)>;
+    tables?: Record<string, FormulaTable>;
+    before?: string;
+    after?: string;
+    /** Takes the place of this stage, which comes back when the formula stage is removed */
+    replace?: string;
+  }
+
+  export interface PairFormulaOptions extends FormulaStageOptions {
+    /** Pairs closer than this run the formula; 0 or less skips the pass */
+    radius: number | string | ((simulator: PhysicsSimulator) => number);
+    /** false: the formula runs for (i, j) and (j, i), and each run pushes body i only */
+    symmetric?: boolean;
+  }
+
+  export interface SumOptions extends FormulaStageOptions {
+    /** 'nodes' (default) or 'links' */
+    over?: 'nodes' | 'links';
+    reduce?: 'sum' | 'min' | 'max';
+    /** A column of group ids: one result per group 0, 1, 2, ... (negative ids are left out) */
+    group?: string;
+  }
+
+  export interface SumResult {
+    /** 1 number, or D for a sum of vectors */
+    width: number;
+    grouped: boolean;
+    value: Float64Array;
+    /** count * width numbers, for sums per group */
+    groups: Float64Array;
+    count: number;
+  }
+
+  export interface RepulsionPassOptions {
+    law: string | RepulsionLawSpec | null;
+    /** Body column of charges (not negative); the simulator's repulsionCharge by default */
+    charge?: string;
+    /** Body column of how strongly bodies feel the push; the charge by default */
+    sensitivity?: string;
+    before?: string;
+    after?: string;
+    replace?: string;
+  }
+
+  /**
+   * What a stage does, for plan(). `shape` is one of 'clear', 'tree', 'drag', 'springs',
+   * 'integrate', 'node', 'link', 'pair', 'sum', 'pair rules', 'js'.
+   */
+  export interface StageDescription {
+    shape: string;
+    builtIn?: boolean;
+    formula?: string;
+    law?: RepulsionLaw;
+    [detail: string]: any;
+  }
+
+  /**
+   * An engine that can run (some of) a simulator's stages.
+   */
+  export interface Backend {
+    name: string;
+    check(description: StageDescription, simulator: PhysicsSimulator): { runs: boolean; how?: string; reason?: string };
+    checkSettings?(simulator: PhysicsSimulator): string[];
+  }
+
+  export interface Plan {
+    backend: string;
+    runs: boolean;
+    /** One sentence for every problem */
+    reasons: string[];
+    stages: { stage: string; shape: string; runs: boolean; how?: string; reason?: string }[];
   }
 
   /**
@@ -75,6 +172,7 @@ declare module "ngraph.forcelayout" {
     isDefault: boolean;
     hasRange: boolean;
     paramNames: string[];
+    tableNames: string[];
     values: Record<string, number>;
   }
 
@@ -305,9 +403,10 @@ declare module "ngraph.forcelayout" {
     stages(): string[];
 
     /**
-     * Adds a stage to every step. By default it runs just before 'integrate'.
+     * Adds a stage to every step. By default it runs just before 'integrate'. With `replace` it
+     * takes the place of that stage, which comes back when this one is removed.
      */
-    addStage(name: string, run: StageFunction, options?: { before?: string; after?: string }): void;
+    addStage(name: string, run: StageFunction, options?: { before?: string; after?: string; replace?: string }): void;
 
     /**
      * Replaces a stage, keeping its place. Returns the old function.
@@ -315,9 +414,47 @@ declare module "ngraph.forcelayout" {
     replaceStage(name: string, run: StageFunction): StageFunction;
 
     /**
-     * Removes a stage. Returns true when there was such a stage.
+     * Removes a stage (formula stages too). Returns true when there was such a stage.
      */
     removeStage(name: string): boolean;
+
+    /**
+     * A formula for every body, e.g. 'force += -k * mass * (pos - center)'.
+     */
+    addNodeFormula(name: string, options: FormulaStageOptions): void;
+
+    /**
+     * A formula for every link that sets `pull` from `r`, `length`, `coefficient`, link columns
+     * and `name_i` / `name_j` columns of both ends. `replace: 'springs'` replaces the stock
+     * springs, which compute 'pull = coefficient * (r - length)'.
+     */
+    addLinkFormula(name: string, options: FormulaStageOptions): void;
+
+    /**
+     * A formula for every pair of bodies closer than `radius`: it sets `push` from `r` and
+     * `name_i` / `name_j` columns, and can add into columns (`stiff_i += ...`).
+     */
+    addPairFormula(name: string, options: PairFormulaOptions): void;
+
+    /**
+     * Adds up a formula over bodies or links, for later formulas to read by name.
+     */
+    addSum(name: string, options: SumOptions): void;
+
+    /**
+     * Results of sums by name.
+     */
+    sums(): Record<string, SumResult>;
+
+    /**
+     * Another repulsion pass with its own law and columns.
+     */
+    addRepulsion(name: string, options: RepulsionPassOptions): void;
+
+    /**
+     * Which stages an engine can run; without a backend, the CPU (which runs all).
+     */
+    plan(backend?: Backend): Plan;
 
     /**
      * Returns the function of a stage.
