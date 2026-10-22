@@ -185,6 +185,11 @@ A pair step that needs more than its cap runs in several submits ("slices") rath
   infinity are outside the contract. `tanh` is clamped (Metal's is NaN from 45).
 - **Bodies on one spot** are pushed apart along a small fixed direction where the CPU picks a
   random one.
+- **In 3D, the very first step of a large layout started by ngraph** (a dense blob) is up to 2×
+  the CPU tree's relative error. The GPU's own error there is 1.4%, while the CPU tree is
+  unusually exact on the blob (0.7%). From step 10 on it is within the gate (1.99× at step 0,
+  0.79× at step 10, 0.50× at step 30); the fixes that close it would cost a third more per 3D
+  step.
 - **Some costs:**
   - a pair formula in 3D costs about twice 2D (0.20–0.23 ms at 100k);
   - laws that fall slower than 1/r² cost 1.35–1.68× a stock step in 2D;
