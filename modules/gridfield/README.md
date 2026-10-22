@@ -58,8 +58,9 @@ Options:
   reads (its own unsmoothed deposit is subtracted).
 * `into`: `{value, gradient}`, the names of the two body columns it writes. They are defined when
   missing.
-* `params`: numbers, or functions of the simulator called once per step. Expressions can also
-  read the formula language's built in values (`unit`, `springLength`, `n`, `step`, ...).
+* `params`: numbers, or functions of the step context (`simulator.stepContext()`) called once per
+  step. Expressions can also read the formula language's built in values (`unit`,
+  `springLength`, `n`, `step`, ...).
 * `before`, `after`, `replace`: where the stage goes, as in `simulator.addStage()`. By default
   it runs just before `integrate`.
 * `denseLimit`: a `'lattice'` grid without smoothing that would have more cells than this keeps
@@ -73,9 +74,10 @@ Only 2D and 3D layouts: in 4D and more it throws "grid fields are 2D and 3D".
 
 ## Other engines
 
-The stage describes itself to `simulator.plan(backend)` as shape `'grid'`, with its options,
-expressions as text, the columns it reads and writes, and `evaluate(simulator)`, which gives this
-step's numbers (cell, margin, diffuse, value) for an engine that computes them on the host. The
+In `simulator.program()` the stage has shape `'grid'`, reads `pos` (and the columns the deposit
+value reads), writes the two columns, and keeps its options in `args`, with numbers as
+`{kind: 'number' | 'expression' | 'host'}`. `simulator.stageValues(name, stepContext)` gives one
+step's numbers (`params`, `cell`, `margin`, `diffuse`, `value`) for an engine that queues steps. The
 GPU module lowers it to a dense grid built on the device (see DESIGN.md, section 6.7).
 
 ## Cost
