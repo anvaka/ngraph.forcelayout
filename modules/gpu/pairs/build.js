@@ -132,12 +132,16 @@ export async function buildPairs(device, plan, { buffers: external, step, positi
   const bodies = grid(plan.n);
   const dispatch = (pass, name, group, size, offsets) => {
     pass.setPipeline(pipes[name]);
-    pass.setBindGroup(0, group, offsets);
+    // an explicit undefined for the offsets threw now and then in Chrome 146 ("cannot be converted to a
+    // sequence"), after thousands of good calls
+    if (offsets) pass.setBindGroup(0, group, offsets); else pass.setBindGroup(0, group);
     pass.dispatchWorkgroups(size[0], size[1]);
   };
   const indirect = (pass, name, group, args, word, offsets) => {
     pass.setPipeline(pipes[name]);
-    pass.setBindGroup(0, group, offsets);
+    // an explicit undefined for the offsets threw now and then in Chrome 146 ("cannot be converted to a
+    // sequence"), after thousands of good calls
+    if (offsets) pass.setBindGroup(0, group, offsets); else pass.setBindGroup(0, group);
     pass.dispatchWorkgroupsIndirect(args, word * 4);
   };
   const on = (stage, values) => stage.gate === undefined || values[stage.gate] !== 0;
