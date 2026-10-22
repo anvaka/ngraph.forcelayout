@@ -106,5 +106,6 @@ test('the halt message for a lattice wider than maxCells', () => {
   const p = plan(2, gridStage(2, { anchor: 'lattice', cell: 10 }).stage);
   const bits = x => new Uint32Array(new Float32Array([x]).buffer)[0];
   assert.equal(gridStatus([0, 0, 0, 0], p, 'gas'), null);
-  assert.equal(gridStatus([1, bits(5300), bits(10), 0], p, 'gas'), 'grid field gas: the layout spans 5,300 cells at cell 10; maxCells is 2,048');
+  assert.equal(gridStatus([1, bits(5300), bits(10), 0], p, 'gas'), 'Grid field gas: the layout spans 5300 cells at cell 10; maxCells is 2048');
+  assert.equal(gridStatus([1, bits(5300), bits(4.1), 0], p, 'gas'), 'Grid field gas: the layout spans 5300 cells at cell 4.1; maxCells is 2048', 'the cell as the CPU prints it');
 });

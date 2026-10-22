@@ -177,13 +177,14 @@ export function gridIsDynamic(stage) {
 export function gridStatus(words, plan, stageName) {
   const code = words[0];
   if (!code) return null;
+  // the CPU module's words for the same refusal (a smoothed lattice), numbers as it prints them
   const f = new Float32Array(new Uint32Array([words[1], words[2]]).buffer);
-  const cells = Number.isFinite(f[0]) ? Math.round(f[0]).toLocaleString('en-US') : 'too many';
-  const cell = +f[1].toPrecision(4);
+  const cells = Number.isFinite(f[0]) ? Math.round(f[0]) : f[0];
+  const cell = +f[1].toPrecision(6);
   if (code === 1) {
-    return `grid field ${stageName}: the layout spans ${cells} cells at cell ${cell}; maxCells is ${plan.maxCells.toLocaleString('en-US')}`;
+    return `Grid field ${stageName}: the layout spans ${cells} cells at cell ${cell}; maxCells is ${plan.maxCells}`;
   }
-  return `grid field ${stageName}: the grid needs ${cells} cells, more than its buffers hold (${plan.capacity.toLocaleString('en-US')})`;
+  return `Grid field ${stageName}: the grid needs ${cells} cells, more than its buffers hold (${plan.capacity})`;
 }
 
 /**
