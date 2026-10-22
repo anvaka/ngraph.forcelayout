@@ -22,6 +22,14 @@ const AX = 'xyzw';
 const NUMBERS = ['cell', 'cellLow', 'margin', 'marginLow', 'diffuse', 'value'];
 
 /**
+ * The grid's own numbers per step, by slot name (gridSlotValues() gives them); the stage's params
+ * and built in values come as 'param:<name>' and 'builtIn:<name>'
+ */
+export function gridNumbers(D) {
+  return NUMBERS.concat(Array.from({ length: D }, (_, k) => 'phase' + k));
+}
+
+/**
  * The grid field of program stage `stage` (shape 'grid') for n bodies in D dimensions: see the top
  * of this file. `label` prefixes its kernels' names (one plan per grid stage).
  */
@@ -40,7 +48,7 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
   }
 
   // The step's numbers: the caller's slot, or a uniform of the grid's own
-  const names = NUMBERS.concat(Array.from({ length: D }, (_, k) => 'phase' + k));
+  const names = gridNumbers(D);
   stage.params.forEach(param => names.push('param:' + param.name));
   (stage.builtIns || []).forEach(name => names.push('builtIn:' + name));
   let own = null;
