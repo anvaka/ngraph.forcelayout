@@ -43,7 +43,8 @@ export function relativePositions(pos, n, D, origin) {
  * as f64. Returns the CPU integrator's measure of movement per step (the squared sum over axes of
  * the summed |dx|, over the bodies), measured on a sample of a large graph. When graph edits
  * moved rows since `bodies` (the simulator's bodies when the data was read), bodies get their
- * positions wherever they are now, and bodies that left are skipped.
+ * positions wherever they are now, bodies that left are skipped, and the movement is unknown
+ * (null): the store's rows are not the ones the device moved.
  */
 export function writePositionsBack(simulator, bodies, data, D, origin, steps) {
   const store = simulator.store, n = bodies.length;
@@ -54,7 +55,7 @@ export function writePositionsBack(simulator, bodies, data, D, origin, steps) {
       if (body.store !== store) continue;
       for (let k = 0; k < D; k++) store.pos[body.index * D + k] = origin[k] + data[i * D + k];
     }
-    return 0;
+    return null;
   }
   const pos = store.pos;
   const stride = Math.max(1, Math.floor(n / MOVEMENT_SAMPLE));
@@ -90,7 +91,7 @@ export function writePermutedBack(simulator, bodies, data, toInternal, origin, s
     pos[2 * i] = x; pos[2 * i + 1] = y;
   }
   tx /= steps; ty /= steps;
-  return moved ? 0 : (tx * tx + ty * ty) / n;
+  return moved ? null : (tx * tx + ty * ty) / n;
 }
 
 /**

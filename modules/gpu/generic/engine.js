@@ -6,10 +6,9 @@ import { getPipeline } from '../device.js';
 import { kernelCode, BINDINGS } from './emit.js';
 import { THREADS } from './plan.js';
 import { slotFiller } from './values.js';
-import { chooseOrigin, relativePositions as relative, writePositionsBack } from '../buffers.js';
+import { chooseOrigin, relativePositions as relative, writePositionsBack, rowsMoved } from '../buffers.js';
+import { createRowWriter, trackHostPositions } from '../rows.js';
 
-// More rows written by the host than this go up whole
-const MAX_ROW_WRITES = 4096;
 // Integers above this are not exact in f32
 const F32_INTEGER = 16777216;
 
@@ -22,7 +21,8 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   const D = plan.D, n = store.n, cap = plan.cap;
   const code = kernelCode(plan);
   const names = Object.keys(code);
-  const pipelines = await Promise.all(names.map(name => getPipeline(device, { code: code[name], label: name, bindings: BINDINGS })));
+  const [writeRows, ...pipelines] = await Promise.all([createRowWriter(device)]
+    .concat(names.map(name => getPipeline(device, { code: code[name], label: name, bindings: BINDINGS }))));
   const pipelineOf = {};
   names.forEach((name, k) => { pipelineOf[name] = pipelines[k]; });
 
@@ -99,7 +99,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
 
   let parity = 0;   // positions of the next step are read from positions[parity]
   // What the module last put on the device or into the store, to find rows the host wrote
-  let devicePositions = startPositions;
+  const host = trackHostPositions(store, n, D, origin, startPositions);
   let deviceVelocities = Float64Array.from(store.velocity.subarray(0, n * D));
   let uploaded = versions();
   const bodies = simulator.bodies.slice();
@@ -140,16 +140,20 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
      * What changed on the host goes up: everything after sync() (`hostOwns`), else the rows
      * the host wrote and the columns it marked. 'sync' when a sync point is needed instead.
      */
-    prepare(hostOwns) {
+    prepare(hostOwns, steps) {
       const now = versions();
       if (hostOwns) {
-        devicePositions = relative(store.pos, n, D, origin);
-        device.queue.writeBuffer(positions[parity], 0, devicePositions);
+        const relativePositions = relative(store.pos, n, D, origin);
+        host.reset(relativePositions);
+        device.queue.writeBuffer(positions[parity], 0, relativePositions);
         uploadColumn('velocity');
         uploadColumns(name => name !== 'velocity' && plan.columns[name].buffer !== 'X');
         deviceVelocities = Float64Array.from(store.velocity.subarray(0, n * D));
       } else {
-        if (now.pos !== uploaded.pos) uploadPositionRows(positionRows());
+        if (now.pos !== uploaded.pos) {
+          const rows = host.written();
+          writeRows(positions[parity], 0, D, rows, host.uploaded(rows, steps));
+        }
         if (now.velocity !== uploaded.velocity) uploadVelocityRows(velocityRows());
         uploadColumns(name => name !== 'velocity' && plan.columns[name].buffer !== 'X' && now.columns[name] !== uploaded.columns[name]);
       }
@@ -215,16 +219,19 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     },
 
     /**
-     * Positions read from the device (f32, relative) into the store as f64. Rows the host wrote
-     * since the last upload keep its numbers. Returns the CPU's measure of movement per step.
+     * Positions read from the device (f32, relative) after `through` steps (`steps` of them since
+     * the last readback) into the store as f64; rows the host wrote keep its numbers (see
+     * rows.js). Returns the CPU's measure of movement per step, or null when graph edits moved
+     * the rows since.
      */
-    readPositions(data, steps) {
-      const keep = store.versions.pos !== uploaded.pos ? positionRows() : [];
-      const saved = keep.map(i => Array.from(store.pos.subarray(i * D, i * D + D)));
-      const move = writePositionsBack(simulator, bodies, data, D, origin, steps);
-      keep.forEach((i, j) => { for (let k = 0; k < D; k++) store.pos[i * D + k] = saved[j][k]; });
-      devicePositions = Float32Array.from(data);
-      return move;
+    readPositions(data, steps, inStoreOrder, through) {
+      const write = () => writePositionsBack(simulator, bodies, data, D, origin, steps);
+      if (rowsMoved(simulator, bodies)) return write();
+      return host.readBack(through, store.versions.pos !== uploaded.pos, () => {
+        const move = write();
+        host.mirror.set(data.subarray(0, n * D));
+        return move;
+      });
     },
 
     /**
@@ -299,46 +306,18 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     Object.keys(plan.columns).forEach(name => { if (which(name)) uploadColumn(name); });
   }
 
-  function positionRows() {
-    const pos = store.pos, rows = [];
-    for (let i = 0; i < n; i++) {
-      for (let k = 0; k < D; k++) {
-        if (Math.fround(pos[i * D + k] - origin[k]) !== devicePositions[i * D + k]) { rows.push(i); break; }
-      }
-    }
-    return rows;
-  }
-
   function velocityRows() {
     const v = store.velocity, rows = [];
     for (let i = 0; i < n * D; i++) if (v[i] !== deviceVelocities[i] && rows[rows.length - 1] !== Math.floor(i / D)) rows.push(Math.floor(i / D));
     return rows;
   }
 
-  function uploadPositionRows(rows) {
-    if (rows.length > MAX_ROW_WRITES) {
-      devicePositions = relative(store.pos, n, D, origin);
-      device.queue.writeBuffer(positions[parity], 0, devicePositions);
-      return;
-    }
-    const one = new Float32Array(D);
-    rows.forEach(i => {
-      for (let k = 0; k < D; k++) one[k] = devicePositions[i * D + k] = store.pos[i * D + k] - origin[k];
-      device.queue.writeBuffer(positions[parity], i * D * 4, one);
-    });
-  }
-
   function uploadVelocityRows(rows) {
-    const column = plan.columns.velocity;
-    if (rows.length > MAX_ROW_WRITES) uploadColumn('velocity');
-    else {
-      const one = new Float32Array(D);
-      rows.forEach(i => {
-        for (let k = 0; k < D; k++) one[k] = store.velocity[i * D + k];
-        device.queue.writeBuffer(S, (column.offset + i * D) * 4, one);
-      });
-    }
-    deviceVelocities = Float64Array.from(store.velocity.subarray(0, n * D));
+    const values = new Float32Array(rows.length * D), v = store.velocity;
+    rows.forEach((i, r) => {
+      for (let k = 0; k < D; k++) values[r * D + k] = deviceVelocities[i * D + k] = v[i * D + k];
+    });
+    writeRows(S, plan.columns.velocity.offset, D, rows, values);
   }
 }
 
