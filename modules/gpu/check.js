@@ -21,6 +21,7 @@
 import formula from '../../lib/formula.js';
 import { createPrinter, emitLaw, lawValueProblem, lawValueWarnings, f32Problem, F32_MAX } from './wgsl/print.js';
 import { schedule } from './schedule.js';
+import { checkGrid } from './grid/plan.js';
 import { physicsStages, isGuard } from './program.js';
 import { printPairFormula } from './pairs/formula.js';
 
@@ -110,7 +111,7 @@ export function lower(program, simulator, limits, options = {}) {
   const facts = programFacts(program);
   const data = storeFacts(program, simulator);
   program.stages.forEach(stage => {
-    const verdict = checkStage(stage, program, simulator, printer, laws, facts);
+    const verdict = checkStage(stage, program, simulator, printer, laws, facts, limits);
     stages[stage.name] = verdict.runs ? { runs: true, how: verdict.how } : { runs: false, reason: verdict.reason };
     if (verdict.warnings && verdict.warnings.length) stages[stage.name].warnings = verdict.warnings;
   });
@@ -177,7 +178,7 @@ function storeFacts(program, simulator) {
 }
 
 // The lowering table: what each kind of stage needs to run here
-function checkStage(stage, program, simulator, printer, laws, facts) {
+function checkStage(stage, program, simulator, printer, laws, facts, limits) {
   if (isGuard(stage)) return runs('stops layout.step() while the GPU runs the layout');
   const columnProblem = columnsProblem(stage, facts);
   switch (stage.builtIn || stage.shape) {
@@ -205,6 +206,8 @@ function checkStage(stage, program, simulator, printer, laws, facts) {
       return columnProblem ? refuse(columnProblem) : checkLink(stage, facts, printer);
     case 'pair':
       return columnProblem ? refuse(columnProblem) : checkPair(stage, facts, printer);
+    case 'grid':
+      return columnProblem ? refuse(columnProblem) : checkGrid(stage, program.dims, program.spaces.nodes, limits, printer);
     case 'host':
       return runs(`on the host, on the steps where its \`when\` holds: the step stops there and reads back ${(stage.reads || []).map(r => r.column).join(', ') || 'nothing'}`);
     case 'js':

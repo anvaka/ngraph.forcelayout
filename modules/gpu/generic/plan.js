@@ -24,6 +24,10 @@
 // above it the pair track's cell sort, work list, chunks and gather (../pairs) run before the node
 // kernel that holds the stage's section, which adds the totals the gather wrote.
 //
+// Grid fields (section 6.7, ../grid): a unit of its own dispatches, the gather of its two columns
+// included. It runs at the start of the step when nothing before it in the step writes what it
+// reads or touches what it writes (ru-4's and v1-6's), else at its place, between node kernels.
+//
 // Sums per group (section 6.5): a node section writes each row's value, then GROUP_RUNS adds up
 // runs of up to 256 rows of one group (in an order the host sorts by group) and GROUP_SUM adds
 // each group's runs in order.
@@ -48,6 +52,7 @@
 import { physicsStages } from '../program.js';
 import { planPyramid } from '../pyramid/plan.js';
 import { planPairs, pairOutputs } from '../pairs/plan.js';
+import { planGrid, gridNumbers } from '../grid/plan.js';
 
 export const THREADS = 256;
 // Up to this many bodies the whole step is one kernel and repulsion is exact over all pairs
@@ -131,6 +136,7 @@ export function genericPlan(program, laws, options = {}) {
       const adds = stage.writes.some(write => write.space === 'nodes' && write.end);
       sections.push({ kind: pulls || adds ? 'gather' : 'linkset', stage, pulls });
     } else if (kind === 'node') sections.push({ kind: 'formula', stage });
+    else if (kind === 'grid') sections.push({ kind: 'grid', stage });
     else if (kind === 'host') sections.push({ kind: 'host', stage });
     else if (kind === 'pair') sections.push({ kind: 'pairformula', stage });
     else if (kind === 'sum') {
@@ -143,8 +149,8 @@ export function genericPlan(program, laws, options = {}) {
   }
   // tree passes, links and pairs read other bodies' positions from the start of the step
   const integrateAt = sections.findIndex(s => s.kind === 'euler' || s.kind === 'fire');
-  const late = sections.slice(integrateAt + 1).find(s => s.kind === 'pairs' || s.kind === 'gather' || s.kind === 'springs' || s.kind === 'pairformula' || (s.kind === 'linkset' && readsPositions(s)));
-  if (late) return { refusal: `WebGPU runs tree passes, pair formulas and link stages that read positions before the integrate stage only (${late.stage.name} comes after it)` };
+  const late = sections.slice(integrateAt + 1).find(s => s.kind === 'pairs' || s.kind === 'gather' || s.kind === 'springs' || s.kind === 'pairformula' || s.kind === 'grid' || (s.kind === 'linkset' && readsPositions(s)));
+  if (late) return { refusal: `WebGPU runs tree passes, pair formulas, grid fields and link stages that read positions before the integrate stage only (${late.stage.name} comes after it)` };
   // pair formulas above N* (in 2D to 4D) run through the cell sort; else every pair is looked at
   const pairSort = n > smallGraph && D <= 4;
   const pairSections = sections.filter(s => s.kind === 'pairformula');
@@ -180,14 +186,18 @@ export function genericPlan(program, laws, options = {}) {
 
   // Sums that read nothing an earlier stage of the step writes (no column, no sum) go first, in
   // one pass
-  const written = new Set(), summed = new Set();
-  const hoisted = [];
+  // So do grid fields that read nothing an earlier stage writes, and whose columns no earlier stage
+  // reads or writes (rule 4: producers go early), before those sums
+  const written = new Set(), summed = new Set(), touched = new Set();
+  const hoisted = [], hoistedGrids = [];
   const rest = [];
   sections.forEach(section => {
     const isSum = section.kind === 'sum' || section.kind === 'groupsum';
     if (isSum && !readsAny(section.stage, written) && !section.stage.sums.some(name => summed.has(name))) hoisted.push(section);
+    else if (section.kind === 'grid' && !readsAny(section.stage, written) && ![...writesOf(section)].some(column => touched.has(column))) hoistedGrids.push(section);
     else rest.push(section);
-    writesOf(section).forEach(column => written.add(column));
+    writesOf(section).forEach(column => { written.add(column); touched.add(column); });
+    readsOf(section).forEach(column => touched.add(column));
     if (isSum) summed.add(section.stage.name);
   });
 
@@ -350,6 +360,11 @@ export function genericPlan(program, laws, options = {}) {
     // formulas read built in values as their stage gets them; built in stages read the settings
     section.builtIns = Object.create(null);
     if (!stage.builtIn) stage.builtIns.forEach(name => { section.builtIns[name] = slot.add('builtIn', stage.name, name); });
+    // a grid field's own numbers: its cell, margin, smoothing, deposit value, lattice phase
+    if (section.kind === 'grid') {
+      section.numbers = Object.create(null);
+      gridNumbers(D).forEach(name => { section.numbers[name] = slot.add('grid', stage.name, name); });
+    }
   });
 
   // --- kernels --------------------------------------------------------------------------------
@@ -377,6 +392,7 @@ export function genericPlan(program, laws, options = {}) {
       kernels.push({ kind: 'groupSum', name: '', column, sums: list, gates });
     });
   };
+  hoistedGrids.forEach(section => kernels.push({ kind: 'grid', name: '', section, gates: [section.gate], hoisted: true }));
   if (hoisted.length) {
     current = {
       kind: 'node', name: 'SUMS', sections: hoisted, afterIntegrate: false, hoisted: true,
@@ -401,6 +417,12 @@ export function genericPlan(program, laws, options = {}) {
       // the step stops here on the steps where the host step runs (see runner.js)
       close();
       kernels.push({ kind: 'host', name: section.stage.name, section });
+      continue;
+    }
+    if (section.kind === 'grid') {
+      // its own dispatches, between node kernels
+      close();
+      kernels.push({ kind: 'grid', name: '', section, gates: [section.gate] });
       continue;
     }
     if (section.kind === 'linkset') {
@@ -453,7 +475,7 @@ export function genericPlan(program, laws, options = {}) {
   // names in step order
   kernels.forEach((kernel, index) => {
     if (kernel.name || kernel.kind === 'host') return;
-    const prefix = { node: 'STEP', reduce: 'REDUCE', link: 'LINKS', groupRuns: 'GROUP_RUNS', groupSum: 'GROUP_SUM', chunks: 'LINK_CHUNKS' }[kernel.kind];
+    const prefix = { node: 'STEP', reduce: 'REDUCE', link: 'LINKS', groupRuns: 'GROUP_RUNS', groupSum: 'GROUP_SUM', chunks: 'LINK_CHUNKS', grid: 'GRID' }[kernel.kind];
     kernel.name = prefix + index;
   });
 
@@ -466,7 +488,7 @@ export function genericPlan(program, laws, options = {}) {
       else names.push(section.stage.name);
     });
     if (kernel.kind === 'reduce' || kernel.kind === 'groupRuns' || kernel.kind === 'groupSum') kernel.sums.forEach(sum => names.push(sum.name));
-    if (kernel.kind === 'chunks') names.push(kernel.section.stage.name);
+    if (kernel.kind === 'chunks' || kernel.kind === 'grid') names.push(kernel.section.stage.name);
     if (kernel.kind === 'fireReduce' || kernel.kind === 'fireState') names.push(integrateName(sections));
     kernelStages[kernel.name] = names;
   });
@@ -521,6 +543,31 @@ export function genericPlan(program, laws, options = {}) {
     if (pyramid.refusal) return { refusal: pyramid.refusal };
     pyramidWalk.pyramid = pyramid;
     Object.keys(pyramid.kernels).forEach(name => { kernelStages[name] = pyramidWalk.channels.map(c => c.stage.name); });
+  }
+
+  // Grid fields read positions and columns from this plan's buffers, and their numbers from the
+  // step's slot
+  const colRefOf = name => {
+    const column = columns[name];
+    return {
+      buffer: column.buffer,
+      at: (row, k) => column.width === 1 ? `${column.buffer}[${column.offset}u + ${row}]` : `${column.buffer}[${column.offset}u + ${row} * ${column.width}u + ${k}u]`,
+    };
+  };
+  for (const kernel of kernels) {
+    if (kernel.kind !== 'grid') continue;
+    const section = kernel.section;
+    section.grid = planGrid({
+      stage: section.stage, D, n, limits: options.limits, warn: options.warn, label: kernel.name,
+      pos: { buffer: 'X', at: (row, k) => `X[${row} * ${D}u + ${k}u]` },
+      column: colRefOf,
+      values: {
+        decl: binding => `@group(0) @binding(${binding}) var<uniform> V: array<vec4f, ${done.floats / 4}>;`,
+        at: name => slotValue(name.startsWith('param:') ? section.params[name.slice(6)] : name.startsWith('builtIn:') ? section.builtIns[name.slice(8)] : section.numbers[name]),
+      },
+    });
+    if (section.grid.refusal) return { refusal: `${section.stage.name}: ${section.grid.refusal}` };
+    Object.keys(section.grid.kernels).forEach(name => { kernelStages[name] = [section.stage.name]; });
   }
 
   // charges and positions of a tile: D + one per distinct charge column

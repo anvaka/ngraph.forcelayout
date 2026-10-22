@@ -7,6 +7,8 @@ import { kernelCode, bindingsOf } from './emit.js';
 import { THREADS, GROUP_RUN, LINK_CHUNK } from './plan.js';
 import { buildPyramid, pyramidStatus } from '../pyramid/build.js';
 import { buildPairs } from '../pairs/build.js';
+import { buildGrid } from '../grid/build.js';
+import { gridStatus } from '../grid/plan.js';
 import { slotFiller } from './values.js';
 import { chooseOrigin, relativePositions as relative, writePositionsBack, rowsMoved } from '../buffers.js';
 import { createRowWriter, trackHostPositions } from '../rows.js';
@@ -26,7 +28,8 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   const code = kernelCode(plan);
   const pipelineOf = {};
   const dispatched = plan.kernelList.filter(kernel => kernel.kind !== 'host');
-  const [writeRows] = await Promise.all([createRowWriter(device)].concat(dispatched.map(kernel =>
+  // grid fields build their own pipelines (buildGrid below)
+  const [writeRows] = await Promise.all([createRowWriter(device)].concat(dispatched.filter(kernel => kernel.kind !== 'grid').map(kernel =>
     getPipeline(device, { code: code[kernel.name], label: kernel.name, bindings: bindingsOf(kernel) })
       .then(pipeline => { pipelineOf[kernel.name] = pipeline; }))));
 
@@ -125,6 +128,23 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   if (tree && tree.status) {
     statuses.push(Object.assign({ message: pyramidStatus, stages: plan.pyramid.channels.map(c => c.stage) }, tree.status));
   }
+  // Grid fields: positions (by parity), their columns in S and H, their numbers in the slot
+  const grids = new Map();
+  try {
+    for (const kernel of dispatched) {
+      if (kernel.kind !== 'grid') continue;
+      const grid = await buildGrid(device, kernel.section.grid, { buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes, dynamic: true } });
+      grids.set(kernel, grid);
+      const name = kernel.section.stage.name;
+      statuses.push(Object.assign({ message: words => gridStatus(words, kernel.section.grid, name), stages: [name] }, grid.status));
+    }
+  } catch (e) {
+    owned.forEach(b => b.destroy());
+    grids.forEach(grid => grid.destroy());
+    if (tree) tree.destroy();
+    if (pairs) pairs.destroy();
+    throw e;
+  }
   // Bind groups per layout and parity
   const bindGroups = kernel => [0, 1].map(p => device.createBindGroup({
     layout: pipelineOf[kernel.name].getBindGroupLayout(0),
@@ -139,9 +159,9 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   let deviceVelocities = Float64Array.from(store.velocity.subarray(0, n * D));
   let uploaded = versions();
   const bodies = simulator.bodies.slice();
-  const kernels = dispatched.map(kernel => ({
-    kernel, pipeline: pipelineOf[kernel.name], bind: bindGroups(kernel), groups: workgroups(kernel), gates: kernelGates(kernel),
-  }));
+  const kernels = dispatched.map(kernel => (kernel.kind === 'grid'
+    ? { kernel, grid: grids.get(kernel), gates: kernel.gates.every(g => g !== undefined) ? kernel.gates : null }
+    : { kernel, pipeline: pipelineOf[kernel.name], bind: bindGroups(kernel), groups: workgroups(kernel), gates: kernelGates(kernel) }));
   // the kernels between host steps: a step where a host step runs is encoded a part at a time
   const segments = [[]];
   plan.kernelList.forEach(kernel => {
@@ -270,9 +290,11 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
           const slot = filled.perStep ? s : 0;
           const offset = [slot * plan.slot.bytes];
           const values = filled.data.subarray((filled.perStep ? done + s : 0) * floats);
-          for (const { kernel, pipeline, bind, groups: g, gates } of list) {
+          for (const { kernel, pipeline, bind, groups: g, gates, grid } of list) {
             // a kernel of gated stages only, none of which runs this step
             if (gates && gates.every(index => values[index] === 0)) continue;
+            // a grid field: its dispatches, the gather of its columns included
+            if (grid) { grid.encode(cp, { stepOffset: offset[0], parity }); continue; }
             // the pyramid's structure, from this step's positions; it also orders the threads of
             // its kernel, so it is built even on steps where its passes are gated off
             if (kernel.tree) tree.encode(cp, { stepOffset: offset[0], parity });
@@ -379,6 +401,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
       owned.forEach(b => b.destroy());
       if (tree) tree.destroy();
       if (pairs) pairs.destroy();
+      grids.forEach(grid => grid.destroy());
     },
   };
 
