@@ -27,8 +27,13 @@ const MARGIN = 1.5;
 // full chunks: v1-5 on a piled-up 100k layout). The device's rate is taken from the runner's
 // timings (observeTime()), never above this, so slower GPUs get a smaller cap and smaller submits
 const RATE_MAX = 43e6 / 256;
-// A capped slice of one stage should take at most this many ms, and the pair work of one submit
-// at most SUBMIT_MS: far from the GPU watchdog (2 s on macOS)
+// The rate is measured on dense steps only: at least this many chunks a body, so that most chunks
+// are full. A relaxed layout's chunks hold a few candidates each, and run up to 2x faster
+const DENSE = 2;
+// Targets at the measured rate: a capped slice of one stage takes about CAPPED_MS, and the pair
+// work of one submit about SUBMIT_MS, far from the GPU watchdog (2 s on macOS). Before a dense
+// step was timed, the rate is RATE_MAX: on a GPU slower than an M4 Max the first crowded slices
+// take longer, until their timing comes in
 const CAPPED_MS = 25;
 const SUBMIT_MS = 100;
 // Bytes between two entries of the slices' uniform (the dynamic offset alignment)
@@ -287,20 +292,24 @@ export async function buildPairs(device, plan, { buffers: external, step, positi
     },
     /**
      * The runner's measured GPU ms a step (a timed readback's average): with the pair work of the
-     * last measured step, the device's rate. The whole step counts as pair work, so the rate can
-     * only come out low (the safe side); it never passes RATE_MAX. The cap follows, so that a
-     * capped slice takes at most CAPPED_MS.
+     * last measured step, when it was dense, the device's rate. The whole step counts as pair
+     * work, so the rate can only come out low (the safe side); it never passes RATE_MAX. The cap
+     * follows, so that a capped slice takes about CAPPED_MS.
      */
     observeTime(msPerStep) {
-      let chunks = 0;
-      sorts.forEach(b => { if (b.known && b.lastRadius > 0) chunks += b.known.chunks / estimateScale * (b.lastStages || 1); });
-      if (!(chunks > 0 && msPerStep > 0)) return;
+      let chunks = 0, passes = 0;
+      sorts.forEach(b => {
+        if (!b.known || !(b.lastRadius > 0)) return;
+        chunks += b.known.chunks / estimateScale * (b.lastStages || 1);
+        passes += b.lastStages || 1;
+      });
+      if (!(chunks > 0 && msPerStep > 0) || chunks < DENSE * plan.n * passes) return;
       rate = Math.min(RATE_MAX, chunks / msPerStep);
       updateCap();
     },
     /**
-     * GPU ms a capped slice of one stage takes at the measured rate (at most CAPPED_MS, unless
-     * setCap() asked for more than the rate allows).
+     * GPU ms a capped slice of one stage takes at the rate measured on dense steps (RATE_MAX
+     * before one was timed).
      */
     cappedMs() {
       return cap / rate;
