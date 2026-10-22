@@ -20,10 +20,12 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   let graph, layout;
   let scene, nodes, lines, guide;
 
-  // When WebGPU backend is on, the GPU runs the layout's own simulator (`gpu`, from runOnGpu());
-  // the layout keeps the positions, read back after each batch of steps.
+  // With WebGPU picked, the GPU runs the layout's own simulator (`gpu`, from runOnGpu()) whenever
+  // its plan says it can; otherwise the layout stays on the CPU and `gpuReasons` says why. The
+  // layout keeps the positions, read back after each batch of steps.
   let backend = 'cpu';
   let gpuBackend, gpu = null;
+  let gpuReasons = '', gpuError = '';
   // Starting and stopping the GPU runs one change at a time; frames don't step meanwhile
   let changes = Promise.resolve(), changing = false;
 
@@ -111,22 +113,15 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
 
   async function setBackend(newBackend) {
     if (newBackend === 'webgpu' && backend !== 'webgpu') {
-      if ((layoutSettings.dimensions || 2) !== 2) return backend;
-      // Picked from now on, so the stats say WebGPU while the device is requested
-      backend = 'webgpu';
       gpuBackend = gpuBackend || await createWebGPUBackend();
-      // CPU was picked again meanwhile
-      if (backend !== 'webgpu') return backend;
-      if (!gpuBackend) {
-        backend = 'cpu';
-        return backend;
-      }
-      await changeLayout(null);
-    } else if (newBackend === 'cpu' && backend !== 'cpu') {
-      backend = 'cpu';
+      if (!gpuBackend) return backend;
+    }
+    if (newBackend !== backend) {
+      backend = newBackend;
+      gpuError = '';
+      stats.reset();
       await changeLayout(null);
     }
-    stats.reset();
     return backend;
   }
 
@@ -142,8 +137,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
           await running.stop();
         }
         if (change) change();
-        // (setBackend() starts it once the device is there)
-        if (backend === 'webgpu' && layout && gpuBackend) await startGpu();
+        if (backend === 'webgpu' && layout) await startGpu();
       } catch (e) {
         console.error('Switching the layout failed:', e);
       } finally {
@@ -156,43 +150,46 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   async function startGpu() {
     let target = layout;
     let plan = target.simulator.plan(gpuBackend);
-    let running = null;
-    // The stock layout always runs there; if anything is refused, stay on the CPU
-    if (plan.runs) {
-      try {
-        running = await runOnGpu(target, gpuBackend);
-      } catch (e) {
-        plan = { reasons: e.reasons || [e.message] };
+    if (!plan.runs) {
+      // Each kind of refusal once, without the stage names
+      let whole = plan.reasons.filter(reason => !plan.stages.some(stage => reason.startsWith(stage.stage + ': ')));
+      let reasons = whole.concat(plan.stages.filter(stage => !stage.runs).map(stage => stage.reason));
+      gpuReasons = Array.from(new Set(reasons)).join('; ');
+      return;
+    }
+    gpuReasons = '';
+    try {
+      let running = await runOnGpu(target, gpuBackend);
+      if (target !== layout) {
+        await running.stop();
+        return;
       }
+      gpu = running;
+      gpu.on('error', e => {
+        // Stepping stopped on the GPU: carry on with the CPU from the last positions
+        gpuError = e.lost ? 'the WebGPU device was lost' : e.message;
+        // a lost device never comes back: picking WebGPU again asks for a new one
+        if (e.lost) gpuBackend = null;
+        backend = 'cpu';
+        changeLayout(null);
+      });
+    } catch (e) {
+      gpuReasons = e.reasons ? e.reasons.join('; ') : e.message;
     }
-    if (!running) {
-      console.warn('WebGPU cannot run this layout:', plan.reasons.join('; '));
-      backend = 'cpu';
-      return;
-    }
-    if (target !== layout) {
-      await running.stop();
-      return;
-    }
-    gpu = running;
-    gpu.on('error', e => {
-      // Stepping stopped on the GPU (e.g. the device was lost): carry on with the CPU from the
-      // last positions. A lost device never comes back: picking WebGPU again asks for a new one
-      console.warn('WebGPU stopped:', e.message);
-      if (e.lost) gpuBackend = null;
-      backend = 'cpu';
-      changeLayout(null);
-    });
   }
 
   function getStats() {
     return {
-      backend,
+      // where the layout runs now (WebGPU may be picked and refuse it)
+      backend: gpu ? 'webgpu' : 'cpu',
       nodes: graph ? graph.getNodesCount() : 0,
       links: graph ? graph.getLinksCount() : 0,
       steps: stats.steps,
       msPerStep: gpu ? gpu.stats().msPerStep : stats.msPerStep(),
-      placement: placementChoice
+      placement: placementChoice,
+      // why the layout runs on the CPU although WebGPU is picked
+      gpuReasons: backend === 'webgpu' && !gpu && !changing ? gpuReasons : '',
+      gpuError
     };
   }
 
@@ -225,8 +222,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     if (!layout) return;
 
     if (layoutSettings.dimensions !== previousDimensions) {
-      // WebGPU layout is 2D only
-      if (layoutSettings.dimensions !== 2) backend = 'cpu';
+      // a new layout in the new dimensions, back on the GPU when its plan runs there
       changeLayout(() => {
         let prevLayout = layout;
         layout = createForceLayout(graph, layoutSettings)
