@@ -9,7 +9,7 @@
 import { getPipeline } from '../device.js';
 import { writeLawValues } from '../wgsl/print.js';
 import { boxLayout, WG, CROWD_GROUPS } from './wgsl.js';
-import { NEAR_CAP } from './plan.js';
+import { NEAR_CAP, pyrLevels } from './plan.js';
 
 const PARAM_WORDS = 20;
 // Pair evaluations a step may spend on crowded cells (cells past the near cap) before the step
@@ -104,13 +104,14 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     TREE_LOCAL: bind('TREE_LOCAL', [TP, treeCells, treeMeta, treeLists, treeSp].concat(stepEntry)),
   };
   if (plan.heavyCells) groups.TREE_HEAVY = bind('TREE_HEAVY', [TP, treeSp, treeMeta, treeCells, treeLists].concat(stepEntry));
-  const levels = [];
-  for (let l = 0; l < sizes.levels; l++) {
-    const count = (sizes.G >> (l + 1)) ** D;
+  // TREE_PYR's dispatches: a block of levels each (blockSteps), else a level each
+  const levels = pyrLevels(sizes.levels, plan.blockSteps).map(({ from, steps }) => {
     const u = buf(16, U | CD);
-    device.queue.writeBuffer(u, 0, new Uint32Array([count, sizes.levelOff[l], sizes.levelOff[l + 1], sizes.metaCount]));
-    levels.push({ count, group: bind('TREE_PYR', [u, treeCells].concat(plan.layout.CNT < 0 ? [treeMeta] : [])) });
-  }
+    const count = plan.blockSteps ? (sizes.G >> from) ** D : (sizes.G >> (from + 1)) ** D;
+    device.queue.writeBuffer(u, 0, new Uint32Array(plan.blockSteps ? [count, sizes.levelOff[from], steps, sizes.metaCount] :
+      [count, sizes.levelOff[from], sizes.levelOff[from + 1], sizes.metaCount]));
+    return { count, group: bind('TREE_PYR', [u, treeCells].concat(plan.layout.CNT < 0 ? [treeMeta] : [])) };
+  });
   const errors = await Promise.all([device.popErrorScope(), device.popErrorScope()]);
   const setupError = errors.find(Boolean);
   if (setupError) {
