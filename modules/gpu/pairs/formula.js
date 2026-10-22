@@ -13,13 +13,15 @@
 // my force, and pairs at r = 0 are skipped before the formula, as on the CPU.
 //
 // The printed code reads `pair_r`, assigns `pair_push` and adds into `pair_acc_<column>`
-// (`pair_acc_<column>_<k>` for vectors), all declared by the caller. Both regimes print through
-// here: the one-kernel step's all-pairs loop below N*, and the chunk kernel of the cell sort
-// above it (wgsl.js).
+// (`pair_acc_<column>_<k>` for vectors), all declared by the caller. `force_i += v` adds into my
+// force sum, the one pairCandidate() adds the push to (`options.force`). Both regimes print
+// through here: the one-kernel step's all-pairs loop below N*, and the chunk kernel of the cell
+// sort above it (wgsl.js).
 import formula from '../../../lib/formula.js';
 
 /**
  * The columns a pair stage adds into, with their widths (1 or D): what a pass adds up per body.
+ * Additions into `force` (`force_i += v`, like the push) go into the pass's force sum instead.
  */
 export function pairAccumulators(stage, D, columns) {
   const out = [];
@@ -51,7 +53,9 @@ export function pairReads(stage) {
  *  - D, printer (a WGSL printer, wgsl/print.js), columns: name -> {width} (program().columns);
  *  - read(column, who, k): the k-th number of `column` of 'me' or 'other', as formulas see it
  *    (positions with the origin added);
- *  - param(name), builtIn(name), sum(name, k): the stage's numbers.
+ *  - param(name), builtIn(name), sum(name, k): the stage's numbers;
+ *  - force(k): my force sum on axis k, which `force_i += v` adds into (pair_force_<k>; give
+ *    pairCandidate() the same).
  * Returns {i, j, accumulators, reads}: `i` and `j` are lists of WGSL statements (`j` is null
  * for a one-sided stage). Throws what the GPU cannot print.
  */
@@ -132,14 +136,18 @@ function scope(stage, options, role, accumulators) {
   function endName(column, end) {
     const info = column === 'pos' ? { width: 'D' } : columns[column];
     const width = info.width === 'D' ? D : 1;
-    const accumulator = accumulators.find(a => a.column === column);
-    // a formula never reads what it adds into (the library refuses it), so those have no value
+    const force = column === 'force';
+    const accumulator = force || accumulators.some(a => a.column === column);
+    // a formula never reads what it adds into, nor the force (the library refuses both), so those
+    // have no value
     const codes = Array.from({ length: width }, (_, k) => (accumulator ? 'pair_unread' : options.read(column, who(end), k)));
-    // my end's accumulations go into the pass's sum; the other end's are left to the other body
+    // my end's additions go into the pass's sums, the force into my force sum; the other end's are
+    // left to the other body
+    const sum = k => (force ? (options.force ? options.force(k) : `pair_force_${k}`) : accumulatorName(column, k, width));
     const write = accumulator ? (op, value) => {
       if (end !== role) return [];
       const values = value.codes || [value.code];
-      return Array.from({ length: width }, (_, k) => `${accumulatorName(column, k, width)} ${op} ${values[k]};`);
+      return Array.from({ length: width }, (_, k) => `${sum(k)} ${op} ${values[k]};`);
     } : null;
     const out = width === 1 ? { type: 'num', code: codes[0] } : { type: 'vec', codes };
     if (write) {
