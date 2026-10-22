@@ -1,8 +1,9 @@
 var test = require('tap').test;
 var createSimulator = require('../lib/createPhysicsSimulator');
 
-// modules/gridfield is an ES module (Node loads it with require since 22.12)
-var gridField = Promise.resolve(require('../modules/gridfield/index.js').default);
+// modules/gridfield is an ES module: import() loads it on every Node version CI runs (require
+// loads ES modules only since Node 22.12)
+var gridField = import('../modules/gridfield/index.js').then(function (m) { return m.default; });
 
 // A simulator with `count` bodies in a few clumps, two on the same spot
 function makeSimulator(dimensions, count, seed) {
