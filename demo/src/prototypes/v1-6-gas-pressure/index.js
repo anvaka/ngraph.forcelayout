@@ -98,8 +98,10 @@ longer springs (30), ordinary spacing already counts as crowded and grids change
         rho = gasDensity * h * h;
         ramp = select(rho >= 2 * rho0, 1, (rho - rho0) / rho0);
         push = -kT * ramp / ((rho + 0.05) * h) * (gasSlope * (h * h * h));
-        // a huge temperature or spring constant can overflow: never add Infinity or NaN
-        force += select(rho > rho0 && pinned == 0 && length(push) < 1e30, push, 0 * pos)`
+        // a huge temperature or spring constant can overflow: never add Infinity or NaN. Checked per
+        // axis, as length() would overflow 32-bit floats long before 1e30
+        force += select(rho > rho0 && pinned == 0 && abs(dot(push, axis(0))) < 1e30 && abs(dot(push, axis(1))) < 1e30,
+          push, 0 * pos)`
     });
     return {
       dispose() {
