@@ -87,8 +87,7 @@ export function readPositions(simulator, layout, data, steps) {
   if (n === 0) return 0;
   const ox = origin.x, oy = origin.y;
   let tx = 0, ty = 0;
-  const last = bodies[n - 1];
-  if (store.n >= n && last.store === store && last.index === n - 1) {
+  if (!rowsMoved(simulator, layout)) {
     // rows are where they were: the usual case
     const pos = store.pos;
     for (let i = 0; i < n; i++) {
@@ -107,6 +106,15 @@ export function readPositions(simulator, layout, data, steps) {
   }
   tx /= steps; ty /= steps;
   return (tx * tx + ty * ty) / n;
+}
+
+/**
+ * True when graph edits moved the rows of the bodies `layout` was read from (rows of removed
+ * bodies were dropped since).
+ */
+export function rowsMoved(simulator, layout) {
+  const store = simulator.store, n = layout.toInternal.length, last = layout.bodies[n - 1];
+  return !(n === 0 || (store.n >= n && last.store === store && last.index === n - 1));
 }
 
 /**
