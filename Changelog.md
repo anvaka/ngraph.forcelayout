@@ -37,7 +37,9 @@ the README):
   by default) when bodies move.
 * `startAtZero` for link and pair formulas, and `axis(k)` in formulas.
 * A `'settings'` event from the setters, and column versions (`store.versions`,
-  `store.changed(name)`) for engines that keep their own copy of the numbers.
+  `store.changed(name)`) for engines that keep their own copy of the numbers. Setters of bodies
+  and springs mark their column, positions set with `setNodePosition()` included.
+  `simulator.programVersion()` tells when the structure of a step changed.
 * `simulator.iteration(n)` sets the step count; `simulator.applyEdits()` applies graph edits and
   fires `'topology'` at once; `addStage(name, run, {describe})` lets an add-on stage describe
   itself.
