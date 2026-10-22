@@ -512,3 +512,93 @@ test('program() details: own positions of trees, pair rules, counters of link fo
   t.notOk(soft.writes.some(function (w) { return w.column === 'springCount'; }));
   t.end();
 });
+
+test('a link formula without pull adds no force and draws no random numbers', function (t) {
+  var plain = makeSimulator({ dimensions: 2 }, 12);
+  var sim = makeSimulator({ dimensions: 2 }, 12);
+  sim.springStore.define('seen');
+  sim.addLinkFormula('measure', { formula: 'seen = r', after: 'integrate' });
+  for (var i = 0; i < 5; ++i) { plain.step(); sim.step(); }
+  sameNumbers(t, Array.from(sim.store.pos.subarray(0, 24)), Array.from(plain.store.pos.subarray(0, 24)), 'the layout moves as without it');
+  var spring = sim.springs[0];
+  var d = [0, 1].map(function (k) { return sim.store.pos[2 * spring.to.index + k] - sim.store.pos[2 * spring.from.index + k]; });
+  t.equal(sim.springStore.seen[0], Math.sqrt(d[0] * d[0] + d[1] * d[1]), 'it reads r');
+  var measure = stageOf(sim.program(), 'measure');
+  t.notOk(measure.writes.some(function (w) { return w.column === 'force'; }), 'no force in its writes');
+  sim.addLinkFormula('count', { formula: 'seen = seen + 1' });
+  t.notOk(stageOf(sim.program(), 'count').reads.some(function (r) { return r.column === 'pos'; }), 'nor positions when it does not read r');
+  t.end();
+});
+
+test('a link formula sets its own spring with =', function (t) {
+  var set = makeSimulator({ dimensions: 2 }, 16);
+  var viaFormula = makeSimulator({ dimensions: 2 }, 16);
+  [set, viaFormula].forEach(function (sim) {
+    sim.springStore.define('stiff');
+    for (var s = 0; s < sim.springStore.n; s += 3) sim.springStore.stiff[s] = 0.3;
+  });
+  for (var s = 0; s < set.springStore.n; ++s) {
+    set.springStore.coefficient[s] = set.springStore.stiff[s] > 0 ? set.springStore.stiff[s] : -1;
+    set.springStore.length[s] = 12;
+  }
+  viaFormula.store.define('seen');
+  viaFormula.addLinkFormula('controller', {
+    before: 'clear',
+    formula: 'coefficient = stiff > 0 ? stiff : -1; length = 12; seen_i += coefficient'
+  });
+  for (var i = 0; i < 10; ++i) { set.step(); viaFormula.step(); }
+  sameNumbers(t, Array.from(viaFormula.store.pos.subarray(0, 32)), Array.from(set.store.pos.subarray(0, 32)), 'the springs read what it set');
+  t.equal(viaFormula.springStore.coefficient[1], -1, 'the store holds what it set');
+  t.ok(Math.abs(viaFormula.store.seen[viaFormula.springs[1].from.index] - 8) < 1e-9, 'after = it reads the value with the settings filled in');
+  var controller = stageOf(viaFormula.program(), 'controller');
+  t.same(controller.writes.filter(function (w) { return w.space === 'links'; }).map(function (w) { return w.column + ':' + w.mode; }), ['coefficient:set', 'length:set']);
+  var column = viaFormula.program().columns.links.filter(function (c) { return c.name === 'coefficient'; })[0];
+  t.equal(column.writer, 'stage:controller');
+  t.throws(function () { viaFormula.addLinkFormula('bad', { formula: 'coefficient += 1' }); }, /coefficient can only be changed with =/);
+  t.throws(function () { viaFormula.addSum('bad2', { over: 'links', formula: 'coefficient = 1; 1' }); }, /cannot be assigned/);
+  t.end();
+});
+
+test('a gated stage reads only what its gate needs on its off steps', function (t) {
+  var sim = makeSimulator({ dimensions: 2 }, 4);
+  sim.store.define('out');
+  var calls = { every: 0, gate: 0, host: 0 };
+  sim.addNodeFormula('rare', {
+    when: 'step == at',
+    params: { at: function () { calls.gate += 1; return 3; }, k: function () { calls.every += 1; return 2; } },
+    formula: 'out = k'
+  });
+  sim.addNodeFormula('hosted', {
+    when: function (context) { return context.iteration() === 2; },
+    params: { k: function () { calls.host += 1; return 1; } },
+    formula: 'out += k'
+  });
+  for (var i = 0; i < 5; ++i) sim.step();
+  t.same(calls, { every: 1, gate: 5, host: 1 }, 'params outside the gate are read on its on steps only, once');
+  t.equal(sim.store.out[0], 2, 'on its own steps it runs as before (hosted at step 2, then rare at 3)');
+  t.same(sim.stageValues('rare', sim.stepContext(3)), { params: { at: 3, k: 2 }, when: true, builtIns: { step: 3 } });
+  t.end();
+});
+
+test('grouped sums follow groups that grow and shrink', function (t) {
+  var sim = makeSimulator({ dimensions: 2 }, 10);
+  sim.store.define('group', Int32Array);
+  sim.addSum('massOf', { formula: 'mass', group: 'group' });
+  function expected() {
+    var out = [];
+    for (var i = 0; i < 10; ++i) {
+      var g = sim.store.group[i];
+      if (g < 0) continue;
+      while (out.length <= g) out.push(0);
+      out[g] += sim.store.mass[i];
+    }
+    return out;
+  }
+  [[0, 1], [0, 1, 2, 4], [1], [-1], [3, 0]].forEach(function (ids) {
+    for (var i = 0; i < 10; ++i) sim.store.group[i] = ids[i % ids.length];
+    sim.step();
+    var sum = sim.sums().massOf;
+    t.same(Array.from(sum.groups.subarray(0, sum.count)), expected(), 'groups ' + ids.join(','));
+  });
+  t.end();
+});
