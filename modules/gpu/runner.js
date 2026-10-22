@@ -18,7 +18,7 @@ import { GUARD } from './schedule.js';
 import { createGridEngine } from './templates/grid.js';
 import { createSmallEngine } from './templates/small.js';
 import { lawValueCount, writeLawValues, lawValueProblem, lawValueWarnings } from './wgsl/print.js';
-import { readLayout, writePositions, writeVelocities, writeMasses, readPositions, readVelocities } from './buffers.js';
+import { readLayout, writePositions, writeVelocities, writeMasses, readPositions, readVelocities, rowsMoved } from './buffers.js';
 
 const READBACK_BUFFERS = 3;
 const STATS_WINDOW = 30;
@@ -29,8 +29,8 @@ const MAX_BATCH = 1024;
 const MAX_SUBMIT_MS = 100;
 // Settings the stock templates read from their uniforms
 const SETTINGS = ['gravity', 'springLength', 'springCoefficient', 'dragCoefficient', 'timeStep', 'maxVelocity', 'integrator'];
-// More pinned rows changed at once than this make a sync point (see uploadPinned())
-const MAX_PINNED_WRITES = 4096;
+// More rows written by the host than this go up whole (see uploadRows())
+const MAX_ROW_WRITES = 4096;
 // Columns the stock templates read: a 'step' listener that changes one changes the physics
 const NODE_COLUMNS = ['pos', 'velocity', 'mass', 'pinned'];
 const LINK_COLUMNS = ['from', 'to', 'length', 'coefficient'];
@@ -171,7 +171,7 @@ function createRunner(layout, backend) {
     lawCount = law ? lawValueCount(law) : 0;
     lawValues = law ? new Float32Array(lawCount) : null;
     data = readLayout(simulator, plan.template === 'grid');
-    data.pinned = Uint8Array.from(store.pinned.subarray(0, data.n), value => (value ? 1 : 0));
+    keepCopies(data.init.slice());
     const create = plan.template === 'small' ? createSmallEngine : createGridEngine;
     const next = data.n > 0 ? await create(device, {
       n: data.n, edges: data.edges, init: data.init, mass: data.mass, law, variants: plan.perStep,
@@ -226,43 +226,92 @@ function createRunner(layout, backend) {
         return false;
       }
     }
-    const n = data.n;
-    if (hostOwns || now.pos !== uploaded.pos) {
-      // the store is the truth: what sync() read and what the host wrote since, or what the host
-      // marked with store.changed('pos')
-      device.queue.writeBuffer(engine.pos, 0, writePositions(store, data, new Float32Array(2 * n)));
+    if (hostOwns) {
+      // the store is the truth: what sync() read and what the host wrote since
+      const positions = writePositions(store, data, new Float32Array(2 * data.n));
+      device.queue.writeBuffer(engine.pos, 0, positions);
+      device.queue.writeBuffer(engine.vel, 0, writeVelocities(store, data.toInternal, new Float32Array(4 * data.n)));
+      keepCopies(positions);
+    } else {
+      // between syncs the device is ahead of the store: only rows the host wrote go up
+      if (now.pos !== uploaded.pos) uploadRows(positionRows(), 'pos');
+      if (now.velocity !== uploaded.velocity || now.pinned !== uploaded.pinned) uploadRows(velocityRows(), 'vel');
     }
-    if (hostOwns || now.velocity !== uploaded.velocity) {
-      device.queue.writeBuffer(engine.vel, 0, writeVelocities(store, data.toInternal, new Float32Array(4 * n)));
-      data.pinned.set(store.pinned.subarray(0, n));
-    } else if (now.pinned !== uploaded.pinned && !uploadPinned()) {
-      return false;
-    }
-    if (now.mass !== uploaded.mass) device.queue.writeBuffer(engine.mass, 0, writeMasses(store, data, new Float32Array(n)));
+    if (now.mass !== uploaded.mass) device.queue.writeBuffer(engine.mass, 0, writeMasses(store, data, new Float32Array(data.n)));
     uploaded = now;
     hostOwns = false;
     return true;
   }
 
-  // Pinned flags live next to the velocity on the device, which the store does not have between
-  // syncs: changed rows are written one by one (pinning is usually a few bodies). Many changes
-  // at once make a sync point instead.
-  function uploadPinned() {
-    const pinned = store.pinned, copy = data.pinned, flag = new Float32Array(1);
-    let changed = 0;
-    for (let i = 0; i < data.n; i++) if ((pinned[i] ? 1 : 0) !== copy[i]) changed++;
-    if (changed > MAX_PINNED_WRITES) {
-      syncPoint();
-      return false;
-    }
+  // What the module last put into the store or on the device, to find the rows the host wrote
+  // between syncs (their column versions say that something changed, not where): positions as
+  // the device has them (f32, relative to the origin), velocities and pinned flags as uploaded
+  function keepCopies(positions) {
+    const n = data.n;
+    data.positions = positions;
+    data.velocities = Float64Array.from(store.velocity.subarray(0, 2 * n));
+    data.pinned = Uint8Array.from(store.pinned.subarray(0, n), value => (value ? 1 : 0));
+  }
+
+  function positionRows() {
+    const pos = store.pos, copy = data.positions, { toInternal, origin } = data, rows = [];
     for (let i = 0; i < data.n; i++) {
-      const value = pinned[i] ? 1 : 0;
-      if (value === copy[i]) continue;
-      copy[i] = value;
-      flag[0] = value;
-      device.queue.writeBuffer(engine.vel, data.toInternal[i] * 16 + 12, flag);
+      const k = 2 * toInternal[i];
+      if (Math.fround(pos[2 * i] - origin.x) !== copy[k] || Math.fround(pos[2 * i + 1] - origin.y) !== copy[k + 1]) rows.push(i);
     }
-    return true;
+    return rows;
+  }
+
+  function velocityRows() {
+    const v = store.velocity, pinned = store.pinned, rows = [];
+    for (let i = 0; i < data.n; i++) {
+      if (v[2 * i] !== data.velocities[2 * i] || v[2 * i + 1] !== data.velocities[2 * i + 1] || (pinned[i] ? 1 : 0) !== data.pinned[i]) rows.push(i);
+    }
+    return rows;
+  }
+
+  // Rows the host wrote since the last upload keep the host's numbers when the device's come back
+  // (the next step() uploads them), unless graph edits moved the rows
+  function keepingHostWrites(read) {
+    const marked = uploaded.pos !== undefined && !rowsMoved(simulator, data);
+    const posRows = marked && store.versions.pos !== uploaded.pos ? positionRows() : [];
+    const velRows = marked && store.versions.velocity !== uploaded.velocity ? velocityRows() : [];
+    const pos = posRows.map(i => [store.pos[2 * i], store.pos[2 * i + 1]]);
+    const vel = velRows.map(i => [store.velocity[2 * i], store.velocity[2 * i + 1]]);
+    read();
+    posRows.forEach((i, j) => { store.pos[2 * i] = pos[j][0]; store.pos[2 * i + 1] = pos[j][1]; });
+    velRows.forEach((i, j) => { store.velocity[2 * i] = vel[j][0]; store.velocity[2 * i + 1] = vel[j][1]; });
+  }
+
+  // Writes the store's rows `rows` of positions or velocities (with the pinned flag) to the
+  // device, one by one; when the host wrote many, the whole column goes up
+  function uploadRows(rows, column) {
+    const n = data.n, toInternal = data.toInternal;
+    if (column === 'pos') {
+      if (rows.length > MAX_ROW_WRITES) {
+        device.queue.writeBuffer(engine.pos, 0, writePositions(store, data, data.positions));
+        return;
+      }
+      const one = new Float32Array(2), pos = store.pos;
+      for (const i of rows) {
+        const k = toInternal[i];
+        one[0] = data.positions[2 * k] = pos[2 * i] - data.origin.x;
+        one[1] = data.positions[2 * k + 1] = pos[2 * i + 1] - data.origin.y;
+        device.queue.writeBuffer(engine.pos, k * 8, one);
+      }
+      return;
+    }
+    if (rows.length > MAX_ROW_WRITES) {
+      device.queue.writeBuffer(engine.vel, 0, writeVelocities(store, toInternal, new Float32Array(4 * n)));
+    } else {
+      const one = new Float32Array(4), v = store.velocity, pinned = store.pinned;
+      for (const i of rows) {
+        one[0] = v[2 * i]; one[1] = v[2 * i + 1]; one[3] = pinned[i] ? 1 : 0;
+        device.queue.writeBuffer(engine.vel, toInternal[i] * 16, one);
+      }
+    }
+    data.velocities = Float64Array.from(store.velocity.subarray(0, 2 * n));
+    data.pinned = Uint8Array.from(store.pinned.subarray(0, n), value => (value ? 1 : 0));
   }
 
   // Encodes `count` steps in as few submits as the batching allows, and reads positions back
@@ -389,7 +438,9 @@ function createRunner(layout, backend) {
   function apply(serial, steps, positions) {
     appliedSerial = serial;
     const done = steps - appliedSteps;
-    const move = readPositions(simulator, data, positions, Math.max(1, done));
+    let move = 0;
+    keepingHostWrites(() => { move = readPositions(simulator, data, positions, Math.max(1, done)); });
+    data.positions.set(positions);
     if (done > 0) lastMove = move;
     appliedSteps = steps;
     simulator.iteration(firstStep + steps);
@@ -464,7 +515,7 @@ function createRunner(layout, backend) {
     }
     if (!released && from === data) {
       if (serial > appliedSerial) apply(serial, steps, new Float32Array(buffer.getMappedRange(0, n * 8)));
-      readVelocities(simulator, data, new Float32Array(buffer.getMappedRange(n * 8, n * 16)));
+      keepingHostWrites(() => { readVelocities(simulator, data, new Float32Array(buffer.getMappedRange(n * 8, n * 16))); });
       fireState = Array.from(new Float32Array(buffer.getMappedRange(n * 24, 16)));
     }
     buffer.unmap();
@@ -588,6 +639,7 @@ function createRunner(layout, backend) {
   }
 
   function structureChanged() {
+    if (simulator.programVersion) return simulator.programVersion() !== structure.version;
     const names = simulator.stages();
     if (names.length !== structure.names.length) return true;
     for (let i = 0; i < names.length; i++) {
