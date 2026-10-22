@@ -15,6 +15,16 @@
 // cell. Nodes outside the box are clamped into border cells. Their real positions still feed the
 // centres of mass, and they compute their own far field from monopoles at their real position,
 // because a cell-centred expansion is meaningless that far from the cell.
+//
+// Repulsion is 1/r^2 like the library's default. Another law (a compiled law of the library) is
+// printed into LOCAL and FORCE by the module's WGSL printer, and they read its numbers from P.law.
+//
+// This is the stock template: the module runs it for the exact stock step above the small-graph
+// size, and its WGSL is today's text byte for byte (test/t4.js). Its JS side takes the masses
+// from the simulator's store, compiles pipelines asynchronously, and can feed LOCAL and FORCE a
+// different copy of P per step (the law-variant pipelines, see run()).
+import { emitLaw, lawPrologue, lawValueCount } from '../wgsl/print.js';
+import { getPipeline } from '../device.js';
 
 const WG = 256;
 const SPRING_CHUNK = 8;
@@ -368,7 +378,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
 // Every non-empty cell receives the far field of its interaction list (children of the
 // parent's 3x3 that are not in my 3x3) once, at its centre, as field + 2x2 Jacobian.
-const LOCAL = COMMON + /* wgsl */`
+const LOCAL = law => withLaw(COMMON, law) + /* wgsl */`
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var<storage, read> bs: array<u32>;
 @group(0) @binding(2) var<storage, read_write> cells: array<vec4f>;
@@ -383,7 +393,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   }
   let c = t - off;
   let me = cells[off + c];
-  if (me.x == 0.0) { return; }
+  if (me.x == 0.0) { return; }${law ? '\n  ' + lawPrologue(law, lawValue) : ''}
   let o = vec2f(bitcast<f32>(bs[4]), bitcast<f32>(bs[5]));
   let w = bitcast<f32>(bs[6]) / f32(Gl);
   let xl = i32(compact1by1(c)); let yl = i32(compact1by1(c >> 1u));
@@ -399,14 +409,24 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       let cell = cells[off + morton(u32(x), u32(y))];
       if (cell.x > 0.0) {
         let d = cell.yz - center;
-        let r2 = dot(d, d);
+        let r2 = dot(d, d);${law ? `
+        if (${inRange(law, 'r2')}) {
+          let r = sqrt(r2);
+          ${emitLaw(law, 2, 'r', 'k1', 'k2')}
+          let g = P.gravity * cell.x;
+          F += (g * k1) * d;
+          // d/dp of gravity M k1(r) (q - p) = gravity M (k2 d d^T - k1 I)
+          jxx += g * (k2 * d.x * d.x - k1);
+          jxy += g * (k2 * d.x * d.y);
+          jyy += g * (k2 * d.y * d.y - k1);
+        }` : `
         let ir2 = 1.0 / r2;
         let g = P.gravity * cell.x * ir2 * sqrt(ir2); // gravity M / r^3
         F += g * d;
         // d/dp of gravity M (q - p) / |q - p|^3 = gravity M (3 d d^T / r^5 - I / r^3)
         jxx += g * (3.0 * d.x * d.x * ir2 - 1.0);
         jxy += g * (3.0 * d.x * d.y * ir2);
-        jyy += g * (3.0 * d.y * d.y * ir2 - 1.0);
+        jyy += g * (3.0 * d.y * d.y * ir2 - 1.0);`}
       }
     }
   }
@@ -416,7 +436,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
 // One thread per node, in cell order. Euler integrates here; FIRE stores the force in
 // vel[n + i] for the FIRE passes.
-const FORCE = COMMON + /* wgsl */`
+const FORCE = law => withLaw(COMMON, law) + /* wgsl */`
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var<storage, read> sp: array<vec4f>;
 @group(0) @binding(2) var<storage, read> perm: array<u32>;
@@ -438,7 +458,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let c = u32(abs(me.w));
   let cx = i32(compact1by1(c)); let cy = i32(compact1by1(c >> 1u));
   let Gi = i32(P.G);
-  var f = vec2f(0.0);
+  var f = vec2f(0.0);${law ? '\n  ' + lawPrologue(law, lawValue) : ''}
 
   // near field: exact pairs in my 3x3 cells (strided with weights in overfull cells)
   for (var dy = -1; dy <= 1; dy++) {
@@ -460,8 +480,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         var d = q.xy - p;
         var r2 = dot(d, d);
         if (r2 == 0.0) { d = jitter(i, perm[t]); r2 = dot(d, d); }
-        let r = sqrt(r2);
-        f += (P.gravity * mi * q.z * w / (r2 * r)) * d;
+        ${law ? `${law.hasRange ? `if (r2 > lawRange2) { continue; }
+        ` : ''}let r = sqrt(r2);
+        ${emitLaw(law, 2, 'r', 'k1')}
+        f += (P.gravity * mi * q.z * w * k1) * d;` : `let r = sqrt(r2);
+        f += (P.gravity * mi * q.z * w / (r2 * r)) * d;`}
       }
     }
   }
@@ -491,7 +514,11 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
           if (cell.x > 0.0) {
             let d = cell.yz - p;
             let r2 = dot(d, d);
-            if (r2 > 0.0) { ff += (P.gravity * cell.x / (r2 * sqrt(r2))) * d; }
+            ${law ? `if (r2 > 0.0 && ${inRange(law, 'r2')}) {
+              let r = sqrt(r2);
+              ${emitLaw(law, 2, 'r', 'm1')}
+              ff += (P.gravity * cell.x * m1) * d;
+            }` : 'if (r2 > 0.0) { ff += (P.gravity * cell.x / (r2 * sqrt(r2))) * d; }'}
           }
         }
       }
@@ -595,24 +622,41 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   pos[i] = pos[i] + P.dt * v;
 }`;
 
-const SHADERS = { HIST, BOX, BIN, SCAN_BLOCKS, SCAN_TOP, SCAN_ADD, PLACE, ORDER, SPRINGS, AGG0, PYR, LOCAL, FORCE, FIRE_REDUCE, FIRE_STATE, FIRE_INTEGRATE };
-const pipelineCache = new WeakMap();
+// A law's numbers (see writeLawValues in ../wgsl/print.js) follow the 16 words of Params
+export const LAW_VALUES = 16;
 
-function getPipelines(device) {
-  let cached = pipelineCache.get(device);
-  if (!cached) {
-    cached = {};
-    for (const [name, code] of Object.entries(SHADERS)) {
-      cached[name] = device.createComputePipeline({
-        layout: 'auto',
-        compute: { module: device.createShaderModule({ code, label: name }), entryPoint: 'main' },
-        label: name,
-      });
-    }
-    pipelineCache.set(device, cached);
-  }
-  return cached;
+function withLaw(common, law) {
+  if (!law) return common;
+  if (lawValueCount(law) > LAW_VALUES) throw new Error(`The GPU takes laws with up to ${LAW_VALUES} numbers`);
+  return common.replace('locOff: u32,\n};', `locOff: u32,\n  law: array<vec4f, ${LAW_VALUES / 4}>,\n};`);
 }
+
+function lawValue(i) {
+  return `P.law[${i >> 2}].${'xyzw'[i & 3]}`;
+}
+
+function inRange(law, r2) {
+  return law.hasRange ? `${r2} <= lawRange2` : 'true';
+}
+
+const SHADERS = { HIST, BOX, BIN, SCAN_BLOCKS, SCAN_TOP, SCAN_ADD, PLACE, ORDER, SPRINGS, AGG0, PYR, FIRE_REDUCE, FIRE_STATE, FIRE_INTEGRATE };
+// Shaders that depend on the repulsion law
+const LAW_SHADERS = { LOCAL, FORCE };
+// The law-variant layouts of LOCAL and FORCE: the same WGSL, with P at a dynamic offset into a
+// ring of per-step copies (see run())
+const VARIANT_BINDINGS = {
+  LOCAL: ['dynamic', 'read', 'storage'],
+  FORCE: ['dynamic', 'read', 'read', 'read', 'read', 'read', 'read', 'storage', 'storage'],
+};
+// The stages of the step each kernel computes, for error reports
+export const KERNEL_STAGES = {
+  HIST: ['repulsion'], BOX: ['repulsion'], BIN: ['repulsion'], SCAN_BLOCKS: ['repulsion'], SCAN_TOP: ['repulsion'],
+  SCAN_ADD: ['repulsion'], PLACE: ['repulsion'], ORDER: ['repulsion'], AGG0: ['repulsion'], PYR: ['repulsion'],
+  LOCAL: ['repulsion'], SPRINGS: ['springs'], FORCE: ['clear', 'repulsion', 'drag', 'springs', 'integrate'],
+  FIRE_REDUCE: ['integrate'], FIRE_STATE: ['integrate'], FIRE_INTEGRATE: ['integrate'],
+};
+// Bytes per slot of the per-step ring (the uniform offset alignment)
+const SLOT = 256;
 
 function chooseGrid(n) {
   let G = 32;
@@ -621,12 +665,55 @@ function chooseGrid(n) {
 }
 
 /**
- * @param {GPUDevice} device
- * @param {{n: number, edges: Uint32Array, init: Float32Array, mass: Float32Array}} data
- *   init: 2n positions relative to the layout origin; edges: flat (from, to) pairs, no self-loops.
+ * Sizes in bytes of the buffers a grid engine allocates for `n` bodies and `edges` links, by
+ * name (`chunks`: spring chunks, at most n + edges / 4 when not given). check.js measures them
+ * against the device's limits with the same numbers.
  */
-export function createGridEngine(device, { n, edges, init, mass }) {
-  const pipes = getPipelines(device);
+export function gridBuffers(n, edges, chunks) {
+  const nChunks = chunks === undefined ? n + Math.ceil(edges / 4) : chunks;
+  const G = chooseGrid(n), K = Math.log2(G), nCells = G * G;
+  let pyrSize = 0, last = 0;
+  for (let l = 0, g = G; l <= K; l++, g >>= 1) { last = pyrSize; pyrSize += g * g; }
+  const size = bytes => Math.max(16, Math.ceil(bytes / 16) * 16);
+  return {
+    pos: size(n * 8), vel: size(n * 32), mass: size(n * 4), csr: size((n + 1 + 2 * edges) * 4),
+    chunks: size(Math.max(2, 2 * nChunks) * 4), rowChunk: size((n + 1) * 4), springF: size(Math.max(1, nChunks) * 8),
+    cellCount: size(nCells * 4), start: size(nCells * 4), blockSums: size(Math.max(nCells / 1024, 4) * 4),
+    nodeCell: size(n * 4), nodeSlot: size(n * 4), slotted: size(n * 4), perm: size(n * 4), sp: size(n * 16),
+    cells: size((pyrSize + 2 * last) * 16), fire: size((1 + FIRE_GROUPS) * 16), box: size((BOX_HEADER + 2 * HIST_BINS) * 4),
+  };
+}
+
+/**
+ * Compiles the template's pipelines for `law` (null for 1/r^2), in parallel. With `variants`,
+ * also LOCAL and FORCE with P at a dynamic offset, for laws whose numbers change within a batch.
+ */
+export async function gridPipelines(device, law, variants) {
+  const jobs = [];
+  for (const [name, code] of Object.entries(SHADERS)) jobs.push([name, getPipeline(device, { code, label: name })]);
+  for (const [name, make] of Object.entries(LAW_SHADERS)) {
+    const code = make(law);
+    jobs.push([name, getPipeline(device, { code, label: name })]);
+    if (variants) jobs.push([name + '_STEP', getPipeline(device, { code, label: name, bindings: VARIANT_BINDINGS[name] })]);
+  }
+  const pipelines = await Promise.all(jobs.map(job => job[1]));
+  const out = {};
+  jobs.forEach((job, i) => { out[job[0]] = pipelines[i]; });
+  return out;
+}
+
+/**
+ * @param {GPUDevice} device
+ * @param {{n: number, edges: Uint32Array, init: Float32Array, mass: Float32Array, law?: object,
+ *   variants?: boolean}} data
+ *   init: 2n positions relative to the layout origin; edges: flat (from, to) pairs, no self-loops.
+ *   law: a compiled repulsion law other than 1/r^2, or nothing. variants: build the per-step law
+ *   pipelines too (see run()).
+ * Resolves once the pipelines are compiled; rejects (naming the kernel) when one fails, or when
+ * the buffers cannot be created.
+ */
+export async function createGridEngine(device, { n, edges, init, mass, law = null, variants = false }) {
+  const pipes = await gridPipelines(device, law, variants);
   const G = chooseGrid(n);
   const K = Math.log2(G);
   const nCells = G * G;
@@ -652,8 +739,11 @@ export function createGridEngine(device, { n, edges, init, mass }) {
   }
   rowChunk[n] = nChunks;
 
+  const sizes = gridBuffers(n, edges.length / 2, nChunks);
   const S = GPUBufferUsage.STORAGE, CD = GPUBufferUsage.COPY_DST, CS = GPUBufferUsage.COPY_SRC;
   const owned = [];
+  device.pushErrorScope('validation');
+  device.pushErrorScope('out-of-memory');
   const buf = (size, usage = S) => {
     const b = device.createBuffer({ size: Math.max(16, Math.ceil(size / 16) * 16), usage });
     owned.push(b);
@@ -662,21 +752,21 @@ export function createGridEngine(device, { n, edges, init, mass }) {
   const upload = (data, usage = S | CD) => { const b = buf(data.byteLength, usage); device.queue.writeBuffer(b, 0, data); return b; };
 
   const pos = upload(init, S | CD | CS);
-  const vel = buf(n * 32, S | CD);
+  const vel = buf(sizes.vel, S | CD | CS);
   const massB = upload(mass);
   const csrB = upload(csr);
   const chunksB = upload(chunks);
   const rowChunkB = upload(rowChunk);
-  const springF = buf(Math.max(1, nChunks) * 8);
-  const cellCount = buf(nCells * 4, S | CD);
-  const start = buf(nCells * 4);
-  const blockSums = buf(Math.max(nBlocks, 4) * 4);
-  const nodeCell = buf(n * 4), nodeSlot = buf(n * 4), slotted = buf(n * 4), perm = buf(n * 4);
-  const sp = buf(n * 16);
+  const springF = buf(sizes.springF);
+  const cellCount = buf(sizes.cellCount, S | CD);
+  const start = buf(sizes.start);
+  const blockSums = buf(sizes.blockSums);
+  const nodeCell = buf(sizes.nodeCell), nodeSlot = buf(sizes.nodeSlot), slotted = buf(sizes.slotted), perm = buf(sizes.perm);
+  const sp = buf(sizes.sp);
   let pyrSize = 0; const levelOff = [];
   for (let l = 0, g = G; l <= K; l++, g >>= 1) { levelOff.push(pyrSize); pyrSize += g * g; }
-  const cells = buf((pyrSize + 2 * levelOff[K]) * 16);
-  const fireB = buf((1 + FIRE_GROUPS) * 16, S | CD);
+  const cells = buf(sizes.cells);
+  const fireB = buf(sizes.fire, S | CD | CS);
   const fireGroups = Math.min(FIRE_GROUPS, Math.ceil(n / WG));
 
   // Box state: start from the bounding box of the initial positions, histogram centre at the origin.
@@ -694,12 +784,13 @@ export function createGridEngine(device, { n, edges, init, mass }) {
   }
   const boxB = upload(boxInit, S | CD | CS);
 
-  const paramBuf = new ArrayBuffer(64);
+  const paramSize = law ? 64 + 4 * LAW_VALUES : 64;
+  const paramBuf = new ArrayBuffer(paramSize);
   const pu = new Uint32Array(paramBuf), pf = new Float32Array(paramBuf);
   pu[0] = n; pu[1] = G; pu[2] = K; pu[3] = nCells;
   pu[10] = NEAR_CAP; pu[12] = SPRING_CHUNK; pu[13] = Math.max(1, Math.floor(n / 1000));
   pu[14] = nChunks; pu[15] = pyrSize;
-  const params = buf(64, GPUBufferUsage.UNIFORM | CD);
+  const params = buf(paramSize, GPUBufferUsage.UNIFORM | CD);
   const nbU = upload(new Uint32Array([nBlocks, 0, 0, 0]), GPUBufferUsage.UNIFORM | CD);
   const fireU = upload(new Uint32Array([fireGroups, 0, 0, 0]), GPUBufferUsage.UNIFORM | CD);
 
@@ -730,19 +821,43 @@ export function createGridEngine(device, { n, edges, init, mass }) {
     const u = upload(new Uint32Array([count, levelOff[l], levelOff[l + 1], 0]), GPUBufferUsage.UNIFORM | CD);
     pyrGroups.push({ count, group: bind(pipes.PYR, [u, cells]) });
   }
+  const errors = await Promise.all([device.popErrorScope(), device.popErrorScope()]);
+  const setupError = errors.find(Boolean);
+  if (setupError) {
+    owned.forEach(b => b.destroy());
+    throw new Error('could not create the GPU buffers: ' + setupError.message);
+  }
+
+  // The law-variant pipelines read P from a ring of per-step copies, one slot per step of a submit
+  let ring = null, ringGroups = null, ringSlots = 0, ringData = null;
+  function growRing(slots) {
+    if (ring) ring.destroy();
+    ringSlots = Math.max(64, slots);
+    ring = device.createBuffer({ size: ringSlots * SLOT, usage: GPUBufferUsage.UNIFORM | CD });
+    ringData = new ArrayBuffer(ringSlots * SLOT);
+    const entry = { buffer: ring, size: paramSize };
+    ringGroups = {
+      LOCAL: device.createBindGroup({ layout: pipes.LOCAL_STEP.getBindGroupLayout(0), entries: [
+        { binding: 0, resource: entry }, { binding: 1, resource: { buffer: boxB } }, { binding: 2, resource: { buffer: cells } }] }),
+      FORCE: device.createBindGroup({ layout: pipes.FORCE_STEP.getBindGroupLayout(0), entries: [entry].concat(
+        [sp, perm, start, cells, springF, rowChunkB, pos, vel].map(buffer => ({ buffer }))).map((resource, i) => ({ binding: i, resource })) }),
+    };
+  }
 
   const nodeGroups = Math.ceil(n / WG);
   const histGroups = Math.min(nodeGroups, 128);
   let fireMode = false;
 
-  function resetFire() { device.queue.writeBuffer(fireB, 0, new Float32Array([0.1, 0, 0, 0])); }
+  function setFire(state) { device.queue.writeBuffer(fireB, 0, new Float32Array(state || [0.1, 0, 0, 0])); }
+  function resetFire() { setFire(null); }
   resetFire();
 
   function dispatch(cp, name, groups) {
     cp.setPipeline(pipes[name]); cp.setBindGroup(0, g[name]); cp.dispatchWorkgroups(groups);
   }
 
-  function encodeStep(cp) {
+  // `slot`: the step's copy of P in the ring for LOCAL and FORCE, or -1 for the static P
+  function encodeStep(cp, slot) {
     dispatch(cp, 'HIST', histGroups);
     dispatch(cp, 'BOX', 1);
     dispatch(cp, 'BIN', nodeGroups);
@@ -755,8 +870,14 @@ export function createGridEngine(device, { n, edges, init, mass }) {
     dispatch(cp, 'AGG0', Math.ceil(nCells / WG));
     cp.setPipeline(pipes.PYR);
     for (const { count, group } of pyrGroups) { cp.setBindGroup(0, group); cp.dispatchWorkgroups(Math.ceil(count / 256)); }
-    dispatch(cp, 'LOCAL', Math.ceil(levelOff[K] / WG));
-    dispatch(cp, 'FORCE', nodeGroups);
+    if (slot < 0) {
+      dispatch(cp, 'LOCAL', Math.ceil(levelOff[K] / WG));
+      dispatch(cp, 'FORCE', nodeGroups);
+    } else {
+      const offset = [slot * SLOT];
+      cp.setPipeline(pipes.LOCAL_STEP); cp.setBindGroup(0, ringGroups.LOCAL, offset); cp.dispatchWorkgroups(Math.ceil(levelOff[K] / WG));
+      cp.setPipeline(pipes.FORCE_STEP); cp.setBindGroup(0, ringGroups.FORCE, offset); cp.dispatchWorkgroups(nodeGroups);
+    }
     if (fireMode) {
       dispatch(cp, 'FIRE_REDUCE', fireGroups);
       dispatch(cp, 'FIRE_STATE', 1);
@@ -769,19 +890,41 @@ export function createGridEngine(device, { n, edges, init, mass }) {
     G,
     pos,
     vel,
+    mass: massB,
+    fire: fireB,
+    variants,
     setParams(s) {
       pf[4] = s.gravity; pf[5] = s.springLength; pf[6] = s.springCoefficient; pf[7] = s.dragCoefficient;
       pf[8] = s.timeStep; pf[9] = s.maxVelocity; pu[11] = s.integrator === 'fire' ? 1 : 0;
       fireMode = pu[11] === 1;
       device.queue.writeBuffer(params, 0, paramBuf);
     },
+    // The law's numbers for the next steps (see writeLawValues in ../wgsl/print.js)
+    setLawValues(values) {
+      pf.set(values, 16);
+      device.queue.writeBuffer(params, 64, paramBuf, 64);
+    },
     resetFire,
-    // Encodes `count` steps into one compute pass (or several encoders when count is large).
-    // `beforeFinish(encoder)` runs on the last encoder, so callers can append copies.
-    run(count, timestampWrites, beforeFinish) {
-      const perSubmit = 64;
+    setFire,
+    // Encodes `count` steps, `perSubmit` (64) per compute pass and submit.
+    //  - timestampWrites: {querySet}, written at the start of the first pass and the end of the last;
+    //  - beforeFinish(encoder) runs on the last encoder, so callers can append copies;
+    //  - lawSteps(s, out, offset): writes the law's numbers of step s of this call into `out`; the
+    //    steps then run the law-variant pipelines, each with its own copy of P.
+    run(count, { timestampWrites = null, beforeFinish = null, perSubmit = 64, lawSteps = null } = {}) {
+      if (lawSteps && !variants) throw new Error('this engine was built without per-step law values');
       for (let done = 0; done < count;) {
         const c = Math.min(perSubmit, count - done);
+        if (lawSteps) {
+          if (c > ringSlots) growRing(c);
+          const bytes = new Uint8Array(paramBuf);
+          const slots = new Uint8Array(ringData);
+          for (let s = 0; s < c; s++) {
+            slots.set(bytes, s * SLOT);
+            lawSteps(done + s, new Float32Array(ringData, s * SLOT, paramSize / 4), 16);
+          }
+          device.queue.writeBuffer(ring, 0, ringData, 0, c * SLOT);
+        }
         const enc = device.createCommandEncoder();
         const first = done === 0, last = done + c === count;
         let tw;
@@ -791,7 +934,7 @@ export function createGridEngine(device, { n, edges, init, mass }) {
           if (last) tw.endOfPassWriteIndex = 1;
         }
         const cp = enc.beginComputePass(tw ? { timestampWrites: tw } : undefined);
-        for (let s = 0; s < c; s++) encodeStep(cp);
+        for (let s = 0; s < c; s++) encodeStep(cp, lawSteps ? s : -1);
         cp.end();
         if (last && beforeFinish) beforeFinish(enc);
         device.queue.submit([enc.finish()]);
@@ -800,6 +943,16 @@ export function createGridEngine(device, { n, edges, init, mass }) {
     },
     // Debug: the box state (grid box, bounding box side, histogram centre).
     boxBuffer: boxB,
-    destroy() { for (const b of owned) b.destroy(); },
+    destroy() {
+      for (const b of owned) b.destroy();
+      if (ring) ring.destroy();
+    },
   };
+}
+
+// For checks: the WGSL of every shader for a law (null for 1/r^2)
+export function shaderCode(law = null) {
+  const code = Object.assign({}, SHADERS);
+  for (const [name, make] of Object.entries(LAW_SHADERS)) code[name] = make(law);
+  return code;
 }

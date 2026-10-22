@@ -1,7 +1,16 @@
 /**
  * Rollup plugin that replaces code generators with the code they generate for
  * a fixed number of dimensions, so the bundle does not need `new Function()`.
+ * A repulsion law other than 1/r^2 is compiled while the layout runs, so such
+ * a bundle throws for it.
  */
+const LAW_ERROR = 'This bundle has pre-generated code for the default repulsion law only. ' +
+  'Use ngraph.forcelayout.js for other laws.';
+const INERTIA_ERROR = 'This bundle has pre-generated code for the mass as inertia only. ' +
+  'Use ngraph.forcelayout.js for another inertia column.';
+const CHARGES_ERROR = 'This bundle has pre-generated trees that walk one charge at a time. ' +
+  'Use ngraph.forcelayout.js for trees of several charges.';
+
 module.exports = function inlineTransform(dimensions) {
   return {
     name: 'inline-transform',
@@ -18,8 +27,25 @@ module.exports = function inlineTransform(dimensions) {
       }).join('\n') : '';
       let exportCodeMatch = originalContent.match(/^\/\/ InlineTransformExport: (.+)$/m);
       let codeExport = exportCodeMatch ?  exportCodeMatch[1] :
-        `module.exports = function() { return ${content(dimensions).toString()} }`;
+        generatedExport(content, originalContent, dimensions);
       return { code: `${additionalTransform}\n${codeExport}`, map: null };
     }
   };
 };
+
+function generatedExport(content, originalContent, dimensions) {
+  // A generator whose code keeps state next to the function it returns gives its whole
+  // body, which then runs once per call, as `new Function(body)()` would.
+  let bodyMatch = originalContent.match(/^\/\/ InlineTransformBody: (.+)$/m);
+  let generated = bodyMatch ? `(function () {\n${content[bodyMatch[1]](dimensions)}\n})()` :
+    content(dimensions).toString();
+  // The second argument is a law (trees) or the name of the inertia column (integrators). The
+  // simulator walks every tree stage alone when its generators are pre-generated.
+  return `module.exports = function(dimension, option) {
+  if (typeof option === 'string' && option !== 'mass') throw new Error(${JSON.stringify(INERTIA_ERROR)});
+  if (Array.isArray(option)) throw new Error(${JSON.stringify(CHARGES_ERROR)});
+  if (option && typeof option === 'object' && !option.isDefault) throw new Error(${JSON.stringify(LAW_ERROR)});
+  return ${generated};
+};
+module.exports.preGenerated = true;`;
+}

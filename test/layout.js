@@ -8,6 +8,15 @@ test('it exposes simulator', function(t) {
   t.end();
 });
 
+test('node charge must be a number', function (t) {
+  var g = createGraph();
+  g.addLink(1, 2);
+  t.throws(function () {
+    createLayout(g, { nodeCharge: function (id) { return id === 1 ? 2 : undefined; } });
+  }, /charge should be a number/);
+  t.end();
+});
+
 test('it returns spring', function(t) {
   var g = createGraph();
   var layout = createLayout(g);
@@ -229,7 +238,8 @@ test('layout respects proposed original position', function (t) {
   var layout = createLayout(graph);
   layout.step();
 
-  t.same(layout.getNodePosition(node.id), initialPosition, 'original position preserved');
+  var position = layout.getNodePosition(node.id);
+  t.same({x: position.x, y: position.y}, initialPosition, 'original position preserved');
 
   t.end();
 });
@@ -417,6 +427,20 @@ test('it handles large graphs', function (t) {
   layout.step();
 
   t.ok(layout.simulator.bodies.length !== 0, 'Bodies in the simulator');
+  t.end();
+});
+
+test('a default layout loads only what its steps use', function (t) {
+  // A fresh process: the tests before this one loaded everything
+  var script = "var createLayout = require('.'); var g = require('ngraph.graph')();" +
+    "for (var i = 1; i < 30; ++i) g.addLink(i, i % 5);" +
+    "var layout = createLayout(g); for (var s = 0; s < 3; ++s) layout.step();" +
+    "console.log(Object.keys(require.cache).filter(function (f) { return f.indexOf('lib') >= 0; }).join(' '));";
+  var loaded = require('child_process').execFileSync(process.execPath, ['-e', script], { cwd: require('path').join(__dirname, '..'), encoding: 'utf8' });
+  ['formula.js', 'formulaStages.js', 'parsedLaw.js', 'describeProgram.js', 'generateDualTree.js', 'generateFireIntegrator.js', 'createNeighborGrid.js'].forEach(function (file) {
+    t.notOk(loaded.indexOf(file) >= 0, file + ' is not loaded');
+  });
+  t.ok(loaded.indexOf('generateQuadTree.js') >= 0, 'the quad tree is');
   t.end();
 });
 
