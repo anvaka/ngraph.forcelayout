@@ -190,6 +190,12 @@ declare module "ngraph.forcelayout" {
     charge?: string;
     /** Body column of how strongly bodies feel the push; the charge by default */
     sensitivity?: string;
+    /**
+     * Passes next to each other (and to the stock repulsion) walk one tree. 'own' (default): this
+     * charge acts from its own centre in a cell, so it may not be negative; 'shared': from the
+     * centre of the walk's first charge, which is faster, and then it may be signed.
+     */
+    centroid?: 'own' | 'shared';
     when?: string | ((context: StepContext) => boolean);
     before?: string;
     after?: string;
@@ -283,7 +289,11 @@ declare module "ngraph.forcelayout" {
     builtIns: string[];
     tables: { name: string; from: number; to: number; values: Float64Array }[];
     sums: string[];
-    /** Options of the shape: radius, symmetric, startAtZero, channels, integrator, ... */
+    /**
+     * Options of the shape: radius, symmetric, startAtZero, channels, integrator, ... Trees also
+     * have `walk`: {stages, index, charges, tree}, the stages whose charges one tree walks at once,
+     * this stage's place among them, and 'quadtree' or 'dualtree'.
+     */
     args: Record<string, any>;
     [detail: string]: any;
   }
