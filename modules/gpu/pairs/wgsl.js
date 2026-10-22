@@ -26,7 +26,7 @@
 //
 // Everything that adds floats does it in an order that does not depend on the run, so pair
 // results repeat exactly. Atomic order only decides where a chunk's partial is stored.
-import { printPairFormula, accumulatorName } from './formula.js';
+import { printPairFormula, pairCandidate, accumulatorName } from './formula.js';
 
 export const WG = 256;
 export const EVAL_WG = 64;
@@ -471,10 +471,7 @@ export function stageKernels(spec) {
   const accumulators = printed.accumulators;
   const partialWords = D + accumulators.reduce((total, a) => total + a.width, 0);
   const sumsRead = spec.stage.sums.length > 0;
-  const variant = lines => lines.map(line => '          ' + line).join('\n');
-  const roles = printed.j
-    ? `if (me < other) {\n${variant(printed.i)}\n        } else {\n${variant(printed.j)}\n        }`
-    : `{\n${variant(printed.i)}\n        }`;
+  const candidate = pairCandidate(printed, { D, me: 'me', other: 'other', r2: 'r2', radius: 'radius', reach2: 'reach2', force: k => `pair_force_${k}` });
   const totals = [];
   for (let k = 0; k < D; k++) totals.push(`pair_force_${k}`);
   accumulators.forEach(a => { for (let k = 0; k < a.width; k++) totals.push(accumulatorName(a.column, k, a.width)); });
@@ -524,17 +521,10 @@ ${forNeighbourBuckets(D, [
     `  let other = other${layout.index >> 2}.${AX[layout.index & 3]};`,
     `  ${each(D, k => `let d${k} = ${fieldF('me', k)} - ${fieldF('other', k)};`)}`,
     `  let r2 = ${each(D, k => `d${k} * d${k}`, ' + ')};`,
-    '  // bodies on the same spot have no direction to push along',
-    '  if (r2 == 0.0 || !(r2 <= reach2)) { continue; }',
-    '  let pair_r = sqrt(r2);',
-    '  if (!(pair_r < radius)) { continue; }',
-    '  var pair_push = 0.0;',
-    `  ${roles}`,
-    '  let scale = pair_push / pair_r;',
-    `  ${each(D, k => `pair_force_${k} += scale * d${k};`)}`,
+  ].concat(candidate.map(line => '  ' + line), [
     '}',
     'if (left == 0u) { break; }',
-  ], '  ')}
+  ]), '  ')}
   let out = t * ${u32(partialWords)};
   ${totals.map((name, w) => `pairPartial[out + ${u32(w)}] = ${name};`).join(' ')}
 }

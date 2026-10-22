@@ -70,6 +70,35 @@ export function printPairFormula(stage, options) {
 }
 
 /**
+ * The WGSL of one candidate pair of a gather, for either regime: the chunk kernel above N* and a
+ * loop over all bodies below it. The caller declares `d<k>` (my position minus the other's, on
+ * axis k) and passes `r2` (their squared length), `radius`, the store rows `me` and `other`, and
+ * `force(k)`, the sum my push goes into; `valid` is an extra condition (e.g. the other body is
+ * not padding). Pairs on the same spot and pairs at r >= radius are skipped; `reach2`, a squared
+ * radius with a margin, spares far pairs the root. Returns lines of WGSL.
+ */
+export function pairCandidate(printed, { D, me, other, r2, radius, force, reach2 = null, valid = null }) {
+  const indent = lines => lines.map(line => '    ' + line);
+  const roles = printed.j
+    ? [`if (${me} < ${other}) {`].concat(indent(printed.i), ['} else {'], indent(printed.j), ['}'])
+    : ['{'].concat(indent(printed.i), ['}']);
+  const near = [`${r2} > 0.0`].concat(reach2 ? [`${r2} <= ${reach2}`] : [], valid ? [valid] : []);
+  const out = [
+    // bodies on the same spot have no direction to push along
+    `if (${near.join(' && ')}) {`,
+    `  let pair_r = sqrt(${r2});`,
+    `  if (pair_r < ${radius}) {`,
+    '    var pair_push = 0.0;',
+  ].concat(roles.map(line => '    ' + line), [
+    '    let pair_scale = pair_push / pair_r;',
+    '    ' + Array.from({ length: D }, (_, k) => `${force(k)} += pair_scale * d${k};`).join(' '),
+    '  }',
+    '}',
+  ]);
+  return out;
+}
+
+/**
  * The name the printed code adds into for `column` (its k-th number for vectors).
  */
 export function accumulatorName(column, k, width) {
