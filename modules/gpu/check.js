@@ -69,14 +69,16 @@ export function gpuCapabilities(limits, options) {
  * tells when the device of the backend is lost: nothing runs on it then.
  */
 export function createCapabilities(limits, options = {}) {
-  // plan() asks checkProgram() and then check() for every stage of the same program object
+  // plan() asks checkProgram() and then check() for every stage of the same program object; a
+  // lowering made while the grid's check of the device was pending is made again once it is done
   const lowered = new WeakMap();
   const lowerFor = (program, simulator) => {
-    let lowering = lowered.get(program);
-    if (!lowering) {
-      lowering = lower(program, simulator, limits, options);
-      lowered.set(program, lowering);
+    let entry = lowered.get(program);
+    if (!entry || entry.gridArithmetic !== limits.gridArithmetic) {
+      entry = { lowering: lower(program, simulator, limits, options), gridArithmetic: limits.gridArithmetic };
+      lowered.set(program, entry);
     }
+    const lowering = entry.lowering;
     if (options.lost && options.lost()) {
       return Object.assign({}, lowering, { runs: false, reasons: [DEVICE_LOST].concat(lowering.reasons), plan: null });
     }
