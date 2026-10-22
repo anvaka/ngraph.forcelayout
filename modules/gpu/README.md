@@ -32,7 +32,8 @@ if (plan.runs) {
 ```
 
 - `gpu.step(n)` queues `n` steps and submits their work. The layout's `'step'` event fires once
-  per readback, and `'stable'` from the movement between readbacks (`gpu.lastMove`). That
+  per readback (calls made within a few milliseconds of each other share one), and `'stable'`
+  from the movement between readbacks (`gpu.lastMove`). That
   movement is the net displacement over the batch divided by its steps, where the CPU adds up
   every step's path: a layout that oscillates reads calmer here, and may report stable earlier.
 - `await gpu.sync()`: the store holds the positions and velocities of every queued step. Until the

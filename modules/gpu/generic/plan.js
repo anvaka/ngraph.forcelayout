@@ -91,6 +91,10 @@ export function genericPlan(program, laws, options = {}) {
   if (sections.filter(s => s.kind === 'euler' || s.kind === 'fire').length !== 1) {
     return { refusal: 'WebGPU needs exactly one integrate stage' };
   }
+  // tree passes read other bodies' positions from the start of the step
+  const integrateAt = sections.findIndex(s => s.kind === 'euler' || s.kind === 'fire');
+  const late = sections.slice(integrateAt + 1).find(s => s.kind === 'pairs');
+  if (late) return { refusal: `WebGPU runs tree passes before the integrate stage only (${late.stage.name} comes after it)` };
   // A tree pass joins the walk before it when the stages between only add to the force and
   // don't read it (drag, springs, addRepulsion's default place before integrate): the order of
   // additions is all that changes
