@@ -175,7 +175,31 @@ test('cells without the first charge act from their middle', function (t) {
   t.end();
 });
 
+test('each charge may have its own centre rule', function (t) {
+  // Charges add up, and the walk opens cells by charge 0 either way: a tree with charge 1 at its own
+  // centre and charge 2 at the shared one pushes as the sum of the two trees' parts
+  var laws = [null, createRepulsionLaw({ force: 'exp(-r / L) / r^2', params: { L: 30 } }), null];
+  laws[1].update(fakeSimulator(2));
+  var store = randomStore(2, 400, 3);
+  var none = new Float64Array(store.n);
+  function forces(centroid, sensitivities) {
+    store.force.fill(0);
+    var tree = generateQuadTree(2, laws, { centroid: centroid })({ gravity: -1, theta: 0.8 }, Random.random(1), laws);
+    tree.insertBodies(store, store.charges, sensitivities);
+    for (var i = 0; i < store.n; ++i) tree.updateBodyForce(i);
+    return Float64Array.from(store.force.subarray(0, 2 * store.n));
+  }
+  var s = store.sensitivities;
+  var mixed = forces(['own', 'own', 'shared'], s);
+  var ownPart = forces('own', [s[0], s[1], none]), sharedPart = forces('shared', [none, none, s[2]]);
+  var sum = ownPart.map(function (f, k) { return f + sharedPart[k]; });
+  t.ok(relativeDifference(mixed, sum) < 1e-12, 'own for charge 1, shared for charge 2: ' + relativeDifference(mixed, sum));
+  t.ok(relativeDifference(mixed, forces('own', s)) > 1e-6, 'and not the all-own tree');
+  t.end();
+});
+
 test('unknown centroid rule throws', function (t) {
+  t.throws(function () { generateQuadTree(2, [null, null], { centroid: ['own', 'middle'] }); }, /Unknown centroid/);
   t.throws(function () { generateQuadTree(2, [null, null], { centroid: 'middle' }); }, /Unknown centroid/);
   t.end();
 });
