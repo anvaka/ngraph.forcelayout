@@ -10,16 +10,22 @@
 //
 //   const exact = await gridArithmetic(device);   // {sums, residual, reason}
 //
-// planGrid() refuses what needs the arithmetic a device does not keep (see plan.js).
+// planGrid() refuses what needs the arithmetic a device does not keep (see plan.js). The backend
+// starts the check when it is made and does not wait for it (GRID_CHECK_PENDING until it is done);
+// runOnGpu waits for it when the layout has a grid stage.
 import { getPipeline } from '../device.js';
 import { gridCanaryKernels, META } from './wgsl.js';
 
 const checked = new WeakMap();
 
+// What plan() sees before a device's check is done: grid stages run, with a warning
+export const GRID_CHECK_PENDING = Object.freeze({ pending: true, sums: true, residual: true, reason: null });
+
 /**
- * {sums, residual, reason, numbers} for `device`, checked once (later calls get the same
+ * {sums, residual, reason, numbers, ms} for `device`, checked once (later calls get the same
  * promise). `sums`: two-sums and grid coordinates are exact; `residual`: the refinement's residual
- * is. `reason` says what failed, in plain words; `numbers` are the errors measured.
+ * is. `reason` says what failed, in plain words; `numbers` are the errors measured; `ms` the time
+ * to compile the kernels and to run them (one submit, one wait).
  * `opaque: false` checks kernels without their barriers (tests: both must then fail); it is not
  * cached.
  */
@@ -31,6 +37,7 @@ export function gridArithmetic(device, { opaque = true } = {}) {
 
 async function run(device, opaque) {
   const owned = [];
+  const started = performance.now();
   try {
     const kernels = gridCanaryKernels({ opaque });
     const pipes = {};
@@ -43,31 +50,27 @@ async function run(device, opaque) {
       device.queue.writeBuffer(b, 0, data);
       return b;
     };
-    const SB = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC;
-    const read = async (src, bytes) => {
-      const dst = device.createBuffer({ size: bytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const compiled = performance.now();
+    // the three checks in one submit, read back together
+    const checks = [sumsCheck(buffer), residualCheck(2, buffer), residualCheck(3, buffer)];
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    for (const check of checks) {
+      pass.setPipeline(pipes[check.name]);
+      pass.setBindGroup(0, device.createBindGroup({ layout: pipes[check.name].getBindGroupLayout(0), entries: check.entries.map((b, binding) => ({ binding, resource: { buffer: b } })) }));
+      pass.dispatchWorkgroups(1);
+    }
+    pass.end();
+    const reads = checks.map(check => {
+      const dst = device.createBuffer({ size: check.out.size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
       owned.push(dst);
-      const enc = device.createCommandEncoder();
-      enc.copyBufferToBuffer(src, 0, dst, 0, bytes);
-      device.queue.submit([enc.finish()]);
-      await dst.mapAsync(GPUMapMode.READ);
-      const out = new Float32Array(dst.getMappedRange().slice(0));
-      dst.unmap();
-      return out;
-    };
-    const dispatch = (name, entries, groups) => {
-      const enc = device.createCommandEncoder();
-      const pass = enc.beginComputePass();
-      pass.setPipeline(pipes[name]);
-      pass.setBindGroup(0, device.createBindGroup({ layout: pipes[name].getBindGroupLayout(0), entries: entries.map((b, binding) => ({ binding, resource: { buffer: b } })) }));
-      pass.dispatchWorkgroups(groups);
-      pass.end();
-      device.queue.submit([enc.finish()]);
-    };
-
-    const sums = await checkSums(buffer, read, dispatch, SB);
-    const residuals = [];
-    for (const D of [2, 3]) residuals.push(await checkResidual(D, buffer, read, dispatch, SB));
+      enc.copyBufferToBuffer(check.out, 0, dst, 0, check.out.size);
+      return dst;
+    });
+    device.queue.submit([enc.finish()]);
+    await Promise.all(reads.map(dst => dst.mapAsync(GPUMapMode.READ)));
+    const [sums, ...residuals] = checks.map((check, c) => check.judge(new Float32Array(reads[c].getMappedRange())));
+    const ms = { compile: +(compiled - started).toFixed(1), run: +(performance.now() - compiled).toFixed(1) };
     const residual = residuals.every(r => r.ok);
     const reasons = [];
     if (!sums.ok) reasons.push('its two-sums or grid coordinates are not exact');
@@ -76,6 +79,7 @@ async function run(device, opaque) {
       sums: sums.ok, residual,
       reason: reasons.length ? `this GPU's compiler sees through the grid's exact arithmetic: ${reasons.join(', and ')}` : null,
       numbers: { sumError: sums.sumError, quotientError: sums.quotientError, offsetError: sums.offsetError, residualError: residuals.map(r => r.error) },
+      ms,
     };
   } catch (e) {
     return { sums: false, residual: false, reason: 'the check of the grid\'s exact arithmetic could not run on this GPU: ' + e.message, numbers: null };
@@ -88,8 +92,8 @@ const f32 = Math.fround;
 const bits = x => new Uint32Array(new Float32Array([x]).buffer)[0];
 
 // Two-sums, a quotient in hi + lo, and the offsets of bodies 18,000 cells from the origin, against
-// f64
-async function checkSums(buffer, read, dispatch, SB) {
+// f64: {name, entries (buffers by binding), out (the buffer to read), judge(words)}
+function sumsCheck(buffer) {
   // a + b with b below half an ulp of a: the sum is a, its error term b exactly (0 when folded)
   const C = new Float32Array(16 + 4 * 16);
   C[0] = 1; C[1] = f32(1.5 * Math.pow(2, -26));
@@ -117,25 +121,26 @@ async function checkSums(buffer, read, dispatch, SB) {
     X[2 * i + 1] = f32(corner[1] + (whole[n - 1 - i] + parts[(i + 5) % n]) * cell);
   }
   const U = new Uint32Array([n, 0, 0, 0, 0, 0, 0, 0]);
-  const out = buffer(C, SB);
-  dispatch('SUMS', [buffer(U, GPUBufferUsage.UNIFORM), buffer(meta, GPUBufferUsage.STORAGE), buffer(X, GPUBufferUsage.STORAGE), out], 1);
-  const got = await read(out, C.byteLength);
-  const sumError = Math.abs(got[3] - C[1]) / C[1] + (got[2] === C[0] ? 0 : 1);
-  const quotient = (C[4] + C[5]) / k;
-  const quotientError = Math.abs(got[7] + got[8] - quotient) / quotient;
-  // each body's grid coordinate in f64, from the same corner and cell
-  let offsetError = 0;
-  for (let i = 0; i < n; i++) {
-    for (let a = 0; a < 2; a++) {
-      const g = (X[2 * i + a] - (MA[a] * cell + RA[a])) / cell;
-      const b = Math.floor(g);
-      const at = 16 + 4 * i + 2 * a;
-      offsetError = Math.max(offsetError, got[at] === b ? Math.abs(got[at + 1] - (g - b)) : 1);
+  const out = buffer(C, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const judge = got => {
+    const sumError = Math.abs(got[3] - C[1]) / C[1] + (got[2] === C[0] ? 0 : 1);
+    const quotient = (C[4] + C[5]) / k;
+    const quotientError = Math.abs(got[7] + got[8] - quotient) / quotient;
+    // each body's grid coordinate in f64, from the same corner and cell
+    let offsetError = 0;
+    for (let i = 0; i < n; i++) {
+      for (let a = 0; a < 2; a++) {
+        const g = (X[2 * i + a] - (MA[a] * cell + RA[a])) / cell;
+        const b = Math.floor(g);
+        const at = 16 + 4 * i + 2 * a;
+        offsetError = Math.max(offsetError, got[at] === b ? Math.abs(got[at + 1] - (g - b)) : 1);
+      }
     }
-  }
-  // measured on Metal with the barriers: 0, 0 and 6.8e-8; without them the error term is 0 (sumError
-  // 1), the quotient off by 1.2e-8, the offsets still 6.8e-8
-  return { ok: sumError === 0 && quotientError < 1e-12 && offsetError < 1e-5, sumError, quotientError, offsetError };
+    // measured on Metal with the barriers: 0, 0 and 6.8e-8; without them the error term is 0 (sumError
+    // 1), the quotient off by 1.2e-8, the offsets still 6.8e-8
+    return { ok: sumError === 0 && quotientError < 1e-12 && offsetError < 1e-5, sumError, quotientError, offsetError };
+  };
+  return { name: 'SUMS', entries: [buffer(U, GPUBufferUsage.UNIFORM), buffer(meta, GPUBufferUsage.STORAGE), buffer(X, GPUBufferUsage.STORAGE), out], out, judge };
 }
 
 // The residual R = u - (A_x A_y [A_z]) X at gamma 64, on a smooth field with f32's rounding in
@@ -143,7 +148,7 @@ async function checkSums(buffer, read, dispatch, SB) {
 // are large, and so is their rounding). R is about 1e-5 of the field. Measured on Metal: exact
 // with the barriers; without them off by 163 times its size in 2D and 38,000 in 3D
 // (grid-work/canary-tune.json).
-async function checkResidual(D, buffer, read, dispatch, SB) {
+function residualCheck(D, buffer) {
   const sizes = D === 2 ? [8, 8, 1] : [5, 5, 5];
   const total = sizes[0] * sizes[1] * sizes[2];
   const gamma = 64;
@@ -170,18 +175,19 @@ async function checkResidual(D, buffer, read, dispatch, SB) {
   for (let k = 0; k < D; k++) meta[META.SIZE + k] = sizes[k];
   meta[META.TOTAL] = total;
   meta[META.TAB_GAMMA] = bits(gamma);
-  const lowBuffer = buffer(u, SB);
-  dispatch(`RESIDUAL${D}`, [buffer(meta, GPUBufferUsage.STORAGE), buffer(X, GPUBufferUsage.STORAGE), lowBuffer], 1);
-  const R = await read(lowBuffer, u.byteLength);
-  let worst = 0, size = 0;
-  for (let j2 = 0; j2 < sizes[2]; j2++) for (let j1 = 0; j1 < sizes[1]; j1++) for (let j0 = 0; j0 < sizes[0]; j0++) {
-    const inside = [j0, j1, j2].every((v, k) => k >= D || (v > 0 && v < sizes[k] - 1));
-    if (!inside) continue;
-    const j = at(j0, j1, j2);
-    const exact = u[j] - Y[j];
-    size = Math.max(size, Math.abs(exact));
-    worst = Math.max(worst, Math.abs(R[j] - exact));
-  }
-  const error = worst / size;
-  return { ok: error < 0.1, error };
+  const out = buffer(u, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const judge = R => {
+    let worst = 0, size = 0;
+    for (let j2 = 0; j2 < sizes[2]; j2++) for (let j1 = 0; j1 < sizes[1]; j1++) for (let j0 = 0; j0 < sizes[0]; j0++) {
+      const inside = [j0, j1, j2].every((v, k) => k >= D || (v > 0 && v < sizes[k] - 1));
+      if (!inside) continue;
+      const j = at(j0, j1, j2);
+      const exact = u[j] - Y[j];
+      size = Math.max(size, Math.abs(exact));
+      worst = Math.max(worst, Math.abs(R[j] - exact));
+    }
+    const error = worst / size;
+    return { ok: error < 0.1, error };
+  };
+  return { name: `RESIDUAL${D}`, entries: [buffer(meta, GPUBufferUsage.STORAGE), buffer(X, GPUBufferUsage.STORAGE), out], out, judge };
 }

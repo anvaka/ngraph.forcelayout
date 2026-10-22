@@ -22,6 +22,8 @@ import { gridKernels, gridCapacity, gridChunkWords, tableSize, META, WG, REFINE_
 const AX = 'xyzw';
 // Numbers of the stage that the host works out per step (simulator.stageValues())
 const NUMBERS = ['cell', 'cellLow', 'margin', 'marginLow', 'diffuse', 'value'];
+// What a grid stage's plan says while the device's check (canary.js) is not done yet
+export const GRID_PENDING = 'pending a one-time check of this GPU\'s arithmetic (runOnGpu waits for it, and refuses the stage if the GPU fails it)';
 // The widest box grid, per D, that keeps within half the tolerance when a device's compiler sees
 // through grid_opq (canary.js). Measured on Metal with the barriers left out: a box's cell and
 // corner then lose their low words, and 2D boxes were off by 1.9e-6 at 16 cells and 6.9e-6 at 32;
@@ -55,8 +57,11 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
     }
   }
 
-  // What the device's compiler does not keep exact (canary.js); unknown (no device) passes
+  // What the device's compiler does not keep exact (canary.js); unknown (no device) passes, and so
+  // does a check not done yet, with a warning (runOnGpu waits for it)
   const exact = limits.gridArithmetic;
+  const pending = !!(exact && exact.pending);
+  if (pending && warn) warn(`${stage.name} runs, ${GRID_PENDING}`);
   if (exact && !exact.sums && args.anchor === 'box' && maxCells > PLAIN_BOX_CELLS[D]) {
     return refuse(`${exact.reason}. Without exact arithmetic a ${D}D box grid wider than ${PLAIN_BOX_CELLS[D]} cells per axis is off by more than half the ` +
       `tolerance, and this one may reach ${maxCells}. Set maxCells to ${PLAIN_BOX_CELLS[D]}, use the 'lattice' anchor, or run on the CPU`);
@@ -135,7 +140,7 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
   const kernels = gridKernels(spec);
   return {
     refusal: null, D, n, label, maxCells, capacity, tableSize: TS, anchor: args.anchor,
-    smooth: spec.smooth, deposit: !!deposit, buffers, kernels, values, own,
+    smooth: spec.smooth, deposit: !!deposit, buffers, kernels, values, own, pending,
     slotNames: names,
     // MINMAX, PARAMS, BIN, 2 scans, ORDER, CROWD, DEPOSIT, GATHER; with smoothing a sweep per
     // axis, the residual and a sweep per axis again
@@ -177,7 +182,8 @@ export function checkGrid(stage, D, n, limits, printer) {
   return {
     runs: true,
     how: `a ${args.anchor} grid of up to ${args.maxCells.toLocaleString('en-US')} cells per axis, ${args.weights} weights` +
-      `${plan.smooth ? ', smoothed' : ''}${args.self === 'exclude' ? ', own share left out' : ''}: ${plan.dispatches} dispatches`,
+      `${plan.smooth ? ', smoothed' : ''}${args.self === 'exclude' ? ', own share left out' : ''}: ${plan.dispatches} dispatches` +
+      `${plan.pending ? `; ${GRID_PENDING}` : ''}`,
   };
 }
 
