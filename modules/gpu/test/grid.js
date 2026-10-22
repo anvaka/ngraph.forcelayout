@@ -82,7 +82,7 @@ test('refusals name the numbers', () => {
 
 test('plan() says how it runs', () => {
   const { stage } = gridStage(2, { anchor: 'lattice', cell: 1, deposit: { weights: 'quadratic' }, self: 'exclude' });
-  assert.deepEqual(checkGrid(stage, 2, 1000, SPEC_LIMITS), { runs: true, how: 'a lattice grid of up to 1,024 cells per axis, quadratic weights, own share left out: 9 dispatches' });
+  assert.deepEqual(checkGrid(stage, 2, 1000, SPEC_LIMITS), { runs: true, how: 'a lattice grid of up to 2,048 cells per axis, quadratic weights, own share left out: 9 dispatches' });
 });
 
 test('numbers per step: the lattice phase puts relative positions back on it', () => {
@@ -106,5 +106,5 @@ test('the halt message for a lattice wider than maxCells', () => {
   const p = plan(2, gridStage(2, { anchor: 'lattice', cell: 10 }).stage);
   const bits = x => new Uint32Array(new Float32Array([x]).buffer)[0];
   assert.equal(gridStatus([0, 0, 0, 0], p, 'gas'), null);
-  assert.equal(gridStatus([1, bits(5300), bits(10), 0], p, 'gas'), 'grid field gas: the layout spans 5,300 cells at cell 10; maxCells is 1,024');
+  assert.equal(gridStatus([1, bits(5300), bits(10), 0], p, 'gas'), 'grid field gas: the layout spans 5,300 cells at cell 10; maxCells is 2,048');
 });
