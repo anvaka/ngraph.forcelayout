@@ -3,6 +3,7 @@
 //
 //   const pairs = await buildPairs(device, plan, { buffers: { X: [x, y], S, H }, step });
 //   pairs.encode(pass, { stepOffset, parity, values });   // before the node kernel, every step
+//   pairs.encode(pass, { ..., stages: ['crowd'] });       // only these stages, and their sorts
 //   // after a readback that copied pairs.status.buffer:
 //   const message = pairs.statusMessage(words);          // non-null: halt the runner with it
 import { getPipeline } from '../device.js';
@@ -107,12 +108,14 @@ export async function buildPairs(device, plan, { buffers: external, step }) {
      * The pair work of one step, into the caller's compute pass. `values`: the step's numbers as
      * the slot holds them (for the radius and the gates: a sort whose stages are all off, or whose
      * radius is not positive, encodes nothing); `parity`: the buffer of X holding the positions
-     * the stages read.
+     * the stages read. `stages`: names of the stages to run (all by default), with the sorts they
+     * need, for stages that sit before different node kernels. A sort shared by stages in two
+     * kernels then runs twice, each time with the columns as they are at that point.
      */
-    encode(pass, { stepOffset = 0, parity = 0, values }) {
+    encode(pass, { stepOffset = 0, parity = 0, values, stages: names = null }) {
       const offsets = [stepOffset];
       for (const b of sorts) {
-        const active = stages.filter(s => s.sort === b && on(s.stage, values));
+        const active = stages.filter(s => s.sort === b && on(s.stage, values) && (!names || names.indexOf(s.stage.name) >= 0));
         if (!active.length || !(values[b.sort.radius] > 0)) continue;
         const k = b.sort.kernels, g = b.groups;
         dispatch(pass, k.BIN, g.BIN[parity], bodies, offsets);
