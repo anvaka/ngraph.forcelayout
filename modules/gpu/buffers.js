@@ -79,9 +79,11 @@ export function writePositionsBack(simulator, bodies, data, D, origin, steps) {
 }
 
 /**
- * The same for positions in another order: row i's are at toInternal[i] of `data`.
+ * The same for positions in another order: row i's are at toInternal[i] of `data`. `mirror`, when
+ * given, gets the f32 numbers in the store's order in the same pass (reading the readback in
+ * this order costs a cache miss per row: twice would cost twice).
  */
-export function writePermutedBack(simulator, bodies, data, toInternal, origin, steps) {
+export function writePermutedBack(simulator, bodies, data, toInternal, origin, steps, mirror) {
   const store = simulator.store, n = bodies.length;
   if (!n) return 0;
   const moved = rowsMoved(simulator, bodies);
@@ -89,7 +91,8 @@ export function writePermutedBack(simulator, bodies, data, toInternal, origin, s
   let tx = 0, ty = 0;
   for (let i = 0; i < n; i++) {
     const k = 2 * toInternal[i];
-    const x = ox + data[k], y = oy + data[k + 1];
+    const fx = data[k], fy = data[k + 1];
+    const x = ox + fx, y = oy + fy;
     if (moved) {
       const body = bodies[i];
       if (body.store === store) { pos[2 * body.index] = x; pos[2 * body.index + 1] = y; }
@@ -97,6 +100,7 @@ export function writePermutedBack(simulator, bodies, data, toInternal, origin, s
     }
     tx += Math.abs(x - pos[2 * i]); ty += Math.abs(y - pos[2 * i + 1]);
     pos[2 * i] = x; pos[2 * i + 1] = y;
+    if (mirror) { mirror[2 * i] = fx; mirror[2 * i + 1] = fy; }
   }
   tx /= steps; ty /= steps;
   return moved ? null : (tx * tx + ty * ty) / n;

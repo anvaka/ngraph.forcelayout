@@ -141,20 +141,15 @@ export async function createStockEngine(device, { simulator, plan, fireState, wa
      * when graph edits moved the rows since.
      */
     readPositions(positions, steps, inStoreOrder, through) {
-      const write = () => (inStoreOrder
-        ? writePositionsBack(simulator, data.bodies, positions, 2, data.origin, steps)
-        : writePermutedBack(simulator, data.bodies, positions, data.toInternal, data.origin, steps));
-      if (rowsMoved(simulator, data.bodies)) return write();
+      if (rowsMoved(simulator, data.bodies)) {
+        return inStoreOrder
+          ? writePositionsBack(simulator, data.bodies, positions, 2, data.origin, steps)
+          : writePermutedBack(simulator, data.bodies, positions, data.toInternal, data.origin, steps);
+      }
       return host.readBack(through, store.versions.pos !== uploaded.pos, () => {
-        const move = write();
-        const mirror = host.mirror;
-        if (inStoreOrder) mirror.set(positions.subarray(0, 2 * n));
-        else {
-          for (let i = 0; i < n; i++) {
-            const k = 2 * data.toInternal[i];
-            mirror[2 * i] = positions[k]; mirror[2 * i + 1] = positions[k + 1];
-          }
-        }
+        if (!inStoreOrder) return writePermutedBack(simulator, data.bodies, positions, data.toInternal, data.origin, steps, host.mirror);
+        const move = writePositionsBack(simulator, data.bodies, positions, 2, data.origin, steps);
+        host.mirror.set(positions.subarray(0, 2 * n));
         return move;
       });
     },
