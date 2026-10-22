@@ -184,6 +184,8 @@ function createLayout(graph, physicsSettings) {
   };
 
   eventify(api);
+  // program() lists the layout's 'step' listeners too: other engines call them less often
+  if (physicsSimulator.watchListeners) physicsSimulator.watchListeners(api);
 
   return api;
 
@@ -263,6 +265,11 @@ function createLayout(graph, physicsSettings) {
 
   function initPhysics() {
     bodiesCount = 0;
+    // Rows for every node and link at once: growing the stores one doubling at a time copies
+    // them and re-points every body each time
+    var bodyStore = physicsSimulator.store, springStore = physicsSimulator.springStore;
+    if (bodyStore && bodyStore.reserve && graph.getNodesCount) bodyStore.reserve(graph.getNodesCount());
+    if (springStore && springStore.reserve && graph.getLinksCount) springStore.reserve(graph.getLinksCount());
 
     graph.forEachNode(function (node) {
       initBody(node.id);
@@ -354,8 +361,11 @@ function createLayout(graph, physicsSettings) {
 
   function updateBodyMass(nodeId) {
     var body = nodeBodies.get(nodeId);
-    body.mass = nodeMass(nodeId);
-    if (Number.isNaN(body.mass)) {
+    // Straight into the store, not through the setter: every mass update here comes with a graph
+    // edit, after which the simulator marks all columns changed anyway
+    var mass = body.store.mass;
+    mass[body.index] = nodeMass(nodeId);
+    if (Number.isNaN(mass[body.index])) {
       throw new Error('Node mass should be a number');
     }
     if (nodeCharge) {

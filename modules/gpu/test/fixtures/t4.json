@@ -1,0 +1,1104 @@
+{
+ "source": "today's gridEngine.js and smallEngine.js shaderCode(law) in 2D (modules/gpu of PR #106, commit a21ba4b), recorded by the GPU harness (fixtures/make.mjs): sha256 and length of each kernel",
+ "laws": {
+  "00-default": {
+   "law": null,
+   "grid": {
+    "HIST": {
+     "sha256": "e87b95c9f5e4e5b0036759169aef2b2138ca03ae5611a205d91e47aaf1480f11",
+     "length": 3043
+    },
+    "BOX": {
+     "sha256": "31f470bf01b414bd229c31da64b14bc21ab66a093d0f11e8a8c62dc9c92ff614",
+     "length": 4087
+    },
+    "BIN": {
+     "sha256": "5a4ff94125b76a1d928a3b7fc391bd67cd1dcdb92eb5c21af1d84352a161625e",
+     "length": 2227
+    },
+    "SCAN_BLOCKS": {
+     "sha256": "bd72e14a3fcde52423e5e8c06901f13b560510030e261e03b2ac20be23b7f354",
+     "length": 1012
+    },
+    "SCAN_TOP": {
+     "sha256": "744b4bdfa90477a5879ebe6b8b5c2b19e104283aec9d7433abdf2b6891696fe1",
+     "length": 742
+    },
+    "SCAN_ADD": {
+     "sha256": "695b0a2d29e53f8671bb4353decd5c9ca3fb5a4738744bdc72a238afc5c6f2c0",
+     "length": 311
+    },
+    "PLACE": {
+     "sha256": "8a1ed8dc89893848f2fee4b411a36aa19ad52ad013ae410a3c79cc2f61255691",
+     "length": 1746
+    },
+    "ORDER": {
+     "sha256": "86a180c19b3509d9c87b122f9804c0c33ddba7f3cc5e3a5951650374dee61084",
+     "length": 2365
+    },
+    "SPRINGS": {
+     "sha256": "47e015dd1e46966a278d53c7666b20439045391a603ba46eddb3fb5e8446991f",
+     "length": 2122
+    },
+    "AGG0": {
+     "sha256": "24251034433ae8bac7f42f192ee0cc8578e7fc6dd230afbbca3e1a62ccfd955c",
+     "length": 1882
+    },
+    "PYR": {
+     "sha256": "4d3b48b4fb2e292c12ccb7a1003455ccb88fbc03ebf6844702af5c45b1980cee",
+     "length": 565
+    },
+    "FIRE_REDUCE": {
+     "sha256": "03d918488daaf17b303f1dab96968a66210c7f85383fcd93b4ccdae2e67e1a63",
+     "length": 2137
+    },
+    "FIRE_STATE": {
+     "sha256": "d2073f7877fdd5216848ca80f13d0549f82df8f262fad30961bb123c92eb89d5",
+     "length": 911
+    },
+    "FIRE_INTEGRATE": {
+     "sha256": "8902bbab4f586f19318215c5d136702a18ccd2de84e989acd635f69a7e3f4b19",
+     "length": 1966
+    },
+    "LOCAL": {
+     "sha256": "4898232295c937872fa2a0e75b75e242f8a3a17caf0faca1eb3d419fe2c426ec",
+     "length": 2997
+    },
+    "FORCE": {
+     "sha256": "f1f110f808830e3a02d9cf03e6f546d8942058889d685dae7ae68c508eb6e6a7",
+     "length": 4821
+    }
+   },
+   "small": {
+    "sha256": "d3e3ff96dab5af3d8ce9bd51d5610148cfee0e78c27f0e7da25820d745bc9980",
+    "length": 3464
+   }
+  },
+  "01-rpow_2": {
+   "law": "r^-2",
+   "grid": {
+    "HIST": {
+     "sha256": "e87b95c9f5e4e5b0036759169aef2b2138ca03ae5611a205d91e47aaf1480f11",
+     "length": 3043
+    },
+    "BOX": {
+     "sha256": "31f470bf01b414bd229c31da64b14bc21ab66a093d0f11e8a8c62dc9c92ff614",
+     "length": 4087
+    },
+    "BIN": {
+     "sha256": "5a4ff94125b76a1d928a3b7fc391bd67cd1dcdb92eb5c21af1d84352a161625e",
+     "length": 2227
+    },
+    "SCAN_BLOCKS": {
+     "sha256": "bd72e14a3fcde52423e5e8c06901f13b560510030e261e03b2ac20be23b7f354",
+     "length": 1012
+    },
+    "SCAN_TOP": {
+     "sha256": "744b4bdfa90477a5879ebe6b8b5c2b19e104283aec9d7433abdf2b6891696fe1",
+     "length": 742
+    },
+    "SCAN_ADD": {
+     "sha256": "695b0a2d29e53f8671bb4353decd5c9ca3fb5a4738744bdc72a238afc5c6f2c0",
+     "length": 311
+    },
+    "PLACE": {
+     "sha256": "8a1ed8dc89893848f2fee4b411a36aa19ad52ad013ae410a3c79cc2f61255691",
+     "length": 1746
+    },
+    "ORDER": {
+     "sha256": "86a180c19b3509d9c87b122f9804c0c33ddba7f3cc5e3a5951650374dee61084",
+     "length": 2365
+    },
+    "SPRINGS": {
+     "sha256": "47e015dd1e46966a278d53c7666b20439045391a603ba46eddb3fb5e8446991f",
+     "length": 2122
+    },
+    "AGG0": {
+     "sha256": "24251034433ae8bac7f42f192ee0cc8578e7fc6dd230afbbca3e1a62ccfd955c",
+     "length": 1882
+    },
+    "PYR": {
+     "sha256": "4d3b48b4fb2e292c12ccb7a1003455ccb88fbc03ebf6844702af5c45b1980cee",
+     "length": 565
+    },
+    "FIRE_REDUCE": {
+     "sha256": "03d918488daaf17b303f1dab96968a66210c7f85383fcd93b4ccdae2e67e1a63",
+     "length": 2137
+    },
+    "FIRE_STATE": {
+     "sha256": "d2073f7877fdd5216848ca80f13d0549f82df8f262fad30961bb123c92eb89d5",
+     "length": 911
+    },
+    "FIRE_INTEGRATE": {
+     "sha256": "8902bbab4f586f19318215c5d136702a18ccd2de84e989acd635f69a7e3f4b19",
+     "length": 1966
+    },
+    "LOCAL": {
+     "sha256": "4898232295c937872fa2a0e75b75e242f8a3a17caf0faca1eb3d419fe2c426ec",
+     "length": 2997
+    },
+    "FORCE": {
+     "sha256": "f1f110f808830e3a02d9cf03e6f546d8942058889d685dae7ae68c508eb6e6a7",
+     "length": 4821
+    }
+   },
+   "small": {
+    "sha256": "d3e3ff96dab5af3d8ce9bd51d5610148cfee0e78c27f0e7da25820d745bc9980",
+    "length": 3464
+   }
+  },
+  "02-rpow_1": {
+   "law": "r^-1",
+   "grid": {
+    "HIST": {
+     "sha256": "e87b95c9f5e4e5b0036759169aef2b2138ca03ae5611a205d91e47aaf1480f11",
+     "length": 3043
+    },
+    "BOX": {
+     "sha256": "31f470bf01b414bd229c31da64b14bc21ab66a093d0f11e8a8c62dc9c92ff614",
+     "length": 4087
+    },
+    "BIN": {
+     "sha256": "5a4ff94125b76a1d928a3b7fc391bd67cd1dcdb92eb5c21af1d84352a161625e",
+     "length": 2227
+    },
+    "SCAN_BLOCKS": {
+     "sha256": "bd72e14a3fcde52423e5e8c06901f13b560510030e261e03b2ac20be23b7f354",
+     "length": 1012
+    },
+    "SCAN_TOP": {
+     "sha256": "744b4bdfa90477a5879ebe6b8b5c2b19e104283aec9d7433abdf2b6891696fe1",
+     "length": 742
+    },
+    "SCAN_ADD": {
+     "sha256": "695b0a2d29e53f8671bb4353decd5c9ca3fb5a4738744bdc72a238afc5c6f2c0",
+     "length": 311
+    },
+    "PLACE": {
+     "sha256": "8a1ed8dc89893848f2fee4b411a36aa19ad52ad013ae410a3c79cc2f61255691",
+     "length": 1746
+    },
+    "ORDER": {
+     "sha256": "86a180c19b3509d9c87b122f9804c0c33ddba7f3cc5e3a5951650374dee61084",
+     "length": 2365
+    },
+    "SPRINGS": {
+     "sha256": "47e015dd1e46966a278d53c7666b20439045391a603ba46eddb3fb5e8446991f",
+     "length": 2122
+    },
+    "AGG0": {
+     "sha256": "24251034433ae8bac7f42f192ee0cc8578e7fc6dd230afbbca3e1a62ccfd955c",
+     "length": 1882
+    },
+    "PYR": {
+     "sha256": "4d3b48b4fb2e292c12ccb7a1003455ccb88fbc03ebf6844702af5c45b1980cee",
+     "length": 565
+    },
+    "FIRE_REDUCE": {
+     "sha256": "03d918488daaf17b303f1dab96968a66210c7f85383fcd93b4ccdae2e67e1a63",
+     "length": 2137
+    },
+    "FIRE_STATE": {
+     "sha256": "d2073f7877fdd5216848ca80f13d0549f82df8f262fad30961bb123c92eb89d5",
+     "length": 911
+    },
+    "FIRE_INTEGRATE": {
+     "sha256": "8902bbab4f586f19318215c5d136702a18ccd2de84e989acd635f69a7e3f4b19",
+     "length": 1966
+    },
+    "LOCAL": {
+     "sha256": "f9eaec8edf2b28bd8d13b96097e1e35eb8dd6024577d0ad166681c2a11da2df1",
+     "length": 3141
+    },
+    "FORCE": {
+     "sha256": "acfaf2846ae86b7d08025760f3de1bcdc4aaf73b48818158ee87e013e2b31ea7",
+     "length": 5022
+    }
+   },
+   "small": {
+    "sha256": "20e50c64b8c1d07b692467e6613c94715bd4bf3000130d7deb902073a5bf1348",
+    "length": 3557
+   }
+  },
+  "03-exp_r_L_rpow2": {
+   "law": "exp(-r / L) / r^2",
+   "grid": {
+    "HIST": {
+     "sha256": "e87b95c9f5e4e5b0036759169aef2b2138ca03ae5611a205d91e47aaf1480f11",
+     "length": 3043
+    },
+    "BOX": {
+     "sha256": "31f470bf01b414bd229c31da64b14bc21ab66a093d0f11e8a8c62dc9c92ff614",
+     "length": 4087
+    },
+    "BIN": {
+     "sha256": "5a4ff94125b76a1d928a3b7fc391bd67cd1dcdb92eb5c21af1d84352a161625e",
+     "length": 2227
+    },
+    "SCAN_BLOCKS": {
+     "sha256": "bd72e14a3fcde52423e5e8c06901f13b560510030e261e03b2ac20be23b7f354",
+     "length": 1012
+    },
+    "SCAN_TOP": {
+     "sha256": "744b4bdfa90477a5879ebe6b8b5c2b19e104283aec9d7433abdf2b6891696fe1",
+     "length": 742
+    },
+    "SCAN_ADD": {
+     "sha256": "695b0a2d29e53f8671bb4353decd5c9ca3fb5a4738744bdc72a238afc5c6f2c0",
+     "length": 311
+    },
+    "PLACE": {
+     "sha256": "8a1ed8dc89893848f2fee4b411a36aa19ad52ad013ae410a3c79cc2f61255691",
+     "length": 1746
+    },
+    "ORDER": {
+     "sha256": "86a180c19b3509d9c87b122f9804c0c33ddba7f3cc5e3a5951650374dee61084",
+     "length": 2365
+    },
+    "SPRINGS": {
+     "sha256": "47e015dd1e46966a278d53c7666b20439045391a603ba46eddb3fb5e8446991f",
+     "length": 2122
+    },
+    "AGG0": {
+     "sha256": "24251034433ae8bac7f42f192ee0cc8578e7fc6dd230afbbca3e1a62ccfd955c",
+     "length": 1882
+    },
+    "PYR": {
+     "sha256": "4d3b48b4fb2e292c12ccb7a1003455ccb88fbc03ebf6844702af5c45b1980cee",
+     "length": 565
+    },
+    "FIRE_REDUCE": {
+     "sha256": "03d918488daaf17b303f1dab96968a66210c7f85383fcd93b4ccdae2e67e1a63",
+     "length": 2137
+    },
+    "FIRE_STATE": {
+     "sha256": "d2073f7877fdd5216848ca80f13d0549f82df8f262fad30961bb123c92eb89d5",
+     "length": 911
+    },
+    "FIRE_INTEGRATE": {
+     "sha256": "8902bbab4f586f19318215c5d136702a18ccd2de84e989acd635f69a7e3f4b19",
+     "length": 1966
+    },
+    "LOCAL": {
+     "sha256": "fbfec995c2d836c85c8124dda1c5764cf695dd80ec67576873a97dea7c1982b1",
+     "length": 3361
+    },
+    "FORCE": {
+     "sha256": "09504e7c70801384c3093b57779488eeaf209bca66120cb506f65a1f284146de",
+     "length": 5184
+    }
+   },
+   "small": {
+    "sha256": "8d53659dd9a1366186a5268ec302a8bf9ff1758e1fa8346dbc51ff98ae5ddd67",
+    "length": 3650
+   }
+  },
+  "04-sqrt_1_K_r_r_rpow2": {
+   "law": "sqrt(1 + K * r * r) / r^2",
+   "grid": {
+    "HIST": {
+     "sha256": "e87b95c9f5e4e5b0036759169aef2b2138ca03ae5611a205d91e47aaf1480f11",
+     "length": 3043
+    },
+    "BOX": {
+     "sha256": "31f470bf01b414bd229c31da64b14bc21ab66a093d0f11e8a8c62dc9c92ff614",
+     "length": 4087
+    },
+    "BIN": {
+     "sha256": "5a4ff94125b76a1d928a3b7fc391bd67cd1dcdb92eb5c21af1d84352a161625e",
+     "length": 2227
+    },
+    "SCAN_BLOCKS": {
+     "sha256": "bd72e14a3fcde52423e5e8c06901f13b560510030e261e03b2ac20be23b7f354",
+     "length": 1012
+    },
+    "SCAN_TOP": {
+     "sha256": "744b4bdfa90477a5879ebe6b8b5c2b19e104283aec9d7433abdf2b6891696fe1",
+     "length": 742
+    },
+    "SCAN_ADD": {
+     "sha256": "695b0a2d29e53f8671bb4353decd5c9ca3fb5a4738744bdc72a238afc5c6f2c0",
+     "length": 311
+    },
+    "PLACE": {
+     "sha256": "8a1ed8dc89893848f2fee4b411a36aa19ad52ad013ae410a3c79cc2f61255691",
+     "length": 1746
+    },
+    "ORDER": {
+     "sha256": "86a180c19b3509d9c87b122f9804c0c33ddba7f3cc5e3a5951650374dee61084",
+     "length": 2365
+    },
+    "SPRINGS": {
+     "sha256": "47e015dd1e46966a278d53c7666b20439045391a603ba46eddb3fb5e8446991f",
+     "length": 2122
+    },
+    "AGG0": {
+     "sha256": "24251034433ae8bac7f42f192ee0cc8578e7fc6dd230afbbca3e1a62ccfd955c",
+     "length": 1882
+    },
+    "PYR": {
+     "sha256": "4d3b48b4fb2e292c12ccb7a1003455ccb88fbc03ebf6844702af5c45b1980cee",
+     "length": 565
+    },
+    "FIRE_REDUCE": {
+     "sha256": "03d918488daaf17b303f1dab96968a66210c7f85383fcd93b4ccdae2e67e1a63",
+     "length": 2137
+    },
+    "FIRE_STATE": {
+     "sha256": "d2073f7877fdd5216848ca80f13d0549f82df8f262fad30961bb123c92eb89d5",
+     "length": 911
+    },
+    "FIRE_INTEGRATE": {
+     "sha256": "8902bbab4f586f19318215c5d136702a18ccd2de84e989acd635f69a7e3f4b19",
+     "length": 1966
+    },
+    "LOCAL": {
+     "sha256": "4a76f8197c8baa59ed12c225d080ed7f64069354cf277a3c4e2cfad14c7b2493",
+     "length": 3390
+    },
+    "FORCE": {
+     "sha256": "a382f7c9f66e8769d367bd5ce36891198ff69994e17b9887958958f8cc40909a",
+     "length": 5214
+    }
+   },
+   "small": {
+    "sha256": "aa6312b0212ec0b5dec9eb0a3b1e9d4d00577320e48499787b408f595c708f34",
+    "length": 3653
+   }
+  },
+  "05-rpow_1_D_Lpow_D_3": {
+   "law": "r^(1 - D) * L^(D - 3)",
+   "grid": {
+    "HIST": {
+     "sha256": "e87b95c9f5e4e5b0036759169aef2b2138ca03ae5611a205d91e47aaf1480f11",
+     "length": 3043
+    },
+    "BOX": {
+     "sha256": "31f470bf01b414bd229c31da64b14bc21ab66a093d0f11e8a8c62dc9c92ff614",
+     "length": 4087
+    },
+    "BIN": {
+     "sha256": "5a4ff94125b76a1d928a3b7fc391bd67cd1dcdb92eb5c21af1d84352a161625e",
+     "length": 2227
+    },
+    "SCAN_BLOCKS": {
+     "sha256": "bd72e14a3fcde52423e5e8c06901f13b560510030e261e03b2ac20be23b7f354",
+     "length": 1012
+    },
+    "SCAN_TOP": {
+     "sha256": "744b4bdfa90477a5879ebe6b8b5c2b19e104283aec9d7433abdf2b6891696fe1",
+     "length": 742
+    },
+    "SCAN_ADD": {
+     "sha256": "695b0a2d29e53f8671bb4353decd5c9ca3fb5a4738744bdc72a238afc5c6f2c0",
+     "length": 311
+    },
+    "PLACE": {
+     "sha256": "8a1ed8dc89893848f2fee4b411a36aa19ad52ad013ae410a3c79cc2f61255691",
+     "length": 1746
+    },
+    "ORDER": {
+     "sha256": "86a180c19b3509d9c87b122f9804c0c33ddba7f3cc5e3a5951650374dee61084",
+     "length": 2365
+    },
+    "SPRINGS": {
+     "sha256": "47e015dd1e46966a278d53c7666b20439045391a603ba46eddb3fb5e8446991f",
+     "length": 2122
+    },
+    "AGG0": {
+     "sha256": "24251034433ae8bac7f42f192ee0cc8578e7fc6dd230afbbca3e1a62ccfd955c",
+     "length": 1882
+    },
+    "PYR": {
+     "sha256": "4d3b48b4fb2e292c12ccb7a1003455ccb88fbc03ebf6844702af5c45b1980cee",
+     "length": 565
+    },
+    "FIRE_REDUCE": {
+     "sha256": "03d918488daaf17b303f1dab96968a66210c7f85383fcd93b4ccdae2e67e1a63",
+     "length": 2137
+    },
+    "FIRE_STATE": {
+     "sha256": "d2073f7877fdd5216848ca80f13d0549f82df8f262fad30961bb123c92eb89d5",
+     "length": 911
+    },
+    "FIRE_INTEGRATE": {
+     "sha256": "8902bbab4f586f19318215c5d136702a18ccd2de84e989acd635f69a7e3f4b19",
+     "length": 1966
+    },
+    "LOCAL": {
+     "sha256": "7d3cdcfe6a62d08cae3fb7c01d0113320c3b1570d5f019fb4db771eeadaf0753",
+     "length": 3239
+    },
+    "FORCE": {
+     "sha256": "2e8103362d56a7e3218d86039fb3c11a6f20654f1b6a9b9ad183fc89f2c0aef8",
+     "length": 5120
+    }
+   },
+   "small": {
+    "sha256": "af2df09a0a7fa924feeec015b757c3823f95489e1431314f4f663de8a38281fc",
+    "length": 3630
+   }
+  },
+  "06-c_T_mu_r_r": {
+   "law": "c * T(mu * r) / r",
+   "refused": "Laws with custom functions cannot run on the GPU"
+  },
+  "07-rpow_p": {
+   "law": "r^-p",
+   "grid": {
+    "HIST": {
+     "sha256": "e87b95c9f5e4e5b0036759169aef2b2138ca03ae5611a205d91e47aaf1480f11",
+     "length": 3043
+    },
+    "BOX": {
+     "sha256": "31f470bf01b414bd229c31da64b14bc21ab66a093d0f11e8a8c62dc9c92ff614",
+     "length": 4087
+    },
+    "BIN": {
+     "sha256": "5a4ff94125b76a1d928a3b7fc391bd67cd1dcdb92eb5c21af1d84352a161625e",
+     "length": 2227
+    },
+    "SCAN_BLOCKS": {
+     "sha256": "bd72e14a3fcde52423e5e8c06901f13b560510030e261e03b2ac20be23b7f354",
+     "length": 1012
+    },
+    "SCAN_TOP": {
+     "sha256": "744b4bdfa90477a5879ebe6b8b5c2b19e104283aec9d7433abdf2b6891696fe1",
+     "length": 742
+    },
+    "SCAN_ADD": {
+     "sha256": "695b0a2d29e53f8671bb4353decd5c9ca3fb5a4738744bdc72a238afc5c6f2c0",
+     "length": 311
+    },
+    "PLACE": {
+     "sha256": "8a1ed8dc89893848f2fee4b411a36aa19ad52ad013ae410a3c79cc2f61255691",
+     "length": 1746
+    },
+    "ORDER": {
+     "sha256": "86a180c19b3509d9c87b122f9804c0c33ddba7f3cc5e3a5951650374dee61084",
+     "length": 2365
+    },
+    "SPRINGS": {
+     "sha256": "47e015dd1e46966a278d53c7666b20439045391a603ba46eddb3fb5e8446991f",
+     "length": 2122
+    },
+    "AGG0": {
+     "sha256": "24251034433ae8bac7f42f192ee0cc8578e7fc6dd230afbbca3e1a62ccfd955c",
+     "length": 1882
+    },
+    "PYR": {
+     "sha256": "4d3b48b4fb2e292c12ccb7a1003455ccb88fbc03ebf6844702af5c45b1980cee",
+     "length": 565
+    },
+    "FIRE_REDUCE": {
+     "sha256": "03d918488daaf17b303f1dab96968a66210c7f85383fcd93b4ccdae2e67e1a63",
+     "length": 2137
+    },
+    "FIRE_STATE": {
+     "sha256": "d2073f7877fdd5216848ca80f13d0549f82df8f262fad30961bb123c92eb89d5",
+     "length": 911
+    },
+    "FIRE_INTEGRATE": {
+     "sha256": "8902bbab4f586f19318215c5d136702a18ccd2de84e989acd635f69a7e3f4b19",
+     "length": 1966
+    },
+    "LOCAL": {
+     "sha256": "f6c85fb87e858ada71cef9cc13a53bc9600bf1530205ed963ca248ad9de32c99",
+     "length": 3168
+    },
+    "FORCE": {
+     "sha256": "6953d4a298e7ce3fb0064355f314ac6c504289bafba0eb2605f4367c641ea011",
+     "length": 5054
+    }
+   },
+   "small": {
+    "sha256": "6a25758ddcea59a4c9dd1fe5044a18e66c5fcd92fc01da83e86971296539546b",
+    "length": 3585
+   }
+  },
+  "08-exp_r_L_rpow2_range": {
+   "law": "exp(-r / L) / r^2|range",
+   "grid": {
+    "HIST": {
+     "sha256": "e87b95c9f5e4e5b0036759169aef2b2138ca03ae5611a205d91e47aaf1480f11",
+     "length": 3043
+    },
+    "BOX": {
+     "sha256": "31f470bf01b414bd229c31da64b14bc21ab66a093d0f11e8a8c62dc9c92ff614",
+     "length": 4087
+    },
+    "BIN": {
+     "sha256": "5a4ff94125b76a1d928a3b7fc391bd67cd1dcdb92eb5c21af1d84352a161625e",
+     "length": 2227
+    },
+    "SCAN_BLOCKS": {
+     "sha256": "bd72e14a3fcde52423e5e8c06901f13b560510030e261e03b2ac20be23b7f354",
+     "length": 1012
+    },
+    "SCAN_TOP": {
+     "sha256": "744b4bdfa90477a5879ebe6b8b5c2b19e104283aec9d7433abdf2b6891696fe1",
+     "length": 742
+    },
+    "SCAN_ADD": {
+     "sha256": "695b0a2d29e53f8671bb4353decd5c9ca3fb5a4738744bdc72a238afc5c6f2c0",
+     "length": 311
+    },
+    "PLACE": {
+     "sha256": "8a1ed8dc89893848f2fee4b411a36aa19ad52ad013ae410a3c79cc2f61255691",
+     "length": 1746
+    },
+    "ORDER": {
+     "sha256": "86a180c19b3509d9c87b122f9804c0c33ddba7f3cc5e3a5951650374dee61084",
+     "length": 2365
+    },
+    "SPRINGS": {
+     "sha256": "47e015dd1e46966a278d53c7666b20439045391a603ba46eddb3fb5e8446991f",
+     "length": 2122
+    },
+    "AGG0": {
+     "sha256": "24251034433ae8bac7f42f192ee0cc8578e7fc6dd230afbbca3e1a62ccfd955c",
+     "length": 1882
+    },
+    "PYR": {
+     "sha256": "4d3b48b4fb2e292c12ccb7a1003455ccb88fbc03ebf6844702af5c45b1980cee",
+     "length": 565
+    },
+    "FIRE_REDUCE": {
+     "sha256": "03d918488daaf17b303f1dab96968a66210c7f85383fcd93b4ccdae2e67e1a63",
+     "length": 2137
+    },
+    "FIRE_STATE": {
+     "sha256": "d2073f7877fdd5216848ca80f13d0549f82df8f262fad30961bb123c92eb89d5",
+     "length": 911
+    },
+    "FIRE_INTEGRATE": {
+     "sha256": "8902bbab4f586f19318215c5d136702a18ccd2de84e989acd635f69a7e3f4b19",
+     "length": 1966
+    },
+    "LOCAL": {
+     "sha256": "7fb9e09c92976f35f56dc2804f6ae5bfe41ef67b405ae847f8415963e2369aba",
+     "length": 3400
+    },
+    "FORCE": {
+     "sha256": "138a15966700681ccb9747911ec2cd439fccc325adf6b74774106c2c18b652fe",
+     "length": 5265
+    }
+   },
+   "small": {
+    "sha256": "5108958dd52b1c1a93c4ca4a7b0eb5c3a0c2c2472c974bea10a7011b5ecdec26",
+    "length": 3720
+   }
+  },
+  "09-min_r_L_rpow3": {
+   "law": "min(r, L) / r^3",
+   "grid": {
+    "HIST": {
+     "sha256": "e87b95c9f5e4e5b0036759169aef2b2138ca03ae5611a205d91e47aaf1480f11",
+     "length": 3043
+    },
+    "BOX": {
+     "sha256": "31f470bf01b414bd229c31da64b14bc21ab66a093d0f11e8a8c62dc9c92ff614",
+     "length": 4087
+    },
+    "BIN": {
+     "sha256": "5a4ff94125b76a1d928a3b7fc391bd67cd1dcdb92eb5c21af1d84352a161625e",
+     "length": 2227
+    },
+    "SCAN_BLOCKS": {
+     "sha256": "bd72e14a3fcde52423e5e8c06901f13b560510030e261e03b2ac20be23b7f354",
+     "length": 1012
+    },
+    "SCAN_TOP": {
+     "sha256": "744b4bdfa90477a5879ebe6b8b5c2b19e104283aec9d7433abdf2b6891696fe1",
+     "length": 742
+    },
+    "SCAN_ADD": {
+     "sha256": "695b0a2d29e53f8671bb4353decd5c9ca3fb5a4738744bdc72a238afc5c6f2c0",
+     "length": 311
+    },
+    "PLACE": {
+     "sha256": "8a1ed8dc89893848f2fee4b411a36aa19ad52ad013ae410a3c79cc2f61255691",
+     "length": 1746
+    },
+    "ORDER": {
+     "sha256": "86a180c19b3509d9c87b122f9804c0c33ddba7f3cc5e3a5951650374dee61084",
+     "length": 2365
+    },
+    "SPRINGS": {
+     "sha256": "47e015dd1e46966a278d53c7666b20439045391a603ba46eddb3fb5e8446991f",
+     "length": 2122
+    },
+    "AGG0": {
+     "sha256": "24251034433ae8bac7f42f192ee0cc8578e7fc6dd230afbbca3e1a62ccfd955c",
+     "length": 1882
+    },
+    "PYR": {
+     "sha256": "4d3b48b4fb2e292c12ccb7a1003455ccb88fbc03ebf6844702af5c45b1980cee",
+     "length": 565
+    },
+    "FIRE_REDUCE": {
+     "sha256": "03d918488daaf17b303f1dab96968a66210c7f85383fcd93b4ccdae2e67e1a63",
+     "length": 2137
+    },
+    "FIRE_STATE": {
+     "sha256": "d2073f7877fdd5216848ca80f13d0549f82df8f262fad30961bb123c92eb89d5",
+     "length": 911
+    },
+    "FIRE_INTEGRATE": {
+     "sha256": "8902bbab4f586f19318215c5d136702a18ccd2de84e989acd635f69a7e3f4b19",
+     "length": 1966
+    },
+    "LOCAL": {
+     "sha256": "cbe04d4407e9ee899a26c50c0dc21ec1c8e1b3d01f46e0268c7c369c1b8f2e34",
+     "length": 3280
+    },
+    "FORCE": {
+     "sha256": "b3e496357ee119d0750e489883ab09f38584302aa173bf1472cc28cc113840e4",
+     "length": 5096
+    }
+   },
+   "small": {
+    "sha256": "5624a4e938d711ad7d5c7df192e96fc13a7ee7d7ae0b1548945bf537ea5fc12f",
+    "length": 3594
+   }
+  },
+  "10-abs_r_L_rpow2": {
+   "law": "abs(r - L) / r^2",
+   "grid": {
+    "HIST": {
+     "sha256": "e87b95c9f5e4e5b0036759169aef2b2138ca03ae5611a205d91e47aaf1480f11",
+     "length": 3043
+    },
+    "BOX": {
+     "sha256": "31f470bf01b414bd229c31da64b14bc21ab66a093d0f11e8a8c62dc9c92ff614",
+     "length": 4087
+    },
+    "BIN": {
+     "sha256": "5a4ff94125b76a1d928a3b7fc391bd67cd1dcdb92eb5c21af1d84352a161625e",
+     "length": 2227
+    },
+    "SCAN_BLOCKS": {
+     "sha256": "bd72e14a3fcde52423e5e8c06901f13b560510030e261e03b2ac20be23b7f354",
+     "length": 1012
+    },
+    "SCAN_TOP": {
+     "sha256": "744b4bdfa90477a5879ebe6b8b5c2b19e104283aec9d7433abdf2b6891696fe1",
+     "length": 742
+    },
+    "SCAN_ADD": {
+     "sha256": "695b0a2d29e53f8671bb4353decd5c9ca3fb5a4738744bdc72a238afc5c6f2c0",
+     "length": 311
+    },
+    "PLACE": {
+     "sha256": "8a1ed8dc89893848f2fee4b411a36aa19ad52ad013ae410a3c79cc2f61255691",
+     "length": 1746
+    },
+    "ORDER": {
+     "sha256": "86a180c19b3509d9c87b122f9804c0c33ddba7f3cc5e3a5951650374dee61084",
+     "length": 2365
+    },
+    "SPRINGS": {
+     "sha256": "47e015dd1e46966a278d53c7666b20439045391a603ba46eddb3fb5e8446991f",
+     "length": 2122
+    },
+    "AGG0": {
+     "sha256": "24251034433ae8bac7f42f192ee0cc8578e7fc6dd230afbbca3e1a62ccfd955c",
+     "length": 1882
+    },
+    "PYR": {
+     "sha256": "4d3b48b4fb2e292c12ccb7a1003455ccb88fbc03ebf6844702af5c45b1980cee",
+     "length": 565
+    },
+    "FIRE_REDUCE": {
+     "sha256": "03d918488daaf17b303f1dab96968a66210c7f85383fcd93b4ccdae2e67e1a63",
+     "length": 2137
+    },
+    "FIRE_STATE": {
+     "sha256": "d2073f7877fdd5216848ca80f13d0549f82df8f262fad30961bb123c92eb89d5",
+     "length": 911
+    },
+    "FIRE_INTEGRATE": {
+     "sha256": "8902bbab4f586f19318215c5d136702a18ccd2de84e989acd635f69a7e3f4b19",
+     "length": 1966
+    },
+    "LOCAL": {
+     "sha256": "fc8bd17b7ce817c7bac826c349dcbc3d97b79fc2e828d64e342ec0e91bf1b6d9",
+     "length": 3295
+    },
+    "FORCE": {
+     "sha256": "410833a3431bf696047eea0ebd85fff8300b9b49865523db0803324f54248f95",
+     "length": 5124
+    }
+   },
+   "small": {
+    "sha256": "9312c31ccac2fba5d33295dc62eb1266020d4f5a737677d8d0150d639ce6f658",
+    "length": 3608
+   }
+  },
+  "11-tanh_r_L_r": {
+   "law": "tanh(r / L) / r",
+   "grid": {
+    "HIST": {
+     "sha256": "e87b95c9f5e4e5b0036759169aef2b2138ca03ae5611a205d91e47aaf1480f11",
+     "length": 3043
+    },
+    "BOX": {
+     "sha256": "31f470bf01b414bd229c31da64b14bc21ab66a093d0f11e8a8c62dc9c92ff614",
+     "length": 4087
+    },
+    "BIN": {
+     "sha256": "5a4ff94125b76a1d928a3b7fc391bd67cd1dcdb92eb5c21af1d84352a161625e",
+     "length": 2227
+    },
+    "SCAN_BLOCKS": {
+     "sha256": "bd72e14a3fcde52423e5e8c06901f13b560510030e261e03b2ac20be23b7f354",
+     "length": 1012
+    },
+    "SCAN_TOP": {
+     "sha256": "744b4bdfa90477a5879ebe6b8b5c2b19e104283aec9d7433abdf2b6891696fe1",
+     "length": 742
+    },
+    "SCAN_ADD": {
+     "sha256": "695b0a2d29e53f8671bb4353decd5c9ca3fb5a4738744bdc72a238afc5c6f2c0",
+     "length": 311
+    },
+    "PLACE": {
+     "sha256": "8a1ed8dc89893848f2fee4b411a36aa19ad52ad013ae410a3c79cc2f61255691",
+     "length": 1746
+    },
+    "ORDER": {
+     "sha256": "86a180c19b3509d9c87b122f9804c0c33ddba7f3cc5e3a5951650374dee61084",
+     "length": 2365
+    },
+    "SPRINGS": {
+     "sha256": "47e015dd1e46966a278d53c7666b20439045391a603ba46eddb3fb5e8446991f",
+     "length": 2122
+    },
+    "AGG0": {
+     "sha256": "24251034433ae8bac7f42f192ee0cc8578e7fc6dd230afbbca3e1a62ccfd955c",
+     "length": 1882
+    },
+    "PYR": {
+     "sha256": "4d3b48b4fb2e292c12ccb7a1003455ccb88fbc03ebf6844702af5c45b1980cee",
+     "length": 565
+    },
+    "FIRE_REDUCE": {
+     "sha256": "03d918488daaf17b303f1dab96968a66210c7f85383fcd93b4ccdae2e67e1a63",
+     "length": 2137
+    },
+    "FIRE_STATE": {
+     "sha256": "d2073f7877fdd5216848ca80f13d0549f82df8f262fad30961bb123c92eb89d5",
+     "length": 911
+    },
+    "FIRE_INTEGRATE": {
+     "sha256": "8902bbab4f586f19318215c5d136702a18ccd2de84e989acd635f69a7e3f4b19",
+     "length": 1966
+    },
+    "LOCAL": {
+     "sha256": "ba2e183137300f4140e0624e1f59b1ae47e1352e1c097c2545a101a912d98723",
+     "length": 3278
+    },
+    "FORCE": {
+     "sha256": "4125d2a0b1d6e522ae5fdc9e36055b66579abf53aa83c0ac449b23897a0039b5",
+     "length": 5104
+    }
+   },
+   "small": {
+    "sha256": "231ce4b4c35a583a22b43e011dcaf0bfc5e3a258f1a87b631f538e662228cdf3",
+    "length": 3610
+   }
+  },
+  "12-pow_r_p_cos_r_L": {
+   "law": "pow(r, -p) * cos(r / L)",
+   "grid": {
+    "HIST": {
+     "sha256": "e87b95c9f5e4e5b0036759169aef2b2138ca03ae5611a205d91e47aaf1480f11",
+     "length": 3043
+    },
+    "BOX": {
+     "sha256": "31f470bf01b414bd229c31da64b14bc21ab66a093d0f11e8a8c62dc9c92ff614",
+     "length": 4087
+    },
+    "BIN": {
+     "sha256": "5a4ff94125b76a1d928a3b7fc391bd67cd1dcdb92eb5c21af1d84352a161625e",
+     "length": 2227
+    },
+    "SCAN_BLOCKS": {
+     "sha256": "bd72e14a3fcde52423e5e8c06901f13b560510030e261e03b2ac20be23b7f354",
+     "length": 1012
+    },
+    "SCAN_TOP": {
+     "sha256": "744b4bdfa90477a5879ebe6b8b5c2b19e104283aec9d7433abdf2b6891696fe1",
+     "length": 742
+    },
+    "SCAN_ADD": {
+     "sha256": "695b0a2d29e53f8671bb4353decd5c9ca3fb5a4738744bdc72a238afc5c6f2c0",
+     "length": 311
+    },
+    "PLACE": {
+     "sha256": "8a1ed8dc89893848f2fee4b411a36aa19ad52ad013ae410a3c79cc2f61255691",
+     "length": 1746
+    },
+    "ORDER": {
+     "sha256": "86a180c19b3509d9c87b122f9804c0c33ddba7f3cc5e3a5951650374dee61084",
+     "length": 2365
+    },
+    "SPRINGS": {
+     "sha256": "47e015dd1e46966a278d53c7666b20439045391a603ba46eddb3fb5e8446991f",
+     "length": 2122
+    },
+    "AGG0": {
+     "sha256": "24251034433ae8bac7f42f192ee0cc8578e7fc6dd230afbbca3e1a62ccfd955c",
+     "length": 1882
+    },
+    "PYR": {
+     "sha256": "4d3b48b4fb2e292c12ccb7a1003455ccb88fbc03ebf6844702af5c45b1980cee",
+     "length": 565
+    },
+    "FIRE_REDUCE": {
+     "sha256": "03d918488daaf17b303f1dab96968a66210c7f85383fcd93b4ccdae2e67e1a63",
+     "length": 2137
+    },
+    "FIRE_STATE": {
+     "sha256": "d2073f7877fdd5216848ca80f13d0549f82df8f262fad30961bb123c92eb89d5",
+     "length": 911
+    },
+    "FIRE_INTEGRATE": {
+     "sha256": "8902bbab4f586f19318215c5d136702a18ccd2de84e989acd635f69a7e3f4b19",
+     "length": 1966
+    },
+    "LOCAL": {
+     "sha256": "17735d3381d881bebdd63daa4e8c6f6f3e168afff1be3c7c2df0369d189ffb27",
+     "length": 3376
+    },
+    "FORCE": {
+     "sha256": "12adbf1b75cda2ad0305d6ea80add27517eed973532697f53fa556993b844198",
+     "length": 5238
+    }
+   },
+   "small": {
+    "sha256": "36e84724a732bec8729ed41fec66f0f56eb312bdf378cb98156bd020f0a85c81",
+    "length": 3701
+   }
+  },
+  "13-log_1_r_rpow2": {
+   "law": "log(1 + r) / r^2",
+   "grid": {
+    "HIST": {
+     "sha256": "e87b95c9f5e4e5b0036759169aef2b2138ca03ae5611a205d91e47aaf1480f11",
+     "length": 3043
+    },
+    "BOX": {
+     "sha256": "31f470bf01b414bd229c31da64b14bc21ab66a093d0f11e8a8c62dc9c92ff614",
+     "length": 4087
+    },
+    "BIN": {
+     "sha256": "5a4ff94125b76a1d928a3b7fc391bd67cd1dcdb92eb5c21af1d84352a161625e",
+     "length": 2227
+    },
+    "SCAN_BLOCKS": {
+     "sha256": "bd72e14a3fcde52423e5e8c06901f13b560510030e261e03b2ac20be23b7f354",
+     "length": 1012
+    },
+    "SCAN_TOP": {
+     "sha256": "744b4bdfa90477a5879ebe6b8b5c2b19e104283aec9d7433abdf2b6891696fe1",
+     "length": 742
+    },
+    "SCAN_ADD": {
+     "sha256": "695b0a2d29e53f8671bb4353decd5c9ca3fb5a4738744bdc72a238afc5c6f2c0",
+     "length": 311
+    },
+    "PLACE": {
+     "sha256": "8a1ed8dc89893848f2fee4b411a36aa19ad52ad013ae410a3c79cc2f61255691",
+     "length": 1746
+    },
+    "ORDER": {
+     "sha256": "86a180c19b3509d9c87b122f9804c0c33ddba7f3cc5e3a5951650374dee61084",
+     "length": 2365
+    },
+    "SPRINGS": {
+     "sha256": "47e015dd1e46966a278d53c7666b20439045391a603ba46eddb3fb5e8446991f",
+     "length": 2122
+    },
+    "AGG0": {
+     "sha256": "24251034433ae8bac7f42f192ee0cc8578e7fc6dd230afbbca3e1a62ccfd955c",
+     "length": 1882
+    },
+    "PYR": {
+     "sha256": "4d3b48b4fb2e292c12ccb7a1003455ccb88fbc03ebf6844702af5c45b1980cee",
+     "length": 565
+    },
+    "FIRE_REDUCE": {
+     "sha256": "03d918488daaf17b303f1dab96968a66210c7f85383fcd93b4ccdae2e67e1a63",
+     "length": 2137
+    },
+    "FIRE_STATE": {
+     "sha256": "d2073f7877fdd5216848ca80f13d0549f82df8f262fad30961bb123c92eb89d5",
+     "length": 911
+    },
+    "FIRE_INTEGRATE": {
+     "sha256": "8902bbab4f586f19318215c5d136702a18ccd2de84e989acd635f69a7e3f4b19",
+     "length": 1966
+    },
+    "LOCAL": {
+     "sha256": "106e22be9c27151417834c399974a6d9afae09008b9d7e28c0d1936680bc2180",
+     "length": 3251
+    },
+    "FORCE": {
+     "sha256": "5b5869f15e423241f07bf7c20229c45c292d65ae08dc0be63f36cbc2fa6e2258",
+     "length": 5097
+    }
+   },
+   "small": {
+    "sha256": "210e9003cb72e2a0dc0922a901d528f2e04dea57262eda8ffc88a788d8da49d2",
+    "length": 3583
+   }
+  },
+  "14-2_r_r_L": {
+   "law": "2 / (r * r + L)",
+   "grid": {
+    "HIST": {
+     "sha256": "e87b95c9f5e4e5b0036759169aef2b2138ca03ae5611a205d91e47aaf1480f11",
+     "length": 3043
+    },
+    "BOX": {
+     "sha256": "31f470bf01b414bd229c31da64b14bc21ab66a093d0f11e8a8c62dc9c92ff614",
+     "length": 4087
+    },
+    "BIN": {
+     "sha256": "5a4ff94125b76a1d928a3b7fc391bd67cd1dcdb92eb5c21af1d84352a161625e",
+     "length": 2227
+    },
+    "SCAN_BLOCKS": {
+     "sha256": "bd72e14a3fcde52423e5e8c06901f13b560510030e261e03b2ac20be23b7f354",
+     "length": 1012
+    },
+    "SCAN_TOP": {
+     "sha256": "744b4bdfa90477a5879ebe6b8b5c2b19e104283aec9d7433abdf2b6891696fe1",
+     "length": 742
+    },
+    "SCAN_ADD": {
+     "sha256": "695b0a2d29e53f8671bb4353decd5c9ca3fb5a4738744bdc72a238afc5c6f2c0",
+     "length": 311
+    },
+    "PLACE": {
+     "sha256": "8a1ed8dc89893848f2fee4b411a36aa19ad52ad013ae410a3c79cc2f61255691",
+     "length": 1746
+    },
+    "ORDER": {
+     "sha256": "86a180c19b3509d9c87b122f9804c0c33ddba7f3cc5e3a5951650374dee61084",
+     "length": 2365
+    },
+    "SPRINGS": {
+     "sha256": "47e015dd1e46966a278d53c7666b20439045391a603ba46eddb3fb5e8446991f",
+     "length": 2122
+    },
+    "AGG0": {
+     "sha256": "24251034433ae8bac7f42f192ee0cc8578e7fc6dd230afbbca3e1a62ccfd955c",
+     "length": 1882
+    },
+    "PYR": {
+     "sha256": "4d3b48b4fb2e292c12ccb7a1003455ccb88fbc03ebf6844702af5c45b1980cee",
+     "length": 565
+    },
+    "FIRE_REDUCE": {
+     "sha256": "03d918488daaf17b303f1dab96968a66210c7f85383fcd93b4ccdae2e67e1a63",
+     "length": 2137
+    },
+    "FIRE_STATE": {
+     "sha256": "d2073f7877fdd5216848ca80f13d0549f82df8f262fad30961bb123c92eb89d5",
+     "length": 911
+    },
+    "FIRE_INTEGRATE": {
+     "sha256": "8902bbab4f586f19318215c5d136702a18ccd2de84e989acd635f69a7e3f4b19",
+     "length": 1966
+    },
+    "LOCAL": {
+     "sha256": "0bb6cd2455f7f24759a86f2c6c1df4a0664dedab7b01a881b4a55a0e26c4f61f",
+     "length": 3219
+    },
+    "FORCE": {
+     "sha256": "dade6561717f35fb74a04a3d386827052c5fc867b448e44e4bc00eec9cc339ea",
+     "length": 5080
+    }
+   },
+   "small": {
+    "sha256": "ea7e7139e76aba0396b013aadda64f54cd93966f7fcf2fe470d9844bff0b5ffc",
+    "length": 3586
+   }
+  },
+  "15-1_rpow2": {
+   "law": "-1 / r^2",
+   "grid": {
+    "HIST": {
+     "sha256": "e87b95c9f5e4e5b0036759169aef2b2138ca03ae5611a205d91e47aaf1480f11",
+     "length": 3043
+    },
+    "BOX": {
+     "sha256": "31f470bf01b414bd229c31da64b14bc21ab66a093d0f11e8a8c62dc9c92ff614",
+     "length": 4087
+    },
+    "BIN": {
+     "sha256": "5a4ff94125b76a1d928a3b7fc391bd67cd1dcdb92eb5c21af1d84352a161625e",
+     "length": 2227
+    },
+    "SCAN_BLOCKS": {
+     "sha256": "bd72e14a3fcde52423e5e8c06901f13b560510030e261e03b2ac20be23b7f354",
+     "length": 1012
+    },
+    "SCAN_TOP": {
+     "sha256": "744b4bdfa90477a5879ebe6b8b5c2b19e104283aec9d7433abdf2b6891696fe1",
+     "length": 742
+    },
+    "SCAN_ADD": {
+     "sha256": "695b0a2d29e53f8671bb4353decd5c9ca3fb5a4738744bdc72a238afc5c6f2c0",
+     "length": 311
+    },
+    "PLACE": {
+     "sha256": "8a1ed8dc89893848f2fee4b411a36aa19ad52ad013ae410a3c79cc2f61255691",
+     "length": 1746
+    },
+    "ORDER": {
+     "sha256": "86a180c19b3509d9c87b122f9804c0c33ddba7f3cc5e3a5951650374dee61084",
+     "length": 2365
+    },
+    "SPRINGS": {
+     "sha256": "47e015dd1e46966a278d53c7666b20439045391a603ba46eddb3fb5e8446991f",
+     "length": 2122
+    },
+    "AGG0": {
+     "sha256": "24251034433ae8bac7f42f192ee0cc8578e7fc6dd230afbbca3e1a62ccfd955c",
+     "length": 1882
+    },
+    "PYR": {
+     "sha256": "4d3b48b4fb2e292c12ccb7a1003455ccb88fbc03ebf6844702af5c45b1980cee",
+     "length": 565
+    },
+    "FIRE_REDUCE": {
+     "sha256": "03d918488daaf17b303f1dab96968a66210c7f85383fcd93b4ccdae2e67e1a63",
+     "length": 2137
+    },
+    "FIRE_STATE": {
+     "sha256": "d2073f7877fdd5216848ca80f13d0549f82df8f262fad30961bb123c92eb89d5",
+     "length": 911
+    },
+    "FIRE_INTEGRATE": {
+     "sha256": "8902bbab4f586f19318215c5d136702a18ccd2de84e989acd635f69a7e3f4b19",
+     "length": 1966
+    },
+    "LOCAL": {
+     "sha256": "9c6c369fa5c7db58929f67f18f449c02c90936a7f2dc0280c928abc5384c4eb6",
+     "length": 3205
+    },
+    "FORCE": {
+     "sha256": "80760e00038e081569d694caed52a265f3a8b141d43bbc20a0faba635a560623",
+     "length": 5040
+    }
+   },
+   "small": {
+    "sha256": "4d3a2463cd9f882467672dd38ffa3ef921017fe9c993b42e0d4ed29648ebf933",
+    "length": 3566
+   }
+  }
+ }
+}

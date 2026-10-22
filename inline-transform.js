@@ -6,6 +6,10 @@
  */
 const LAW_ERROR = 'This bundle has pre-generated code for the default repulsion law only. ' +
   'Use ngraph.forcelayout.js for other laws.';
+const INERTIA_ERROR = 'This bundle has pre-generated code for the mass as inertia only. ' +
+  'Use ngraph.forcelayout.js for another inertia column.';
+const CHARGES_ERROR = 'This bundle has pre-generated trees that walk one charge at a time. ' +
+  'Use ngraph.forcelayout.js for trees of several charges.';
 
 module.exports = function inlineTransform(dimensions) {
   return {
@@ -35,8 +39,13 @@ function generatedExport(content, originalContent, dimensions) {
   let bodyMatch = originalContent.match(/^\/\/ InlineTransformBody: (.+)$/m);
   let generated = bodyMatch ? `(function () {\n${content[bodyMatch[1]](dimensions)}\n})()` :
     content(dimensions).toString();
-  return `module.exports = function(dimension, law) {
-  if (law && !law.isDefault) throw new Error(${JSON.stringify(LAW_ERROR)});
+  // The second argument is a law (trees) or the name of the inertia column (integrators). The
+  // simulator walks every tree stage alone when its generators are pre-generated.
+  return `module.exports = function(dimension, option) {
+  if (typeof option === 'string' && option !== 'mass') throw new Error(${JSON.stringify(INERTIA_ERROR)});
+  if (Array.isArray(option)) throw new Error(${JSON.stringify(CHARGES_ERROR)});
+  if (option && typeof option === 'object' && !option.isDefault) throw new Error(${JSON.stringify(LAW_ERROR)});
   return ${generated};
-}`;
+};
+module.exports.preGenerated = true;`;
 }

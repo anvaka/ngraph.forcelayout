@@ -36,6 +36,21 @@ declare module "ngraph.forcelayout" {
     names(): string[];
     /** Numbers per body of a column (D for pos, velocity and force) */
     sizeOf(name: string): number | undefined;
+    /** Kind of numbers of a column: 'f64', 'f32', 'i32', 'u32', 'i16', 'u16', 'i8' or 'u8' */
+    typeOf(name: string): string | undefined;
+    /**
+     * Version of every column: grows when the column changes in a way an engine with its own
+     * copy of the numbers should know about (see changed()). Read the property each time: reading
+     * it applies what setters wrote since the last read.
+     */
+    readonly versions: Record<string, number>;
+    /** Grows when a column is defined or removed */
+    readonly columnsVersion: number;
+    /**
+     * Marks a column (every column, without a name) as changed. Code that writes a column's array
+     * calls it; setters of bodies and springs, define() and graph edits do it themselves.
+     */
+    changed(name?: string): void;
     [column: string]: any;
   }
 
@@ -52,8 +67,39 @@ declare module "ngraph.forcelayout" {
     length: Float64Array;
     coefficient: Float64Array;
     define<T extends TypedArray>(name: string, ArrayType?: { new(length: number): T }, size?: number, initial?: number): T;
+    typeOf(name: string): string | undefined;
+    readonly versions: Record<string, number>;
+    readonly columnsVersion: number;
+    changed(name?: string): void;
     [column: string]: any;
   }
+
+  /**
+   * What functions that give stages their numbers (params of formulas and laws, radii, `when`)
+   * see, the same on every engine. It has no columns or positions: data goes through formulas,
+   * sums and host steps.
+   */
+  export interface StepContext {
+    /** The step being computed */
+    iteration(): number;
+    /** The settings, read only */
+    readonly settings: Readonly<PhysicsSettings>;
+    /** The spring length, but never 0 */
+    unit(): number;
+    readonly store: { readonly n: number; readonly D: number };
+    springLength(): number;
+    springCoefficient(): number;
+    gravity(): number;
+    theta(): number;
+    dragCoefficient(): number;
+    timeStep(): number;
+    maxVelocity(): number;
+    dimensions(): number;
+    [setting: string]: any;
+  }
+
+  /** A number, a function of the step context read every step */
+  export type StepValue = number | ((context: StepContext) => number);
 
   /**
    * How hard two unit charges push each other at distance `r`, e.g. `'exp(-r / L) / r^2'`.
@@ -64,10 +110,10 @@ declare module "ngraph.forcelayout" {
      * optionally after named values: `'u = r / L; exp(-u) / r^2'`
      */
     force: string;
-    /** Parameter values, or functions of the simulator that are read every step */
-    params?: Record<string, number | ((simulator: PhysicsSimulator) => number)>;
+    /** Parameter values, or functions of the step context that are read every step */
+    params?: Record<string, StepValue>;
     /** Pairs and tree cells farther apart than this are skipped */
-    range?: number | string | ((simulator: PhysicsSimulator) => number);
+    range?: number | string | ((context: StepContext) => number);
     /** Lookup tables the expression can call */
     tables?: Record<string, FormulaTable>;
     /** Extra JS functions the expression can call (they keep the law on the CPU) */
@@ -90,18 +136,32 @@ declare module "ngraph.forcelayout" {
    */
   export interface FormulaStageOptions {
     formula: string;
-    /** Numbers, or functions of the simulator read once per step */
-    params?: Record<string, number | ((simulator: PhysicsSimulator) => number)>;
+    /** Numbers, or functions of the step context read once per step */
+    params?: Record<string, StepValue>;
     tables?: Record<string, FormulaTable>;
+    /**
+     * The stage runs only on steps where this holds: an expression of `step`, the params and the
+     * settings (e.g. 'step - floor(step / 25) * 25 == 0'), or a function of the step context
+     */
+    when?: string | ((context: StepContext) => boolean);
     before?: string;
     after?: string;
     /** Takes the place of this stage, which comes back when the formula stage is removed */
     replace?: string;
   }
 
-  export interface PairFormulaOptions extends FormulaStageOptions {
+  export interface LinkFormulaOptions extends FormulaStageOptions {
+    /**
+     * Body columns the formula adds into (`name_i += ...`) that start each pass at 0, so they
+     * hold this pass's sum. Other columns keep their value and the formula adds onto it. Never
+     * pos, velocity or force.
+     */
+    startAtZero?: string[];
+  }
+
+  export interface PairFormulaOptions extends LinkFormulaOptions {
     /** Pairs closer than this run the formula; 0 or less skips the pass */
-    radius: number | string | ((simulator: PhysicsSimulator) => number);
+    radius: number | string | ((context: StepContext) => number);
     /** false: the formula runs for (i, j) and (j, i), and each run pushes body i only */
     symmetric?: boolean;
   }
@@ -130,21 +190,157 @@ declare module "ngraph.forcelayout" {
     charge?: string;
     /** Body column of how strongly bodies feel the push; the charge by default */
     sensitivity?: string;
+    /**
+     * Passes next to each other (and to the stock repulsion) walk one quad tree, also under
+     * nbody 'dualtree' (plan() warns: such a step costs several times a stock dual tree step).
+     * 'own' (default): this charge acts from its own centre in a cell, so it may not be negative;
+     * 'shared': from the centre of the walk's first charge, which is faster, and then it may be
+     * signed.
+     */
+    centroid?: 'own' | 'shared';
+    when?: string | ((context: StepContext) => boolean);
     before?: string;
     after?: string;
     replace?: string;
   }
 
+  export interface StageOptions {
+    before?: string;
+    after?: string;
+    replace?: string;
+    /** The stage runs only on steps where this holds (see FormulaStageOptions.when) */
+    when?: string | ((context: StepContext) => boolean);
+    /**
+     * How a stage written for other engines too (an add-on module's) describes itself in
+     * program(): at least a `shape`. Without it the stage is JavaScript, which only the CPU runs.
+     */
+    describe?: Partial<ProgramStage> & { shape: string } | (() => Partial<ProgramStage> & { shape: string });
+    /** The stage's numbers for a step, for stageValues() */
+    values?: (context: StepContext) => StageValues;
+  }
+
+  export interface HostStepOptions {
+    run(simulator: PhysicsSimulator): void;
+    /** Columns it reads and changes: body column names, or {space: 'links', column} */
+    reads?: (string | { space: 'nodes' | 'links'; column: string })[];
+    writes?: (string | { space: 'nodes' | 'links'; column: string })[];
+    /** Steps on which it runs; every step without it */
+    when?: string | ((context: StepContext) => boolean);
+    before?: string;
+    after?: string;
+  }
+
+  /** A value of a stage: a number, an expression, or a function (which has no body here) */
+  export type ValueDescription = { kind: 'number'; value: number } | { kind: 'expression'; text: string } | { kind: 'host' };
+
+  export interface LawDescription {
+    force: string;
+    params: (ValueDescription & { name: string })[];
+    /** Built in values the law reads (dt, unit, ...) */
+    builtIns: string[];
+    range: ValueDescription | null;
+    tables: { name: string; from: number; to: number; values: Float64Array }[];
+    /** Names of JS functions (CPU only) */
+    functions: string[];
+    isDefault: boolean;
+    key: string;
+  }
+
+  export interface ProgramRead {
+    space: 'nodes' | 'links';
+    column: string;
+    /** 'own': the row the stage works on; 'other': rows of other bodies (link and pair ends, trees) */
+    rows?: 'own' | 'other';
+    /** Which end of a link or pair ('i' or 'j') */
+    end?: 'i' | 'j';
+  }
+
+  export interface ProgramWrite {
+    space: 'nodes' | 'links';
+    column: string;
+    /**
+     * 'set' (=) replaces, 'add' (+=, -=) adds onto the value at the stage's start, 'scale' (*=,
+     * /=) scales the row's own value, 'host' is a host step's
+     */
+    mode: 'set' | 'add' | 'scale' | 'host';
+    op?: string;
+    end?: 'i' | 'j';
+    /** The column starts the pass at 0 */
+    startAtZero?: boolean;
+    /** Added along the link or pair, by `pull` or `push` */
+    via?: 'pull' | 'push';
+  }
+
   /**
-   * What a stage does, for plan(). `shape` is one of 'clear', 'tree', 'drag', 'springs',
-   * 'integrate', 'node', 'link', 'pair', 'sum', 'pair rules', 'js'.
+   * A stage of program(), in the order the CPU runs them.
    */
-  export interface StageDescription {
+  export interface ProgramStage {
+    name: string;
+    /** 'node', 'link', 'pair', 'sum', 'tree', 'integrate', 'host', 'js', 'pair rules', or an add-on's */
     shape: string;
-    builtIn?: boolean;
-    formula?: string;
-    law?: RepulsionLaw;
+    /** 'clear', 'repulsion', 'drag', 'springs' or 'integrate' for the simulator's own stages */
+    builtIn: string | null;
+    when: ValueDescription | null;
+    /** What it loops over: 'nodes', 'links', 'pairs', 'tree', 'none', ... */
+    space: string;
+    reads: ProgramRead[];
+    writes: ProgramWrite[];
+    /** The formula (for built in stages: the formula they equal) */
+    formula: string | null;
+    params: (ValueDescription & { name: string })[];
+    builtIns: string[];
+    tables: { name: string; from: number; to: number; values: Float64Array }[];
+    sums: string[];
+    /**
+     * Options of the shape: radius, symmetric, startAtZero, channels, integrator, ... Trees also
+     * have `walk`: {stages, index, charges, tree}, the stages whose charges one tree walks at once,
+     * this stage's place among them, and 'quadtree' or 'dualtree'.
+     */
+    args: Record<string, any>;
     [detail: string]: any;
+  }
+
+  export interface ProgramColumn {
+    name: string;
+    width: number | 'D';
+    type: string;
+    /** 'host', 'engine' (built in stages), or 'stage:<name>' (the first stage that writes it) */
+    writer: string;
+    writers: string[];
+    /** Counters of the adaptive time step, which formulas do not see */
+    hidden?: boolean;
+  }
+
+  /**
+   * The step as plain data (see simulator.program()).
+   */
+  export interface Program {
+    /** Grows when the structure of the step changes */
+    version: number;
+    dims: number;
+    spaces: { nodes: number; links: number };
+    settings: Record<string, number | string | boolean>;
+    columns: { nodes: ProgramColumn[]; links: ProgramColumn[] };
+    tables: { stage: string; name: string; from: number; to: number; values: Float64Array }[];
+    sums: { name: string; over: 'nodes' | 'links'; group: string | null; reduce: 'sum' | 'min' | 'max'; width: number; when: ValueDescription | null }[];
+    stages: ProgramStage[];
+    hostSteps: { name: string; when: ValueDescription | null; reads: ProgramRead[]; writes: ProgramWrite[] }[];
+    /** Listeners by event: the simulator's ('topology', 'settings') and the layout's ('step') */
+    listeners: Record<string, number>;
+  }
+
+  /** What stageValues() gives: a stage's numbers for one step, a new object every call */
+  export interface StageValues {
+    [value: string]: any;
+    params?: Record<string, number>;
+    radius?: number;
+    when: boolean;
+    /** Built in values the stage reads (step, unit, gravity, ...), as formulas see them */
+    builtIns?: Record<string, number>;
+    /** Repulsion passes: the law's numbers for that step (parameters, `$h<n>`, `$range`) */
+    lawValues?: Record<string, number>;
+    /** Repulsion passes: the compiled law, for generating code. Its `values` change with the next call. */
+    law?: RepulsionLaw;
   }
 
   /**
@@ -152,8 +348,10 @@ declare module "ngraph.forcelayout" {
    */
   export interface Backend {
     name: string;
-    check(description: StageDescription, simulator: PhysicsSimulator): { runs: boolean; how?: string; reason?: string };
-    checkSettings?(simulator: PhysicsSimulator): string[];
+    /** Whether the engine runs a stage of program() */
+    check(stage: ProgramStage, program: Program, simulator: PhysicsSimulator): { runs: boolean; how?: string; reason?: string; warnings?: string[] };
+    /** Problems with the step as a whole */
+    checkProgram?(program: Program, simulator: PhysicsSimulator): string[] | { reasons?: string[]; warnings?: string[] };
   }
 
   export interface Plan {
@@ -161,7 +359,9 @@ declare module "ngraph.forcelayout" {
     runs: boolean;
     /** One sentence for every problem */
     reasons: string[];
-    stages: { stage: string; shape: string; runs: boolean; how?: string; reason?: string }[];
+    /** Not refusals: columns that only grow, host steps that run every step, the engine's notes */
+    warnings: string[];
+    stages: { stage: string; shape: string; runs: boolean; how?: string; reason?: string; cost?: string }[];
   }
 
   /**
@@ -174,11 +374,14 @@ declare module "ngraph.forcelayout" {
     paramNames: string[];
     tableNames: string[];
     values: Record<string, number>;
+    /** Reads parameters and range for a step */
+    update(context: StepContext): void;
+    describe(): LawDescription;
   }
 
   export interface PairRule {
     /** Pairs closer than this are passed to the rule */
-    radius: number | ((simulator: PhysicsSimulator) => number);
+    radius: number | ((context: StepContext) => number);
     /**
      * Returns `s`; the force `s * (pos_i - pos_j)` is added to body `i`, and the opposite one
      * to body `j` (unless the rule is not symmetric). Bodies on the same spot get r = 0, and
@@ -337,6 +540,11 @@ declare module "ngraph.forcelayout" {
     repulsionCharge: string;
 
     /**
+     * Name of the body column that forces are divided by when bodies move. 'mass' by default.
+     */
+    inertia: string;
+
+    /**
      * Name of the body column with how strongly bodies feel the push of others. Empty (the
      * default) means the charge. A body with charge 0 is pushed but pushes nobody.
      */
@@ -369,7 +577,7 @@ declare module "ngraph.forcelayout" {
   /**
    * Manages a simulation of physical forces acting on bodies and springs.
    */
-  export interface PhysicsSimulator {
+  export interface PhysicsSimulator extends EventedType {
     /**
      * Bodies of this simulator; `bodies[i]` is the body of row `i` while the simulator steps.
      *
@@ -395,7 +603,10 @@ declare module "ngraph.forcelayout" {
     springStore: SpringStore;
 
     /**
-     * Returns settings with which current simulator was initialized
+     * The simulator's settings. Read them here, but change them through the setters
+     * (springLength(), gravity(), nbody(), ...), which fire 'settings'. A direct write changes
+     * the next CPU steps but fires no event: listeners and engines with their own copy of the
+     * numbers (a GPU) don't see it.
      */
     settings: PhysicsSettings;
 
@@ -409,7 +620,13 @@ declare module "ngraph.forcelayout" {
      * Adds a stage to every step. By default it runs just before 'integrate'. With `replace` it
      * takes the place of that stage, which comes back when this one is removed.
      */
-    addStage(name: string, run: StageFunction, options?: { before?: string; after?: string; replace?: string }): void;
+    addStage(name: string, run: StageFunction, options?: StageOptions): void;
+
+    /**
+     * A step that JavaScript runs on the host at its place among the stages. Engines with their
+     * own copy of the numbers hand over what it reads and writes.
+     */
+    addHostStep(name: string, options: HostStepOptions): void;
 
     /**
      * Replaces a stage, keeping its place. Returns the old function.
@@ -431,7 +648,7 @@ declare module "ngraph.forcelayout" {
      * and `name_i` / `name_j` columns of both ends. `replace: 'springs'` replaces the stock
      * springs, which compute 'pull = coefficient * (r - length)'.
      */
-    addLinkFormula(name: string, options: FormulaStageOptions): void;
+    addLinkFormula(name: string, options: LinkFormulaOptions): void;
 
     /**
      * A formula for every pair of bodies closer than `radius`: it sets `push` from `r` and
@@ -458,6 +675,42 @@ declare module "ngraph.forcelayout" {
      * Which stages an engine can run; without a backend, the CPU (which runs all).
      */
     plan(backend?: Backend): Plan;
+
+    /**
+     * The step as plain data, built when asked for.
+     */
+    program(): Program;
+
+    /**
+     * What a stage reads in the step of `context` (the current step without one).
+     */
+    stageValues(name: string, context?: StepContext): StageValues;
+
+    /**
+     * The version program() would report, without building it.
+     */
+    programVersion(): number;
+
+    /**
+     * The step context of the current step, or of `step`.
+     */
+    stepContext(step?: number): StepContext;
+
+    /**
+     * Gets or sets the body column forces are divided by when bodies move.
+     */
+    inertia(): string;
+    inertia(column: string): PhysicsSimulator;
+
+    /**
+     * Drops rows of removed bodies and springs, and fires 'topology' if the graph changed, now.
+     */
+    applyEdits(): PhysicsSimulator;
+
+    /**
+     * Counts listeners of another event source too (the layout's), for program().
+     */
+    watchListeners(source: EventedType): void;
 
     /**
      * Returns the function of a stage.
@@ -505,9 +758,10 @@ declare module "ngraph.forcelayout" {
     unit(): number;
 
     /**
-     * Number of steps performed so far.
+     * Number of steps performed so far; with `count`, sets it.
      */
     iteration(): number;
+    iteration(count: number): PhysicsSimulator;
 
     /**
      * Performs one step of force simulation.
