@@ -11,7 +11,7 @@
 // A channel is {stage, law, centroid, charge, sensitivity}: `law` a compiled law of the library
 // (null for 1/r^2), `centroid` 'own' or 'shared' (channel 0 always has its own centre),
 // `charge` and `pos` colRefs: {buffer, type?, at(row, axis)}, the caller's columns.
-import { pyramidKernels, pyramidLayout, boxLayout, WG, LIST_HEAD } from './wgsl.js';
+import { pyramidKernels, pyramidLayout, boxLayout, WG, LIST_HEAD, HUB_MAX } from './wgsl.js';
 import { createPrinter, lawValueCount, lawValueProblem, f32Problem, F32_MAX } from '../wgsl/print.js';
 
 // Bodies of an overfull cell past this many are sampled with weights. Today's template samples
@@ -44,7 +44,7 @@ export function chooseGrid(n, D) {
  * `grid` forces the cells per axis and `blocks: false` one TREE_PYR dispatch per level (for
  * measurements and tests).
  */
-export function planPyramid({ D, n, limits, channels, pos, values = null, grid = 0, heads, heavyCells, secondOrder, separation, blocks = true, warn }) {
+export function planPyramid({ D, n, limits, channels, pos, values = null, grid = 0, heads, heavyCells, hubs, secondOrder, separation, blocks = true, warn }) {
   const refuse = (reason, buffers = {}) => ({ refusal: reason, buffers, kernels: {}, section: null, dispatches: 0 });
   if (D !== 2 && D !== 3) return refuse(`the grid pyramid is 2D and 3D; this layout is ${D}D`);
   if (!channels.length) return refuse('a tree pass needs at least one charge');
@@ -101,7 +101,10 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
   // cells their ring is in the near cells already.
   const sep = separation !== undefined ? separation : (D === 2 && groups.some(group => group.second) ? 2 : 1);
   const heavy = (heavyCells === undefined ? D === 3 : heavyCells) && sep === 1;
-  const { sizes, buffers } = layoutSizes(D, n, G, L, channels.length, heavy);
+  // Hubs in 2D (bodies whose charges pass 8 times the mean) take their far field from tree_hub:
+  // megaStars after 200 steps was 1.6 times the CPU tree's error, 83% of it at the main hub
+  const hub = hubs === undefined ? D === 2 : !!hubs;
+  const { sizes, buffers } = layoutSizes(D, n, G, L, channels.length, heavy, hub);
   const nCells = sizes.nCells, levels = sizes.levels;
 
   const largest = Math.min(limits.maxStorageBufferBindingSize, limits.maxBufferSize);
@@ -118,13 +121,13 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
   const blockBytes = WG * L.CS4 * 16 + (L.CNT < 0 ? WG * 4 : 0) + 16;
   const blockSteps = blocks && blockBytes <= (limits.maxComputeWorkgroupStorageSize || 16384) ? Math.floor(Math.log2(WG) / D) : 0;
   const spec = {
-    D, L, groups, lawWords: values ? 0 : lawWords, values, warn, heads: heads === undefined ? nCells > n : heads, heavyCells: heavy,
+    D, L, groups, lawWords: values ? 0 : lawWords, values, warn, heads: heads === undefined ? nCells > n : heads, heavyCells: heavy, hubs: hub,
     sep, blockSteps,
     channels: own, pos, charges: channels.map(channel => channel.charge),
   };
   const out = pyramidKernels(spec);
   return {
-    refusal: null, D, n, K: channels.length, layout: L, groups, sizes, buffers, heads: spec.heads, heavyCells: spec.heavyCells,
+    refusal: null, D, n, K: channels.length, layout: L, groups, sizes, buffers, heads: spec.heads, heavyCells: spec.heavyCells, hubs: hub,
     lawWords: spec.lawWords, values, channels,
     kernels: out.kernels, columns: out.columns, section: out.section,
     // HIST, BOX, BIN, 3 scans, PLACE, ORDER, AGG0, PYRs, LOCAL (with the crowded cells'
@@ -141,7 +144,7 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
  */
 export function pyramidMemory(D, n, channels, tableWords = 0) {
   const L = pyramidLayout(D, channels.map((channel, c) => ({ own: c === 0 || channel.centroid !== 'shared' })), tableWords);
-  return layoutSizes(D, n, chooseGrid(n, D), L, channels.length, D === 3).buffers;
+  return layoutSizes(D, n, chooseGrid(n, D), L, channels.length, D === 3, D === 2).buffers;
 }
 
 /**
@@ -160,7 +163,7 @@ export function pyrLevels(levels, blockSteps) {
 }
 
 // Grid sizes, offsets into the buffers, and bytes per buffer
-function layoutSizes(D, n, G, L, K, heavy) {
+function layoutSizes(D, n, G, L, K, heavy, hubs = false) {
   const levels = Math.log2(G), nCells = G ** D;
   const levelOff = [];
   let pyrSize = 0;
@@ -171,10 +174,15 @@ function layoutSizes(D, n, G, L, K, heavy) {
   // the crowded cells' pushes per sorted body; at most n / (cap + 1) crowded cells
   const crowdOff = locOff + localCells * L.LS4;
   const crowdMax = Math.floor(n / (NEAR_CAP + 1)) + 1;
+  // then the hubs' far fields (see tree_hub)
+  const CR4 = Math.ceil(D * K / 4);
+  const hubOff = crowdOff + n * CR4;
+  const occList = LIST_HEAD + (heavy ? nCells : 0) + crowdMax;
+  const hubList = occList + (nCells > n ? Math.min(n, nCells) : 0);
   const size = bytes => Math.max(16, Math.ceil(bytes / 16) * 16);
   return {
     sizes: { n, G, levels, nCells, levelOff, pyrSize, localCells, locOff, crowdOff, crowdList: LIST_HEAD + (heavy ? nCells : 0),
-      occList: LIST_HEAD + (heavy ? nCells : 0) + crowdMax,
+      occList, hubOff, hubList,
       metaTag: nCells, metaRow: nCells + 2 * n, metaCount: nCells + 3 * n },
     buffers: {
       treeBox: size(boxLayout(D).size * 4),
@@ -183,8 +191,8 @@ function layoutSizes(D, n, G, L, K, heavy) {
       treeWork: size(3 * n * 4),
       treeMeta: size((nCells + 3 * n + pyrSize) * 4),
       treeSp: size(n * L.SP4 * 16),
-      treeCells: size((crowdOff + n * Math.ceil(D * K / 4)) * 16),
-      treeLists: size((LIST_HEAD + (heavy ? nCells : 0) + crowdMax + (nCells > n ? Math.min(n, nCells) : 0)) * 4),
+      treeCells: size((hubOff + (hubs ? HUB_MAX * CR4 : 0)) * 16),
+      treeLists: size((hubList + (hubs ? HUB_MAX : 0)) * 4),
     },
   };
 }
