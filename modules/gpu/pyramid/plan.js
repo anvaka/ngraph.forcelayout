@@ -11,7 +11,7 @@
 // A channel is {stage, law, centroid, charge, sensitivity}: `law` a compiled law of the library
 // (null for 1/r^2), `centroid` 'own' or 'shared' (channel 0 always has its own centre),
 // `charge` and `pos` colRefs: {buffer, type?, at(row, axis)}, the caller's columns.
-import { pyramidKernels, pyramidLayout, boxLayout, WG } from './wgsl.js';
+import { pyramidKernels, pyramidLayout, boxLayout, WG, LIST_HEAD } from './wgsl.js';
 import { createPrinter, lawValueCount, lawValueProblem, f32Problem, F32_MAX } from '../wgsl/print.js';
 
 // Bodies of an overfull cell past this many are sampled with weights. Today's template samples
@@ -82,27 +82,11 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
 
   const G = grid || chooseGrid(n, D);
   if (G ** D > (1 << 20)) return refuse(`the grid pyramid takes up to 2^20 cells; ${G}^${D} is more`);
-  const levels = Math.log2(G), nCells = G ** D;
-  const levelOff = [];
-  let pyrSize = 0;
-  for (let l = 0, g = G; l <= levels; l++, g >>= 1) { levelOff.push(pyrSize); pyrSize += g ** D; }
-  // local expansions: every level but the top
-  const localCells = levelOff[levels];
-  const size = bytes => Math.max(16, Math.ceil(bytes / 16) * 16);
-  const buffers = {
-    treeBox: size(boxLayout(D).size * 4),
-    treeCount: size(nCells * 4),
-    treeBlocks: size(Math.max(nCells / 1024, 4) * 4),
-    treeWork: size(3 * n * 4),
-    treeMeta: size((nCells + 3 * n + pyrSize) * 4),
-    treeSp: size(n * L.SP4 * 16),
-    treeCells: size((L.TAB4 + pyrSize * L.CS4 + localCells * L.LS4) * 16),
-  };
   // Heavy finest cells (hubs amid their leaves, see TREE_HEAVY): 3D needs them, 2D measured within
-  // the accuracy gate without. Their list: a count, then the cells.
+  // the accuracy gate without
   const heavy = heavyCells === undefined ? D === 3 : heavyCells;
-  if (heavy) buffers.treeHeavy = size((1 + nCells) * 4);
-  const sizes = { n, G, levels, nCells, levelOff, pyrSize, localCells, locOff: L.TAB4 + pyrSize * L.CS4, metaTag: nCells, metaRow: nCells + 2 * n, metaCount: nCells + 3 * n };
+  const { sizes, buffers } = layoutSizes(D, n, G, L, channels.length, heavy);
+  const nCells = sizes.nCells, levels = sizes.levels;
 
   const largest = Math.min(limits.maxStorageBufferBindingSize, limits.maxBufferSize);
   const over = Object.keys(buffers).filter(name => buffers[name] > largest);
@@ -122,26 +106,48 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
     refusal: null, D, n, K: channels.length, layout: L, groups, sizes, buffers, heads: spec.heads, heavyCells: spec.heavyCells,
     lawWords: spec.lawWords, values, channels,
     kernels: out.kernels, columns: out.columns, section: out.section,
-    // HIST, BOX, BIN, 3 scans, PLACE, ORDER, AGG0, a PYR per level, LOCAL, and HEAVY
+    // HIST, BOX, BIN, 3 scans, PLACE, ORDER, AGG0, a PYR per level, LOCAL (with the crowded
+    // cells' workgroups), and HEAVY in 3D
     dispatches: 10 + levels + (spec.heavyCells ? 1 : 0),
     heavyGroups: out.heavyGroups,
   };
 }
 
 /**
- * Bytes the pyramid needs for `channels` ([{centroid, law}]) at n bodies in D dimensions, by
- * buffer, without printing anything (design risk R5).
+ * Bytes the pyramid needs for `channels` ([{centroid}]) at n bodies in D dimensions, by buffer,
+ * without printing anything (design risk R5).
  */
 export function pyramidMemory(D, n, channels, tableWords = 0) {
   const L = pyramidLayout(D, channels.map((channel, c) => ({ own: c === 0 || channel.centroid !== 'shared' })), tableWords);
-  const G = chooseGrid(n, D), levels = Math.log2(G), nCells = G ** D;
-  let pyrSize = 0, last = 0;
-  for (let l = 0, g = G; l <= levels; l++, g >>= 1) { last = pyrSize; pyrSize += g ** D; }
+  return layoutSizes(D, n, chooseGrid(n, D), L, channels.length, D === 3).buffers;
+}
+
+// Grid sizes, offsets into the buffers, and bytes per buffer
+function layoutSizes(D, n, G, L, K, heavy) {
+  const levels = Math.log2(G), nCells = G ** D;
+  const levelOff = [];
+  let pyrSize = 0;
+  for (let l = 0, g = G; l <= levels; l++, g >>= 1) { levelOff.push(pyrSize); pyrSize += g ** D; }
+  // local expansions: every level but the top
+  const localCells = levelOff[levels];
+  const locOff = L.TAB4 + pyrSize * L.CS4;
+  // the crowded cells' pushes per sorted body; at most n / (cap + 1) crowded cells
+  const crowdOff = locOff + localCells * L.LS4;
+  const crowdMax = Math.floor(n / (NEAR_CAP + 1)) + 1;
+  const size = bytes => Math.max(16, Math.ceil(bytes / 16) * 16);
   return {
-    treeCells: (L.TAB4 + pyrSize * L.CS4 + last * L.LS4) * 16,
-    treeMeta: (nCells + 3 * n + pyrSize) * 4,
-    treeSp: n * L.SP4 * 16,
-    treeWork: 3 * n * 4,
+    sizes: { n, G, levels, nCells, levelOff, pyrSize, localCells, locOff, crowdOff, crowdList: LIST_HEAD + (heavy ? nCells : 0),
+      metaTag: nCells, metaRow: nCells + 2 * n, metaCount: nCells + 3 * n },
+    buffers: {
+      treeBox: size(boxLayout(D).size * 4),
+      treeCount: size(nCells * 4),
+      treeBlocks: size(Math.max(nCells / 1024, 4) * 4),
+      treeWork: size(3 * n * 4),
+      treeMeta: size((nCells + 3 * n + pyrSize) * 4),
+      treeSp: size(n * L.SP4 * 16),
+      treeCells: size((crowdOff + n * Math.ceil(D * K / 4)) * 16),
+      treeLists: size((LIST_HEAD + (heavy ? nCells : 0) + crowdMax) * 4),
+    },
   };
 }
 

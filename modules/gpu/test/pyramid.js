@@ -95,7 +95,7 @@ test('refusals name what does not fit, with the numbers', () => {
   assert.equal(planPyramid({ D: 3, n: 1000, limits: SPEC_LIMITS, pos: pos(3), channels: stock, grid: 128 }).refusal,
     'the grid pyramid takes up to 2^20 cells; 128^3 is more');
   const big = plan(2, 1000000, v25());
-  assert.equal(big.refusal, 'the tree pass with 6 charges in 2D at 1,000,000 bodies needs 213 MiB for its cells; this device allows 128 MiB per buffer');
+  assert.equal(big.refusal, 'the tree pass with 6 charges in 2D at 1,000,000 bodies needs 259 MiB for its cells; this device allows 128 MiB per buffer');
   assert.equal(plan(2, 1000000, v25(), Object.assign({}, SPEC_LIMITS, { maxStorageBufferBindingSize: 2 ** 32 - 4, maxBufferSize: 2 ** 32 - 4 })).refusal, null);
   const bytes = pyramidMemory(2, 1000000, v25());
   assert.equal(bytes.treeCells, big.buffers.treeCells);
