@@ -1,0 +1,327 @@
+var test = require('tap').test;
+var createSimulator = require('../lib/createPhysicsSimulator');
+
+// modules/gridfield is an ES module (Node loads it with require since 22.12)
+var gridField = Promise.resolve(require('../modules/gridfield/index.js').default);
+
+// A simulator with `count` bodies in a few clumps, two on the same spot
+function makeSimulator(dimensions, count, seed) {
+  var random = require('ngraph.random').random(seed || 3);
+  var sim = createSimulator({ dimensions: dimensions });
+  for (var i = 0; i < count; ++i) {
+    var pos = {};
+    var clump = i % 3;
+    for (var k = 0; k < dimensions; ++k) pos['xyz'[k] || 'c' + (k + 1)] = i < 2 ? 4 : clump * 40 + (random.nextDouble() - 0.5) * (8 + 10 * clump);
+    sim.addBodyAt(pos);
+  }
+  for (i = 0; i < count; ++i) sim.store.mass[i] = 1 + (i % 4);
+  return sim;
+}
+
+// The field written plainly: every body's stencil as a list, a dense grid, line solves one line
+// at a time. Same rules as the module, different code.
+function reference(sim, o) {
+  var store = sim.store, n = store.n, D = store.D;
+  var quadratic = o.weights === 'quadratic', pad = quadratic ? 1 : 0;
+  var lo = [], hi = [];
+  for (var k = 0; k < D; ++k) {
+    lo[k] = Infinity; hi[k] = -Infinity;
+    for (var i = 0; i < n; ++i) { lo[k] = Math.min(lo[k], store.pos[i * D + k]); hi[k] = Math.max(hi[k], store.pos[i * D + k]); }
+  }
+  var cell = o.cell, size = [], coordinate;
+  if (o.anchor === 'box') {
+    for (k = 0; k < D; ++k) cell = Math.max(cell, (hi[k] + o.margin - (lo[k] - o.margin)) / o.maxCells);
+    var origin = [];
+    for (k = 0; k < D; ++k) {
+      size[k] = Math.min(Math.ceil((hi[k] + o.margin - (lo[k] - o.margin)) / cell), o.maxCells) + 2 + 2 * pad;
+      origin[k] = lo[k] - o.margin - pad * cell;
+    }
+    coordinate = function (x, axis) { return { g: (x - origin[axis]) / cell, shift: 0 }; };
+  } else {
+    var first = [];
+    for (k = 0; k < D; ++k) {
+      first[k] = Math.floor((lo[k] - o.margin) / cell) - pad;
+      size[k] = Math.floor((hi[k] + o.margin) / cell) - Math.floor((lo[k] - o.margin) / cell) + 2 + 2 * pad;
+    }
+    coordinate = function (x, axis) { return { g: x / cell, shift: first[axis] }; };
+  }
+  var cells = size.reduce(function (a, b) { return a * b; }, 1);
+  var area = Math.pow(cell, D);
+  var stencils = [];
+  for (i = 0; i < n; ++i) {
+    var axes = [];
+    for (k = 0; k < D; ++k) {
+      var c = coordinate(store.pos[i * D + k], k), points = [];
+      if (quadratic) {
+        var base = Math.round(c.g), d = c.g - base;
+        points.push({ at: base - 1 - c.shift, w: 0.5 * (0.5 - d) * (0.5 - d), s: -(0.5 - d) });
+        points.push({ at: base - c.shift, w: 0.75 - d * d, s: -2 * d });
+        points.push({ at: base + 1 - c.shift, w: 0.5 * (0.5 + d) * (0.5 + d), s: 0.5 + d });
+      } else {
+        var low = Math.floor(c.g), f = c.g - low;
+        points.push({ at: low - c.shift, w: 1 - f, s: -1 });
+        points.push({ at: low + 1 - c.shift, w: f, s: 1 });
+      }
+      axes.push(points);
+    }
+    var list = [{ index: 0, stride: 1, w: 1, s: new Array(D).fill(1) }];
+    axes.forEach(function (along, axis) {
+      var next = [];
+      list.forEach(function (entry) {
+        along.forEach(function (p) {
+          next.push({
+            index: entry.index + p.at * entry.stride, stride: entry.stride * size[axis], w: entry.w * p.w,
+            s: entry.s.map(function (v, m) { return v * (m === axis ? p.s : p.w); })
+          });
+        });
+      });
+      list = next;
+    });
+    stencils.push(list);
+  }
+  var value = o.value || function () { return 1; };
+  var F = new Float64Array(cells);
+  stencils.forEach(function (entries, body) {
+    entries.forEach(function (p) { F[p.index] += value(body) * p.w / area; });
+  });
+  if (o.diffuse) {
+    var g = o.diffuse / (cell * cell), stride = 1;
+    for (k = 0; k < D; ++k) {
+      var length = size[k];
+      for (var start = 0; start < cells; ++start) {
+        if (Math.floor(start / stride) % length !== 0) continue; // first point of a line along k
+        var line = [];
+        for (var j = 0; j < length; ++j) line.push(F[start + j * stride]);
+        var solved = solve(line, g);
+        for (j = 0; j < length; ++j) F[start + j * stride] = solved[j];
+      }
+      stride *= length;
+    }
+  }
+  var out = new Float64Array(n), gradient = new Float64Array(n * D);
+  stencils.forEach(function (entries, body) {
+    entries.forEach(function (p) {
+      var q = F[p.index] - (o.self === 'exclude' ? value(body) * p.w / area : 0);
+      out[body] += p.w * q;
+      for (var axis = 0; axis < D; ++axis) gradient[body * D + axis] += p.s[axis] * q / cell;
+    });
+  });
+  return { value: out, gradient: gradient, cells: cells };
+}
+
+// -g u[i-1] + (1 + 2g) u[i] - g u[i+1] = rhs[i], zero outside
+function solve(rhs, g) {
+  var L = rhs.length, c = [], d = [], a = -g, b = 1 + 2 * g;
+  c[0] = a / b; d[0] = rhs[0] / b;
+  for (var i = 1; i < L; ++i) {
+    var m = b - a * c[i - 1];
+    c[i] = a / m;
+    d[i] = (rhs[i] - a * d[i - 1]) / m;
+  }
+  var u = new Array(L);
+  u[L - 1] = d[L - 1];
+  for (i = L - 2; i >= 0; --i) u[i] = d[i] - c[i] * u[i + 1];
+  return u;
+}
+
+// The reference, computed where the stage `name` runs (the quad tree nudges bodies that share a
+// spot, so positions at the start of the step are not the ones the field sees)
+function expectedAt(sim, name, o) {
+  var expected = {};
+  sim.addStage('reference', function () {
+    var result = reference(sim, o);
+    expected.value = result.value;
+    expected.gradient = result.gradient;
+  }, { before: name });
+  return expected;
+}
+
+function relative(a, b) {
+  var num = 0, den = 0;
+  for (var i = 0; i < b.length; ++i) { num += (a[i] - b[i]) * (a[i] - b[i]); den += b[i] * b[i]; }
+  return Math.sqrt(num / (den || 1));
+}
+
+test('grid field matches a plain reference', function (t) {
+  return gridField.then(function (addGridField) {
+    [2, 3].forEach(function (D) {
+      ['box', 'lattice'].forEach(function (anchor) {
+        ['linear', 'quadratic'].forEach(function (weights) {
+          ['include', 'exclude'].forEach(function (self) {
+            [0, 30].forEach(function (diffuse) {
+              var sim = makeSimulator(D, 60);
+              var o = {
+                anchor: anchor, weights: weights, self: self, cell: 3, margin: 5, diffuse: diffuse,
+                // a small box cap, so the cell grows
+                maxCells: anchor === 'box' && D === 2 ? 20 : 1000
+              };
+              addGridField(sim, 'field', {
+                anchor: anchor, cell: 'h', margin: 'm', maxCells: o.maxCells, self: self,
+                deposit: { weights: weights },
+                smooth: diffuse ? { diffuse: diffuse } : undefined,
+                params: { h: 3, m: function () { return 5; } },
+                into: { value: 'density', gradient: 'slope' }
+              });
+              var expected = expectedAt(sim, 'field', o);
+              sim.step();
+              var name = D + 'D ' + anchor + ' ' + weights + ' ' + self + (diffuse ? ' smoothed' : '');
+              t.ok(relative(sim.store.density.subarray(0, 60), expected.value) < 1e-12, name + ': value');
+              t.ok(relative(sim.store.slope.subarray(0, 60 * D), expected.gradient) < 1e-12, name + ': gradient');
+            });
+          });
+        });
+      });
+    });
+  });
+});
+
+test('deposit values can read body columns and params', function (t) {
+  return gridField.then(function (addGridField) {
+    var sim = makeSimulator(2, 40);
+    addGridField(sim, 'field', {
+      anchor: 'lattice', cell: 2, deposit: { value: 'k * mass', weights: 'quadratic' }, self: 'exclude',
+      params: { k: 0.5 }, into: { value: 'density', gradient: 'slope' }
+    });
+    var expected = expectedAt(sim, 'field', {
+      anchor: 'lattice', weights: 'quadratic', self: 'exclude', cell: 2, margin: 0,
+      value: function (i) { return 0.5 * sim.store.mass[i]; }
+    });
+    sim.step();
+    t.ok(relative(sim.store.density.subarray(0, 40), expected.value) < 1e-12, 'value');
+    t.ok(relative(sim.store.slope.subarray(0, 80), expected.gradient) < 1e-12, 'gradient');
+  });
+});
+
+test('a spread out lattice keeps only touched cells, with the same numbers', function (t) {
+  return gridField.then(function (addGridField) {
+    [2, 3].forEach(function (D) {
+      ['linear', 'quadratic'].forEach(function (weights) {
+        var columns = [];
+        [Infinity, 0].forEach(function (denseLimit) {
+          // bodies far apart: hundreds of grid cells each, so the hash map grows a few times
+          var sim = makeSimulator(D, 400, 5);
+          for (var i = 0; i < sim.store.n * D; ++i) sim.store.pos[i] *= 9;
+          addGridField(sim, 'field', {
+            anchor: 'lattice', cell: 1.5, margin: 2, deposit: { weights: weights, value: 'mass' }, self: 'exclude',
+            denseLimit: denseLimit, into: { value: 'v', gradient: 'g' }
+          });
+          ['clear', 'repulsion', 'drag', 'springs', 'integrate'].forEach(function (name) { sim.removeStage(name); });
+          sim.step();
+          columns.push(Array.from(sim.store.v.subarray(0, 400)).concat(Array.from(sim.store.g.subarray(0, 400 * D))));
+        });
+        var same = columns[0].every(function (v, i) { return Object.is(v, columns[1][i]); });
+        t.ok(same, D + 'D ' + weights + ': hash map and dense grid agree exactly');
+      });
+    });
+  });
+});
+
+test('one body: its own share is left out, and a lone body feels nothing', function (t) {
+  return gridField.then(function (addGridField) {
+    var sim = createSimulator({ dimensions: 2 });
+    sim.addBodyAt({ x: 1.3, y: -0.4 });
+    addGridField(sim, 'alone', { anchor: 'box', cell: 1, deposit: { weights: 'quadratic' }, self: 'exclude', into: { value: 'v', gradient: 'g' } });
+    sim.step();
+    t.equal(sim.store.v[0], 0, 'no density of others');
+    t.same(Array.from(sim.store.g.subarray(0, 2)), [0, 0], 'no slope');
+  });
+});
+
+test('the density adds up to the deposits', function (t) {
+  return gridField.then(function (addGridField) {
+    // Two bodies on the same spot, cloud-in-cell: each reads the bilinear density, which
+    // integrates to 2 over the plane; at a grid point it is 2 / cell^2
+    var sim = createSimulator({ dimensions: 2 });
+    sim.addBodyAt({ x: 4, y: 4 });
+    sim.addBodyAt({ x: 4, y: 4 });
+    addGridField(sim, 'pair', { anchor: 'lattice', cell: 2, into: { value: 'v', gradient: 'g' } });
+    sim.step();
+    t.equal(sim.store.v[0], 0.5, 'two bodies on one grid point of a 2 x 2 cell');
+  });
+});
+
+test('bodies at infinity or NaN do not break the grid', function (t) {
+  return gridField.then(function (addGridField) {
+    var sim = makeSimulator(2, 10);
+    sim.store.pos[0] = Infinity;
+    sim.store.pos[3] = NaN;
+    addGridField(sim, 'field', { anchor: 'box', cell: 1, maxCells: 64, into: { value: 'v', gradient: 'g' } });
+    // the tree cannot take a body at infinity; only the field runs
+    ['clear', 'repulsion', 'drag', 'springs', 'integrate'].forEach(function (name) { sim.removeStage(name); });
+    sim.step();
+    t.ok(Number.isFinite(sim.store.v[5]) && sim.store.v[5] > 0, 'others still get a density');
+  });
+});
+
+test('a cell of 0 turns the field off', function (t) {
+  return gridField.then(function (addGridField) {
+    var sim = makeSimulator(2, 10);
+    addGridField(sim, 'field', { cell: 'springLength * s', params: { s: 0 }, into: { value: 'v', gradient: 'g' } });
+    sim.store.v.fill(7);
+    sim.step();
+    t.equal(sim.store.v[3], 0, 'value 0');
+  });
+});
+
+test('options are checked', function (t) {
+  return gridField.then(function (addGridField) {
+    var sim = makeSimulator(2, 4);
+    var into = { value: 'v', gradient: 'g' };
+    t.throws(function () { addGridField(makeSimulator(4, 4), 'f', { cell: 1, into: into }); }, /grid fields are 2D and 3D; this layout has 4 dimensions/);
+    t.throws(function () { addGridField(sim, 'f', { cell: 1, anchor: 'ring', into: into }); }, /anchor should be 'box' or 'lattice'/);
+    t.throws(function () { addGridField(sim, 'f', { cell: 1, deposit: { weights: 'cubic' }, into: into }); }, /deposit.weights/);
+    t.throws(function () { addGridField(sim, 'f', { cell: 1, self: 'maybe', into: into }); }, /self should be/);
+    t.throws(function () { addGridField(sim, 'f', { cell: 1, into: { value: 'v' } }); }, /needs two column names/);
+    t.throws(function () { addGridField(sim, 'f', { into: into }); }, /needs a cell size/);
+    t.throws(function () { addGridField(sim, 'f', { cell: 1, maxCells: 2.5, into: into }); }, /maxCells/);
+    t.throws(function () { addGridField(sim, 'f', { cell: 1, smooth: {}, into: into }); }, /smooth needs diffuse/);
+    t.throws(function () { addGridField(sim, 'f', { cell: 'h +', into: into }); }, /Grid field f, cell/);
+    t.throws(function () { addGridField(sim, 'f', { cell: 'mass', into: into }); }, /Grid field f, cell/);
+    t.throws(function () { addGridField(sim, 'f', { cell: 1, params: { unit: 2 }, into: into }); }, /parameter unit/);
+    sim.store.define('g3', Float64Array, 3);
+    t.throws(function () { addGridField(sim, 'f', { cell: 1, into: { value: 'v', gradient: 'g3' } }); }, /column g3 should have 2/);
+  });
+});
+
+test('description and dispose', function (t) {
+  return gridField.then(function (addGridField) {
+    var sim = makeSimulator(2, 4);
+    sim.store.define('v');
+    var field = addGridField(sim, 'field', {
+      anchor: 'lattice', cell: 'unit / 2', margin: 1, smooth: { diffuse: 'r * r' }, params: { r: function () { return 3; } },
+      deposit: { value: 'mass', weights: 'quadratic' }, self: 'exclude', after: 'springs',
+      into: { value: 'v', gradient: 'g' }
+    });
+    t.same(sim.stages(), ['clear', 'repulsion', 'drag', 'springs', 'field', 'integrate'], 'placed after springs');
+    t.equal(field.name, 'field', 'handle');
+    t.ok(sim.store.has('g') && sim.store.has('v'), 'columns');
+    field.dispose();
+    t.notOk(sim.getStage('field'), 'stage removed');
+    t.notOk(sim.store.has('g'), 'its own column removed');
+    t.ok(sim.store.has('v'), 'a column it did not define stays');
+  });
+});
+
+test('the stage describes itself for other engines', function (t) {
+  return gridField.then(function (addGridField) {
+    var sim = makeSimulator(2, 4);
+    addGridField(sim, 'gas', {
+      anchor: 'lattice', cell: 'h', params: { h: function (context) { return context.settings.springLength / 10; } },
+      deposit: { weights: 'quadratic', value: 'mass' }, self: 'exclude', into: { value: 'gasDensity', gradient: 'gasSlope' }
+    });
+    if (!sim.program) {
+      t.skip('this simulator has no program()');
+      return;
+    }
+    var stage = sim.program().stages.filter(function (s) { return s.name === 'gas'; })[0];
+    t.equal(stage.shape, 'grid', 'shape');
+    t.same(stage.reads.map(function (r) { return r.column; }), ['pos', 'mass'], 'reads positions and the deposit column');
+    t.same(stage.writes, [
+      { space: 'nodes', column: 'gasDensity', mode: 'set' },
+      { space: 'nodes', column: 'gasSlope', mode: 'set' }
+    ], 'writes two columns');
+    t.same(stage.params, [{ name: 'h', kind: 'host' }], 'a host param');
+    t.same(stage.args.cell, { kind: 'expression', text: 'h' }, 'cell as text');
+    t.equal(stage.args.anchor, 'lattice', 'options in args');
+  });
+});
