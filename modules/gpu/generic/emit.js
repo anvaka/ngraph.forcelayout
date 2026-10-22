@@ -9,8 +9,10 @@
 import formula from '../../../lib/formula.js';
 import WGSL, { emitLaw, lawPrologue } from '../wgsl/print.js';
 import { THREADS, readsOf, writesOf, slotValue } from './plan.js';
+import { header, BINDINGS, bindingsOf, u32, columnRef, local, locals, settingsLines, scopeOf, NUDGE, AXES, withTables } from './common.js';
+import { gatherCode, chunkKernel, linkKernel, pairCode, groupValueCode, groupRunsKernel, groupSumKernel } from './links.js';
 
-const AXES = 'xyzw';
+export { BINDINGS, bindingsOf };
 
 /**
  * The WGSL of every kernel of `plan`, by kernel name. `printer` is a WGSL printer (its warnings
@@ -20,66 +22,16 @@ export function kernelCode(plan, printer = WGSL) {
   const out = {};
   plan.kernelList.forEach(kernel => {
     if (kernel.kind === 'node') out[kernel.name] = nodeKernel(plan, kernel, printer);
+    else if (kernel.kind === 'link') out[kernel.name] = linkKernel(plan, kernel, printer);
+    else if (kernel.kind === 'chunks') out[kernel.name] = chunkKernel(plan, kernel, printer);
+    else if (kernel.kind === 'groupRuns') out[kernel.name] = groupRunsKernel(plan, kernel);
+    else if (kernel.kind === 'groupSum') out[kernel.name] = groupSumKernel(plan, kernel);
     else if (kernel.kind === 'reduce') out[kernel.name] = reduceKernel(plan, kernel);
     else if (kernel.kind === 'fireReduce') out[kernel.name] = fireReduceKernel(plan);
     else if (kernel.kind === 'fireState') out[kernel.name] = fireStateKernel(plan);
+    // a host step is no kernel
   });
   return out;
-}
-
-// The bindings every kernel of a plan shares (one pipeline layout for all of them)
-function header(plan) {
-  return `struct Params { n: u32, groups: u32, fireGroups: u32, links: u32 };
-@group(0) @binding(0) var<uniform> P: Params;
-@group(0) @binding(1) var<uniform> V: array<vec4f, ${plan.slot.floats / 4}>;
-@group(0) @binding(2) var<storage, read_write> S: array<f32>;
-@group(0) @binding(3) var<storage, read> H: array<f32>;
-@group(0) @binding(4) var<storage, read> L: array<u32>;
-@group(0) @binding(5) var<storage, read> X: array<f32>;
-@group(0) @binding(6) var<storage, read_write> Y: array<f32>;
-`;
-}
-
-export const BINDINGS = ['uniform', 'dynamic', 'storage', 'read', 'read', 'read', 'storage'];
-// The kernel with the pyramid's section also reads its uniform and three buffers
-const TREE_BINDINGS = BINDINGS.concat(['uniform', 'read', 'read', 'read']);
-
-/**
- * The bindings of a kernel of a plan (see device.js getPipeline())
- */
-export function bindingsOf(kernel) {
-  return kernel.tree ? TREE_BINDINGS : BINDINGS;
-}
-
-function u32(value) {
-  return value + 'u';
-}
-
-// Where row `row` of `column` lives: an expression for each of its numbers
-function columnRef(plan, column, row, afterIntegrate) {
-  const c = plan.columns[column];
-  const out = [];
-  for (let k = 0; k < c.width; k++) {
-    const at = c.width === 1 ? `${u32(c.offset)} + ${row}` : `${u32(c.offset)} + ${row} * ${u32(c.width)} + ${u32(k)}`;
-    const buffer = c.buffer === 'X' ? (afterIntegrate ? 'Y' : 'X') : c.buffer;
-    out.push(`${buffer}[${at}]`);
-  }
-  return out;
-}
-
-function local(column, k, width) {
-  return width === 1 ? `c_${column}` : `c_${column}_${k}`;
-}
-
-function locals(plan, column) {
-  const width = plan.columns[column].width;
-  const out = [];
-  for (let k = 0; k < width; k++) out.push(local(column, k, width));
-  return out;
-}
-
-function settingsLines(plan) {
-  return plan.slot.entries.filter(e => e.kind === 'setting').map(e => `  let s_${e.stage} = ${slotValue(e.index)};`).join('\n');
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -135,6 +87,8 @@ function nodeKernel(plan, kernel, printer) {
   kernel.sections.forEach(section => { if (section.stage && section.stage.sums) section.stage.sums.forEach(name => sumsRead.add(name)); });
   sumsRead.forEach(name => {
     const sum = plan.sums[name];
+    // a sum per group is read by index where the formula reads it
+    if (sum.grouped) return;
     for (let k = 0; k < sum.width; k++) lines.push(`  let g_${name}_${k} = S[${u32(sum.offset + k)}];`);
   });
   // what this kernel's sums add up, per row
@@ -165,7 +119,8 @@ function nodeKernel(plan, kernel, printer) {
 
 function sectionCode(plan, kernel, section, index, printer) {
   const code = sectionBody(plan, kernel, section, index, printer);
-  if (section.gate === undefined || section.kind === 'pairs' || section.kind === 'tree') return code;
+  // tree passes gate their channels, the pair track's section its stage
+  if (section.gate === undefined || section.kind === 'pairs' || section.kind === 'tree' || (section.kind === 'pairformula' && section.sort)) return code;
   // a stage's `when`: the same branch for every thread
   return [`if (${slotValue(section.gate)} != 0.0) {`].concat(code.map(line => '  ' + line), ['}']);
 }
@@ -180,7 +135,12 @@ function sectionBody(plan, kernel, section, index, printer) {
     case 'drag':
       return [`if (c_pinned == 0.0) { ${force.map((f, k) => `${f} -= s_dragCoefficient * ${velocity[k]};`).join(' ')} }`];
     case 'springs':
-      return springsCode(plan, pos, force);
+    case 'gather':
+      return gatherCode(plan, section, printer);
+    case 'groupsum':
+      return groupValueCode(plan, kernel, section, printer);
+    case 'pairformula':
+      return pairCode(plan, section, printer);
     case 'pairs':
       return pairsCode(plan, section, index, pos, force, printer);
     case 'tree':
@@ -207,26 +167,6 @@ function sectionBody(plan, kernel, section, index, printer) {
     }
   }
   throw new Error('unknown section ' + section.kind);
-}
-
-// The stock springs as a gather: every body adds the pull of its own links (the CPU adds each
-// link to both ends, which is the same sum)
-function springsCode(plan, pos, force) {
-  const D = plan.D;
-  const d = [], k = [];
-  for (let a = 0; a < D; a++) { d.push('d' + a); k.push(a); }
-  return [
-    'if (live) {',
-    '  for (var e = L[row]; e < L[row + 1u]; e++) {',
-    '    let j = L[P.n + 1u + e];',
-    '    ' + k.map(a => `var d${a} = X[j * ${u32(D)} + ${u32(a)}] - ${pos[a]};`).join(' '),
-    `    var r = sqrt(${d.map(x => x + ' * ' + x).join(' + ')});`,
-    `    if (r == 0.0) { ${k.map(a => `d${a} = nudge(row, j, ${u32(a)});`).join(' ')} r = sqrt(${d.map(x => x + ' * ' + x).join(' + ')}); }`,
-    '    let pull = s_springCoefficient * (r - s_springLength) / r;',
-    '    ' + k.map(a => `${force[a]} += pull * d${a};`).join(' '),
-    '  }',
-    '}',
-  ];
 }
 
 // Exact repulsion over all pairs: tiles of 256 bodies (their positions and charges) in workgroup
@@ -324,7 +264,7 @@ function channelTerms(plan, section, charges, charge, r2, printer, into) {
     let line;
     if (!c.law) line = add('inverseCube');
     else {
-      const code = renameLaw(emitLaw(c.law, D, 'r', 'k' + ch, undefined, printer), ch);
+      const code = withTables(renameLaw(emitLaw(c.law, D, 'r', 'k' + ch, undefined, printer), ch), c.tables);
       line = c.law.hasRange ? `if (rr <= law${ch}Range2) { ${code} ${add('k' + ch)} }` : `{ ${code} ${add('k' + ch)} }`;
     }
     // a gated pass adds nothing on the steps where its `when` does not hold
@@ -354,39 +294,6 @@ function sumCode(plan, kernel, section, index, printer) {
   const lines = compiled.lines.slice();
   codes.forEach((code, k) => lines.push(`sv${s}_${k} = select(0.0, ${code}, live);`));
   return ['{'].concat(lines.map(line => '  ' + line), ['}']);
-}
-
-// What names mean in a formula on the GPU: the body's own columns (locals of the kernel), the
-// stage's params and built in values (from the step's slot), sums (from S)
-function scopeOf(plan, section) {
-  const D = plan.D;
-  return {
-    D,
-    name(key) {
-      const column = plan.columns[key];
-      if (key === 'pos') {
-        // positions are relative to the origin on the device; a formula sees where bodies are
-        return { type: 'vec', codes: locals(plan, 'pos').map((name, k) => `(${name} + s_origin_${k})`), write: null };
-      }
-      if (column) {
-        const names = locals(plan, key);
-        const write = (op, value) => {
-          const codes = value.codes || [value.code];
-          return names.map((name, k) => `${name} ${op} ${codes[k]};`);
-        };
-        return column.width === 1 ? { type: 'num', code: names[0], write } : { type: 'vec', codes: names, write };
-      }
-      if (section.params && section.params[key] !== undefined) return { type: 'num', code: slotValue(section.params[key]) };
-      const sum = plan.sums[key];
-      if (sum) {
-        const codes = [];
-        for (let k = 0; k < sum.width; k++) codes.push(`g_${key}_${k}`);
-        return sum.width === 1 ? { type: 'num', code: codes[0] } : { type: 'vec', codes };
-      }
-      if (section.builtIns && section.builtIns[key] !== undefined) return { type: 'num', code: slotValue(section.builtIns[key]) };
-      return undefined;
-    },
-  };
 }
 
 // Adds up the kernel's sums over its workgroup with a fixed tree, and writes one partial per
@@ -508,20 +415,4 @@ function fireStateKernel(plan) {
   out.push('  }');
   out.push('}');
   return out.join('\n') + '\n';
-}
-
-// A direction for two bodies on the same spot, from their indices: axis k of a unit vector of
-// about 0.01, the same for (a, b) and (b, a) but for the sign, so the two are pushed apart
-function NUDGE(D) {
-  return `fn nudgeAxis(a: u32, b: u32, k: u32) -> f32 {
-  var h = min(a, b) * 747796405u + max(a, b) * 2891336453u + k * 1013904223u + 1u;
-  h = ((h >> 16u) ^ h) * 0x45d9f3bu; h = ((h >> 16u) ^ h) * 0x45d9f3bu; h = (h >> 16u) ^ h;
-  return f32(h) * (2.0 / 4294967296.0) - 1.0;
-}
-fn nudge(a: u32, b: u32, k: u32) -> f32 {
-  var norm = 0.0;
-  for (var axis = 0u; axis < ${u32(D)}; axis++) { let x = nudgeAxis(a, b, axis); norm += x * x; }
-  let x = select(nudgeAxis(a, b, k), select(0.0, 1.0, k == 0u), norm == 0.0);
-  return select(-0.01, 0.01, a < b) * x / select(sqrt(norm), 1.0, norm == 0.0);
-}`;
 }

@@ -7,18 +7,22 @@
 //
 // One lowering decides both what plan() says and what runOnGpu() builds (lower() below), so a
 // "runs" verdict is the plan the runner compiles. It runs, in any number of dimensions:
-//  - node formulas and sums over bodies (global), in CPU stage order;
+//  - node formulas, sums over bodies (global, or per group of a column the host sets), and link
+//    formulas (that pull, add into body columns, or set their own link's columns), in CPU stage
+//    order;
 //  - the stock repulsion and extra passes (addRepulsion), with any law the printer accepts and
 //    any charge and sensitivity columns: exact pairs up to 1,024 bodies, the generic grid pyramid
 //    above in 2D and 3D (exact pairs up to 16,384 bodies in 4 or more dimensions); the exact
 //    stock step in 2D above 1,024 bodies keeps today's grid kernels (the stock template);
-//  - drag, the stock springs (one length and stiffness), Euler or FIRE with any inertia column;
+//  - drag, the stock springs with the links' own lengths and stiffness, Euler or FIRE with any
+//    inertia column;
 //  - `when` on any of these.
 // Everything else gets a refusal that says what does not run.
 import formula from '../../lib/formula.js';
-import { createPrinter, emitLaw, lawValueProblem, lawValueWarnings, f32Problem } from './wgsl/print.js';
+import { createPrinter, emitLaw, lawValueProblem, lawValueWarnings, f32Problem, F32_MAX } from './wgsl/print.js';
 import { schedule } from './schedule.js';
 import { physicsStages, isGuard } from './program.js';
+import { printPairFormula } from './pairs/formula.js';
 
 // Limits the module asks a device for, and plans against
 export const LIMIT_NAMES = [
@@ -104,6 +108,7 @@ export function lower(program, simulator, limits, options = {}) {
   const printer = createPrinter(warn);
   const laws = Object.create(null);
   const facts = programFacts(program);
+  const data = storeFacts(program, simulator);
   program.stages.forEach(stage => {
     const verdict = checkStage(stage, program, simulator, printer, laws, facts);
     stages[stage.name] = verdict.runs ? { runs: true, how: verdict.how } : { runs: false, reason: verdict.reason };
@@ -118,7 +123,7 @@ export function lower(program, simulator, limits, options = {}) {
   const stagesRun = Object.keys(stages).every(name => stages[name].runs);
   let plan = null;
   if (stagesRun && reasons.length === 0) {
-    plan = schedule(program, laws, limits, Object.assign({}, options, { warn }));
+    plan = schedule(program, laws, limits, Object.assign({}, options, { warn, data }));
     if (plan.refusal) {
       reasons.push(plan.refusal);
       plan = null;
@@ -133,10 +138,42 @@ export function lower(program, simulator, limits, options = {}) {
 
 // What the stages need to know about the program as a whole
 function programFacts(program) {
-  const columns = Object.create(null), sums = Object.create(null);
+  const columns = Object.create(null), sums = Object.create(null), links = Object.create(null);
   program.columns.nodes.forEach(column => { columns[column.name] = column; });
+  (program.columns.links || []).forEach(column => { links[column.name] = column; });
   program.sums.forEach(sum => { sums[sum.name] = sum; });
-  return { columns, sums, D: program.dims };
+  return { columns, links, sums, D: program.dims };
+}
+
+// What a plan needs to know of the store's numbers: whether any link has its own length or
+// stiffness (the stock template runs only while none has), the most links of one body, and how
+// many groups each column that sums are grouped by has (the largest id + 1, as on the CPU)
+function storeFacts(program, simulator) {
+  const springs = simulator.springStore;
+  let linksDefault = true;
+  for (let i = 0; i < springs.n && linksDefault; i++) {
+    if (springs.length[i] >= 0 || springs.coefficient[i] > 0) linksDefault = false;
+  }
+  // the most links one body has: hubs make gathers go through chunks of links
+  const degree = new Uint32Array(simulator.store.n);
+  let maxDegree = 0;
+  for (let s = 0; s < springs.n; s++) {
+    const a = ++degree[springs.from[s]], b = ++degree[springs.to[s]];
+    if (a > maxDegree) maxDegree = a;
+    if (b > maxDegree) maxDegree = b;
+  }
+  const groups = {};
+  program.sums.forEach(sum => {
+    if (!sum.group || groups[sum.group] !== undefined || sum.over !== 'nodes') return;
+    const column = simulator.store[sum.group];
+    let largest = -1;
+    for (let i = 0; column && i < simulator.store.n; i++) {
+      const g = column[i];
+      if (g >= 0 && Math.floor(g) > largest) largest = Math.floor(g);
+    }
+    groups[sum.group] = largest + 1;
+  });
+  return { linksDefault, maxDegree, groups };
 }
 
 // The lowering table: what each kind of stage needs to run here
@@ -148,7 +185,7 @@ function checkStage(stage, program, simulator, printer, laws, facts) {
     case 'drag':
       return runs('part of the step');
     case 'springs':
-      return checkSprings(stage, simulator);
+      return stage.args.counters ? refuse('WebGPU has no adaptive time step') : runs('part of the step');
     case 'repulsion':
     case 'tree':
       return columnProblem ? refuse(columnProblem) : checkTree(stage, simulator, printer, laws);
@@ -158,15 +195,18 @@ function checkStage(stage, program, simulator, printer, laws, facts) {
       return columnProblem ? refuse(columnProblem) : checkFormula(stage, facts, printer);
     case 'sum':
       if (stage.args.over !== 'nodes') return refuse('WebGPU does not run sums over links yet');
-      if (stage.args.group) return refuse('WebGPU does not run sums per group yet');
       if (stage.args.reduce !== 'sum') return refuse(`WebGPU does not run ${stage.args.reduce} over bodies yet`);
+      if (stage.args.group) {
+        const group = facts.columns[stage.args.group];
+        if (!group || group.writer !== 'host') return refuse('WebGPU runs sums per group only with group ids set by the host');
+      }
       return columnProblem ? refuse(columnProblem) : checkFormula(stage, facts, printer);
     case 'link':
-      return refuse('WebGPU does not run link formulas yet');
+      return columnProblem ? refuse(columnProblem) : checkLink(stage, facts, printer);
     case 'pair':
-      return refuse('WebGPU does not run pair formulas yet');
+      return columnProblem ? refuse(columnProblem) : checkPair(stage, facts, printer);
     case 'host':
-      return refuse('WebGPU does not run host steps yet');
+      return runs(`on the host, on the steps where its \`when\` holds: the step stops there and reads back ${(stage.reads || []).map(r => r.column).join(', ') || 'nothing'}`);
     case 'js':
       return refuse('JavaScript stages run on the CPU only (formula stages and host steps run on other engines too)');
     case 'pair rules':
@@ -191,21 +231,11 @@ function columnsProblem(stage, facts) {
   return null;
 }
 
-function checkSprings(stage, simulator) {
-  if (stage.args.counters) return refuse('WebGPU has no adaptive time step');
-  const springs = simulator.springStore;
-  for (let i = 0; i < springs.n; i++) {
-    if (springs.length[i] >= 0 || springs.coefficient[i] > 0) {
-      return refuse('WebGPU does not run links with their own length or stiffness yet');
-    }
-  }
-  return runs('part of the step');
-}
-
 function checkTree(stage, simulator, printer, laws) {
   const described = stage.args.channels[0].law;
-  if (described.tables.length) return refuse('WebGPU does not run laws with lookup tables yet');
   if (described.functions.length) return refuse('laws with JavaScript functions run on the CPU only');
+  const badTable = tableProblem(described.tables);
+  if (badTable) return refuse("the law's " + badTable);
   if (described.isDefault) {
     laws[stage.name] = null;
     return runs('part of the step');
@@ -235,9 +265,8 @@ function checkIntegrate(stage, facts) {
 
 // A node formula or a sum: what it reads must run here, and its WGSL must print
 function checkFormula(stage, facts, printer) {
-  if (stage.tables.length) return refuse('WebGPU does not run lookup tables in formulas yet');
-  const grouped = stage.sums.find(name => facts.sums[name] && facts.sums[name].group);
-  if (grouped) return refuse(`WebGPU does not run sums per group yet (reads ${grouped})`);
+  const badTable = tableProblem(stage.tables);
+  if (badTable) return refuse(badTable);
   try {
     printFormula(stage, facts, printer);
   } catch (e) {
@@ -246,25 +275,79 @@ function checkFormula(stage, facts, printer) {
   return runs('part of the step');
 }
 
+// A link formula: one that moves bodies (pull, or adds into body columns) is evaluated at both
+// ends of every link, one that only writes link columns by a thread per link; one kernel cannot
+// do both yet
+function checkLink(stage, facts, printer) {
+  if (stage.args.counters) return refuse('WebGPU has no adaptive time step');
+  const badTable = tableProblem(stage.tables);
+  if (badTable) return refuse(badTable);
+  const moves = stage.writes.some(write => write.via === 'pull' || (write.space === 'nodes' && write.end));
+  const linkWrites = stage.writes.filter(write => write.space === 'links');
+  if (moves && linkWrites.length) return refuse('WebGPU does not run link formulas that both move bodies and write link columns yet');
+  for (const write of linkWrites) {
+    const column = facts.links[write.column];
+    if (column && !FLOATS[column.type]) return refuse(`WebGPU does not run formulas that write the ${column.type} link column ${write.column} yet`);
+  }
+  try {
+    printFormula(stage, facts, printer, true);
+  } catch (e) {
+    return refuse(e.message);
+  }
+  return runs('part of the step');
+}
+
+// A pair formula: its WGSL must print (the pair track's printer; tables are not taken yet)
+function checkPair(stage, facts, printer) {
+  if (typeof stage.args.radius === 'object' && stage.args.radius.kind === 'number') {
+    const problem = f32Problem(stage.args.radius.value);
+    if (problem) return refuse('the radius: ' + problem);
+  }
+  try {
+    printPairFormula(stage, {
+      D: facts.D, printer, columns: facts.columns,
+      read: (column, who, k) => `${who}_${column}_${k}`,
+      param: name => 'p_' + name, builtIn: name => 'b_' + name,
+      sumWidth: name => (facts.sums[name] && !facts.sums[name].group ? (facts.sums[name].width === 'D' ? facts.D : facts.sums[name].width) : 0),
+      sum: (name, k) => `g_${name}_${k}`,
+    });
+  } catch (e) {
+    return refuse(e.message);
+  }
+  return runs('part of the step');
+}
+
 // Prints a formula with a scope that knows every name the stage can read, to find literals and
-// builtins the GPU cannot take
-function printFormula(stage, facts, printer) {
+// builtins the GPU cannot take. A link formula (`link`) knows r, pull, the link's values and
+// columns, and body columns at either end (name_i, name_j).
+function printFormula(stage, facts, printer, link) {
+  const value = (codes, write) => (codes.length === 1 ? { type: 'num', code: codes[0], write } : { type: 'vec', codes, write });
+  const columnValue = (name, key) => {
+    const column = facts.columns[name];
+    if (!column || column.hidden) return undefined;
+    const width = column.width === 'D' ? facts.D : column.width;
+    const codes = Array.from({ length: width }, (_, k) => `c_${key}_${k}`);
+    return value(codes, (op, v) => codes.map((code, k) => `${code} ${op} ${(v.codes || [v.code])[k]};`));
+  };
+  const write = code => (op, v) => [`${code} ${op} ${v.code};`];
   const scope = {
     D: facts.D,
     name(key) {
-      const column = facts.columns[key];
-      if (column && !column.hidden) {
-        const width = column.width === 'D' ? facts.D : column.width;
-        const codes = Array.from({ length: width }, (_, k) => `c_${key}_${k}`);
-        const write = (op, value) => codes.map((code, k) => `${code} ${op} ${(value.codes || [value.code])[k]};`);
-        return width === 1 ? { type: 'num', code: codes[0], write } : { type: 'vec', codes, write };
+      if (link) {
+        if (key === 'r' || key === 'length' || key === 'coefficient' || key === 'pull' || facts.links[key]) return { type: 'num', code: 'l_' + key, write: write('l_' + key) };
+        const end = /^(.+)_([ij])$/.exec(key);
+        if (end) return columnValue(end[1], key);
+      } else {
+        const column = columnValue(key, key);
+        if (column) return column;
       }
       if (stage.params.some(p => p.name === key)) return { type: 'num', code: 'p_' + key };
+      if (stage.tables.some(t => t.name === key)) return { call: args => `t_${key}(${args[0]})` };
       const sum = facts.sums[key];
       if (sum) {
         const width = sum.width === 'D' ? facts.D : sum.width;
         const codes = Array.from({ length: width }, (_, k) => `g_${key}_${k}`);
-        return width === 1 ? { type: 'num', code: codes[0] } : { type: 'vec', codes };
+        return sum.group ? { index: () => value(codes) } : value(codes);
       }
       if (stage.builtIns.indexOf(key) >= 0) return { type: 'num', code: 'b_' + key };
       return undefined;
@@ -297,6 +380,17 @@ function budgets(plan, limits, reasons, printer) {
   });
   const most = limits.maxComputeWorkgroupsPerDimension * THREADS;
   if (plan.nodes > most) reasons.push(`WebGPU runs up to ${most.toLocaleString('en-US')} bodies (one thread each); this layout has ${plan.nodes.toLocaleString('en-US')}`);
+}
+
+// Why lookup tables do not fit 32-bit floats, or null (values beyond f32; tiny ones may become 0,
+// which a table can afford)
+function tableProblem(tables) {
+  for (const table of tables || []) {
+    for (const value of [table.from, table.to].concat(Array.from(table.values))) {
+      if (!Number.isFinite(value) || Math.abs(value) > F32_MAX) return `table ${table.name}: ${f32Problem(value)}`;
+    }
+  }
+  return null;
 }
 
 function megabytes(bytes) {

@@ -27,12 +27,15 @@ export { GUARD, STOCK_STAGES, isGuard, physicsStages, SMALL_GRAPH };
  */
 export function schedule(program, laws, limits, options = {}) {
   const nodes = program.spaces.nodes;
-  if (!options.generic && nodes > (options.smallGraph || SMALL_GRAPH) && isStockStep(program, laws)) return stockPlan(program, laws.repulsion || null);
-  const plan = genericPlan(program, laws, { limits, warn: options.warn, smallGraph: options.smallGraph });
+  const data = options.data || { linksDefault: true, groups: {} };
+  if (!options.generic && nodes > (options.smallGraph || SMALL_GRAPH) && isStockStep(program, laws, data)) {
+    return Object.assign(stockPlan(program, laws.repulsion || null), { dataKey: JSON.stringify(data) });
+  }
+  const plan = genericPlan(program, laws, { limits, warn: options.warn, smallGraph: options.smallGraph, data });
   if (plan.refusal) return plan;
   plan.buffers = Object.assign({
     S: plan.S.size * 4, H: plan.H.size * 4, X: plan.cap * plan.D * 4, Y: plan.cap * plan.D * 4,
-    L: (nodes + 1 + 2 * program.spaces.links) * 4, V: plan.slot.bytes,
+    L: lBytes(plan), V: plan.slot.bytes,
   }, plan.pyramid ? plan.pyramid.buffers : {});
   plan.kernels = printer => Object.assign(kernelCode(plan, printer), plan.pyramid ? plan.pyramid.kernels : {});
   plan.how = genericHow(plan);
@@ -40,12 +43,26 @@ export function schedule(program, laws, limits, options = {}) {
   return plan;
 }
 
+// Bytes of L: rows, links at both ends, and a block per group column (see generic/plan.js)
+function lBytes(plan) {
+  const n = plan.nodes, m = plan.links;
+  let words = n + 1 + 7 * m + 1 + plan.groupColumns.length;
+  if (plan.chunked) words += 2 + n + 2 * (Math.ceil(2 * m / 8) + n);
+  plan.groupColumns.forEach(column => {
+    const count = (Object.values(plan.sums).find(sum => sum.column === column) || {}).count || 0;
+    const runs = Math.ceil(n / 256) + count;
+    words += 3 + n + runs + 1 + count + 1;
+  });
+  return words * 4;
+}
+
 /**
  * True for the exact stock step: the built in stages in their order and nothing else, the mass
- * as charge, sensitivity and inertia, a law that fits the template's 16 numbers, in 2D.
+ * as charge, sensitivity and inertia, a law that fits the template's 16 numbers, in 2D, while
+ * every link has the default length and stiffness (`data.linksDefault`).
  */
-export function isStockStep(program, laws) {
-  if (program.dims !== 2) return false;
+export function isStockStep(program, laws, data = { linksDefault: true }) {
+  if (program.dims !== 2 || !data.linksDefault) return false;
   const stages = physicsStages(program);
   if (stages.map(stage => stage.builtIn).join() !== STOCK_STAGES.join()) return false;
   // the template has no gates
@@ -54,7 +71,8 @@ export function isStockStep(program, laws) {
   if (repulsion.charge !== 'mass' || repulsion.sensitivity !== 'mass') return false;
   if (stages[4].args.inertia !== 'mass') return false;
   const law = laws.repulsion;
-  return !law || lawValueCount(law) <= LAW_VALUES;
+  // the template's law has no lookup tables
+  return !law || (lawValueCount(law) <= LAW_VALUES && !law.describe().tables.length);
 }
 
 function stockPlan(program, law) {
@@ -85,12 +103,17 @@ function genericHow(plan) {
   plan.skipped.forEach(name => { how[name] = 'skipped under FIRE'; });
   const nodeKernels = plan.kernelList.filter(k => k.kind === 'node').length;
   plan.kernelList.forEach((kernel, index) => {
+    if (kernel.kind === 'link') kernel.sections.forEach(section => { how[section.stage.name] = `a thread per link, in ${kernel.name}`; });
     if (kernel.kind !== 'node') return;
     const where = nodeKernels === 1 && plan.kernelList.length === 1 ? 'the step kernel (one dispatch)' : kernel.name;
     const reduce = plan.kernelList.slice(index + 1).find(k => k.kind === 'reduce');
     kernel.sections.forEach(section => {
       if (section.kind === 'pairs') {
         section.channels.forEach(c => { how[c.stage.name] = `exact pairs over tiles of 256 bodies, in ${where}`; });
+        return;
+      }
+      if (section.kind === 'gather') {
+        how[section.stage.name] = `both ends of every link, at each body, in ${where}`;
         return;
       }
       if (section.kind === 'tree') {
@@ -102,6 +125,10 @@ function genericHow(plan) {
       const name = section.stage.name;
       if (section.kind === 'sum') how[name] = kernel.hoisted ? 'added up at the start of the step (SUMS, SUMS_REDUCE)' : `per body in ${where}, added up in ${reduce ? reduce.name : 'a reduction'}`;
       else if (section.kind === 'fire') how[name] = `FIRE: FIRE_REDUCE, FIRE_STATE, then ${where}`;
+      else if (section.kind === 'groupsum') {
+        const runs = plan.kernelList.slice(index + 1).find(k => k.kind === 'groupRuns' && k.sums.some(sum => sum.name === name));
+        how[name] = `per body in ${where}, then by group in ${runs ? runs.name : 'GROUP_RUNS'} and GROUP_SUM`;
+      }
       else how[name] = (section.kind === 'formula' ? 'in ' : 'part of ') + where;
     });
   });

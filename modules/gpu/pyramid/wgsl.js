@@ -12,9 +12,10 @@
 //
 // Charges. Channel 0 opens nothing here (the pyramid has no theta) but sets the shared centre: a
 // channel with centroid 'shared' acts from channel 0's centre of the cell (from the mean of its
-// bodies when channel 0 weighs nothing there), the others from their own centre, so their charges
-// must not be negative. Channels with one law object evaluate it once per pair, and a law is not
-// evaluated where the weight of its channels is 0 (as the CPU's K-charge tree does).
+// bodies when channel 0 weighs nothing there), the others from their own centre. Centres weight
+// positions by |charge|, so charges of any sign have one (the CPU tree asks for charges >= 0
+// there; for those the two agree). Channels with one law object evaluate it once per pair, and a
+// law is not evaluated where the weight of its channels is 0 (as the CPU's K-charge tree does).
 //
 // Buffers (all owned by the pyramid, except the columns it reads through `colRef`s):
 //   treeBox   box state: bounding box, grid box, histogram centre, then D histograms
@@ -24,8 +25,10 @@
 //              bodies per cell of every level]
 //   treeSp    per sorted body: position, then each channel's charge (vec4s)
 //   treeCells [lookup tables | per cell of every level: charge sums and centres | per cell of
-//              every level but the top: the local expansion (middle, then field and Jacobian per
-//              channel)]
+//              every level but the top: the local expansion (centre, then field and Jacobian per
+//              channel) | per sorted body: the push of crowded near cells per channel]
+//   treeLists [heavy count, crowded count, status, work, occupied count | heavy finest cells (3D) |
+//              crowded cells | occupied finest cells (3D)]
 import { createPrinter, lawPrologue } from '../wgsl/print.js';
 
 export const WG = 256;
@@ -34,6 +37,11 @@ export const HIST_BINS = 1024;
 const HEAVY = 8;
 // Workgroups of TREE_HEAVY, and threads in each
 const HEAVY_GROUPS = 64, HEAVY_THREADS = 64;
+// Workgroups that TREE_LOCAL adds for crowded cells (see tree_crowd)
+export const CROWD_GROUPS = 128;
+// treeLists: heavy count, crowded count, status (the largest crowded cell when their work is over
+// the cap, else 0), work (millions of pair evaluations), occupied count, 3 spare, then the lists
+export const LIST_HEAD = 8;
 const AX = 'xyzw';
 
 function each(n, fn, sep = ' ') {
@@ -59,14 +67,19 @@ function loadVec4s(name, buffer, base, count) {
   return each(count, j => `let ${name}${j} = ${buffer}[${base}${j ? ` + ${j}u` : ''}];`);
 }
 
-// vec4 writes of `words` (WGSL expressions) at `base`, zero padded
-function storeVec4s(buffer, base, words) {
+// `words` (WGSL expressions) as vec4f constructors, zero padded
+function vec4sOf(words) {
   const out = [];
   for (let j = 0; j < words.length; j += 4) {
     const four = [0, 1, 2, 3].map(q => (j + q < words.length ? words[j + q] : '0.0'));
-    out.push(`${buffer}[${base}${j ? ` + ${j / 4}u` : ''}] = vec4f(${four.join(', ')});`);
+    out.push(`vec4f(${four.join(', ')})`);
   }
-  return out.join(' ');
+  return out;
+}
+
+// vec4 writes of `words` (WGSL expressions) at `base`, zero padded
+function storeVec4s(buffer, base, words) {
+  return vec4sOf(words).map((v, j) => `${buffer}[${base}${j ? ` + ${j}u` : ''}] = ${v};`).join(' ');
 }
 
 /**
@@ -86,15 +99,21 @@ export function pyramidLayout(D, channels, tableWords = 0) {
   const CSW = w;
   // bodies per cell: in the record's padding when it has some, else in treeMeta
   const CNT = CSW % 4 ? CSW : -1;
-  // local expansion: the cell's middle, then per channel the field and the Jacobian
-  const F = [], J = [];
+  // local expansion: its centre, then per channel the field, the Jacobian and, for a channel at
+  // second order (`second`), the field's second derivatives (T[c] is -1 for the others)
+  const TN = D * (D + 1) * (D + 2) / 6;
+  const F = [], J = [], T = [];
   w = D;
-  for (let c = 0; c < K; c++) { F.push(w); J.push(w + D); w += D + JN; }
+  channels.forEach(channel => {
+    F.push(w); J.push(w + D); w += D + JN;
+    if (channel.second) { T.push(w); w += TN; } else T.push(-1);
+  });
   const LSW = w;
-  const pairs = [];
+  const pairs = [], triples = [];
   for (let a = 0; a < D; a++) for (let b = a; b < D; b++) pairs.push([a, b]);
+  for (let a = 0; a < D; a++) for (let b = a; b < D; b++) for (let c = b; c < D; c++) triples.push([a, b, c]);
   return {
-    D, K, JN, pairs,
+    D, K, JN, pairs, TN, triples, T,
     SPW: D + K, SP4: Math.ceil((D + K) / 4),
     S, C, CSW, CS4: Math.ceil(CSW / 4), CNT,
     F, J, LSW, LS4: Math.ceil(LSW / 4),
@@ -135,12 +154,12 @@ function mortonFns(D, bits) {
   const back = [];
   for (let j = steps.length - 1; j >= 0; j--) back.push([steps[j][0], j ? steps[j - 1][1] : low]);
   return /* wgsl */`
-fn spread(v: u32) -> u32 {
+fn tree_spread(v: u32) -> u32 {
   var x = v & ${hex(low)};
   ${steps.map(([sh, m]) => `x = (x | (x << ${sh}u)) & ${hex(m)};`).join(' ')}
   return x;
 }
-fn compact(v: u32) -> u32 {
+fn tree_compact(v: u32) -> u32 {
   var x = v & ${hex(steps[steps.length - 1][1])};
   ${back.map(([sh, m]) => `x = (x | (x >> ${sh}u)) & ${hex(m)};`).join(' ')}
   return x;
@@ -148,20 +167,20 @@ fn compact(v: u32) -> u32 {
 }
 
 // Direction for two coincident bodies, from their indices: deterministic and antisymmetric,
-// jitter(a, b) == -jitter(b, a), with length 0.01 (2D: today's, templates/grid.js)
+// tree_jitter(a, b) == -tree_jitter(b, a), with length 0.01 (2D: today's, templates/grid.js)
 function jitterFn(D) {
   const hash = `var h = min(a, b) * 747796405u + max(a, b) * 2891336453u + 1u;
   h = ((h >> 16u) ^ h) * 0x45d9f3bu; h = ((h >> 16u) ^ h) * 0x45d9f3bu; h = (h >> 16u) ^ h;`;
   if (D === 2) {
     return `
-fn jitter(a: u32, b: u32) -> vec2f {
+fn tree_jitter(a: u32, b: u32) -> vec2f {
   ${hash}
   let angle = f32(h) * (6.2831853 / 4294967296.0);
   return select(-0.01, 0.01, a < b) * vec2f(cos(angle), sin(angle));
 }`;
   }
   return `
-fn jitter(a: u32, b: u32) -> vec3f {
+fn tree_jitter(a: u32, b: u32) -> vec3f {
   ${hash}
   let z = f32(h & 0xffffu) * (2.0 / 65536.0) - 1.0;
   let angle = f32(h >> 16u) * (6.2831853 / 65536.0);
@@ -177,7 +196,7 @@ function boxLoops(D, body, indent, lo = 'lo', hi = 'hi') {
   for (let k = D - 1; k >= 0; k--) {
     const pad = indent + '  '.repeat(D - 1 - k);
     open += `${pad}for (var x${k} = ${lo}${k}; x${k} <= ${hi}${k}; x${k}++) {\n`;
-    open += `${pad}  let mm${k} = ${k === D - 1 ? '' : `mm${k + 1} | `}(spread(u32(x${k})) << ${k}u);\n`;
+    open += `${pad}  let mm${k} = ${k === D - 1 ? '' : `mm${k + 1} | `}(tree_spread(u32(x${k})) << ${k}u);\n`;
     close = `${pad}}\n` + close;
   }
   const pad = indent + '  '.repeat(D);
@@ -202,7 +221,9 @@ function paramsStruct(lawWords) {
 struct TreeParams {
   n: u32, G: u32, levels: u32, nCells: u32,
   locOff: u32, metaTag: u32, metaRow: u32, metaCount: u32,
-  nearCap: u32, outlierRank: u32, gravity: f32, top: u32,${lawWords ? `
+  nearCap: u32, outlierRank: u32, gravity: f32, top: u32,
+  localGroups: u32, crowdOff: u32, workCap: f32, crowdList: u32,
+  occList: u32, pad0: u32, pad1: u32, pad2: u32,${lawWords ? `
   law: array<vec4f, ${Math.ceil(lawWords / 4)}>,` : ''}
 };`;
 }
@@ -218,7 +239,8 @@ function lawFunctions(spec) {
     if (group.isDefault) {
       return `
 fn tree_k1_${g}(r: f32, r2: f32) -> f32 { return 1.0 / (r2 * r); }
-fn tree_k12_${g}(r: f32, r2: f32) -> vec2f { let k1 = 1.0 / (r2 * r); return vec2f(k1, 3.0 * k1 / r2); }`;
+fn tree_k12_${g}(r: f32, r2: f32) -> vec2f { let k1 = 1.0 / (r2 * r); return vec2f(k1, 3.0 * k1 / r2); }${group.second ? `
+fn tree_k123_${g}(r: f32, r2: f32) -> vec3f { let k1 = 1.0 / (r2 * r); let k2 = 3.0 * k1 / r2; return vec3f(k1, k2, 5.0 * k2 / r2); }` : ''}`;
     }
     const law = group.law;
     const prologue = lawPrologue(law, i => group.value(i));
@@ -226,7 +248,14 @@ fn tree_k12_${g}(r: f32, r2: f32) -> vec2f { let k1 = 1.0 / (r2 * r); return vec
     const body = (k2) => withTables(g, law.emit(printer, L.D, 'r', 'k1', k2 ? 'k2' : undefined));
     return `${tables}
 fn tree_k1_${g}(r: f32, r2: f32) -> f32 { ${prologue} ${body(false)} return k1; }
-fn tree_k12_${g}(r: f32, r2: f32) -> vec2f { ${prologue} ${body(true)} return vec2f(k1, k2); }${law.hasRange ? `
+fn tree_k12_${g}(r: f32, r2: f32) -> vec2f { ${prologue} ${body(true)} return vec2f(k1, k2); }${group.second ? `
+// k3 = -k2'(r) / r, from k2 at r (1 +- 1/64)
+fn tree_k123_${g}(r: f32, r2: f32) -> vec3f {
+  let k = tree_k12_${g}(r, r2);
+  let rp = r * 1.015625; let rm = r * 0.984375;
+  let kp = tree_k12_${g}(rp, rp * rp).y; let km = tree_k12_${g}(rm, rm * rm).y;
+  return vec3f(k.x, k.y, (km - kp) * 32.0 / r2);
+}` : ''}${law.hasRange ? `
 fn tree_in_${g}(r2: f32) -> bool { ${prologue} return r2 <= lawRange2; }` : ''}`;
   }).join('\n');
 }
@@ -352,8 +381,8 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocation_ind
   const heavyCells = !!spec.heavyCells;
   const BOX = common + /* wgsl */`
 ${tp}
-@group(0) @binding(1) var<storage, read_write> treeBox: array<u32>;${heavyCells ? `
-@group(0) @binding(2) var<storage, read_write> treeHeavy: array<u32>;` : ''}
+@group(0) @binding(1) var<storage, read_write> treeBox: array<u32>;
+@group(0) @binding(2) var<storage, read_write> treeLists: array<u32>;
 var<workgroup> scan: array<u32, ${WG}>;
 var<workgroup> found: array<f32, ${3 * D}>;
 var<workgroup> total: u32;
@@ -364,8 +393,8 @@ fn edgeLo(s: u32) -> f32 { return select(-keyHi(511u - s), keyLo(s - 512u), s >=
 fn edgeHi(s: u32) -> f32 { return select(-keyLo(511u - s), keyHi(s - 512u), s >= 512u); }
 @compute @workgroup_size(${WG})
 fn main(@builtin(local_invocation_index) li: u32) {
-  if (li < ${3 * D}u) { found[li] = 0.0; }${heavyCells ? `
-  if (li == 0u) { treeHeavy[0] = 0u; }` : ''}
+  if (li < ${3 * D}u) { found[li] = 0.0; }
+  if (li < ${LIST_HEAD}u) { treeLists[li] = 0u; }
   for (var a = 0u; a < ${D}u; a++) {
     let base = ${BL.HEADER}u + a * ${HB}u + li * 4u;
     var cs = array<u32, 4>(treeBox[base], treeBox[base + 1u], treeBox[base + 2u], treeBox[base + 3u]);
@@ -431,7 +460,7 @@ fn main(${LINEAR}) {
   ${each(D, k => `let q${k} = (${posAt('i', k)} - bitcast<f32>(treeBox[${BL.ORIGIN + k}])) * inv;`, '\n  ')}
   // outside the box (by more than half a cell): clamped into a border cell
   let inside = ${each(D, k => `q${k} > -0.5 && q${k} < gmax + 1.5`, ' && ')};
-  let c = ${each(D, k => `(spread(u32(clamp(floor(q${k}), 0.0, gmax))) << ${k}u)`, ' | ')};
+  let c = ${each(D, k => `(tree_spread(u32(clamp(floor(q${k}), 0.0, gmax))) << ${k}u)`, ' | ')};
   treeWork[2u * i] = c | select(0x80000000u, 0u, inside);
   treeWork[2u * i + 1u] = atomicAdd(&treeCount[c], 1u);
 }`;
@@ -511,7 +540,7 @@ fn main(${LINEAR}) {
 }`;
 
   // Part 2: within a cell, bodies go in index order, so sums run in the same order every time and
-  // runs repeat exactly; a cell of more than 1,024 bodies keeps the atomic order, as today.
+  // runs repeat exactly (today's template ranks cells of up to 1,024 bodies only).
   // Writes each body's position and charges, its (row, cell), and its slot by row.
   const ORDER = (() => {
     const cols = columnBindings([spec.pos].concat(spec.charges), 1);
@@ -534,7 +563,9 @@ fn main(${LINEAR}) {
   let s = treeMeta[c];
   let e = select(TP.n, treeMeta[c + 1u], c + 1u < TP.nCells);
   var rank = treeWork[2u * i + 1u];
-  if (e - s <= 1024u) { // a pathologically full cell keeps the atomic order
+  // a cell of more than 65,536 bodies keeps the atomic order; the crowded cells' work cap refuses
+  // such a step anyway (65,536^2 pairs)
+  if (e - s <= 65536u) {
     rank = 0u;
     for (var t = s; t < e; t++) { if (treeWork[2u * TP.n + t] < i) { rank++; } }
   }
@@ -562,40 +593,138 @@ fn main(${LINEAR}) {
     if (L.CNT >= 0) words[L.CNT] = `f32(${count})`;
     return words;
   };
-  const AGG0 = paramsStruct(spec.lawWords) + mortonFns(D, L.bits) + /* wgsl */`
+  // Records in registers, and the reduction of 2^D children (in child order, so runs repeat
+  // exactly). `load` declares a child's vec4s a0.. and count n, and skips an empty child.
+  const recType = `struct TreeRec { v: array<vec4f, ${L.CS4}>, n: u32 };`;
+  const recOf = (name, words, count) => `var ${name}: TreeRec; ${vec4sOf(words).map((v, j) => `${name}.v[${j}] = ${v};`).join(' ')} ${name}.n = ${count};`;
+  const putRec = (cell, r, metaCount) => each(L.CS4, j => `treeCells[${L.TAB4}u + (${cell}) * ${L.CS4}u + ${j}u] = ${r}.v[${j}];`) +
+    (L.CNT < 0 ? ` treeMeta[${metaCount} + ${cell}] = ${r}.n;` : '');
+  const CH = 1 << D;
+  const parentOf = load => `
+  ${each(K, c => `var m${c} = 0.0;`)}
+  ${own.map(c => `var w${c} = 0.0; ` + each(D, k => `var s${c}_${k} = 0.0;`)).join(' ')}
+  ${each(D, k => `var u${k} = 0.0;`)}
+  var cnt = 0u;
+  for (var ch = 0u; ch < ${CH}u; ch++) {
+    ${load('ch')}
+    cnt += n;
+    ${each(K, c => `m${c} += ${word('a', L.S[c])};`)}
+    ${own.map(c => `w${c} += abs(${word('a', L.S[c])}); ` + each(D, k => `s${c}_${k} += abs(${word('a', L.S[c])}) * ${word('a', L.C[c] + k)};`)).join(' ')}
+    ${each(D, k => `u${k} += f32(n) * ${word('a', L.C[0] + k)};`)}
+  }
+  let mean = select(0.0, 1.0 / f32(cnt), cnt > 0u);
+  ${own.map(c => `let i${c} = select(0.0, 1.0 / w${c}, w${c} != 0.0);`).join(' ')}
+  ${each(D, k => `let c0_${k} = select(u${k} * mean, s0_${k} * i0, w0 != 0.0);`)}
+  ${recOf('r', recordWords(c => `m${c}`, (c, k) => (c === 0 ? `c0_${k}` : `s${c}_${k} * i${c}`), 'cnt'), 'cnt')}`;
+
+  // A workgroup's WG cells of one level are whole groups of 2^D children in Morton order, so it
+  // reduces UP levels above them in its own memory (4 in 2D, 2 in 3D): TREE_AGG0 the first UP
+  // above the finest cells, then each TREE_PYR dispatch UP more. At 10k bodies in 2D that is 2
+  // dispatches instead of 8, and small graphs spend most of a step between dispatches. UP is 0
+  // when the records do not fit in workgroup memory: one TREE_PYR dispatch per level then.
+  const UP = spec.blockSteps || 0;
+  const block = UP ? /* wgsl */`
+var<workgroup> wRec: array<vec4f, ${WG * L.CS4}>;${L.CNT < 0 ? `
+var<workgroup> wCnt: array<u32, ${WG}>;` : ''}
+fn tree_up(first: u32) -> TreeRec {${parentOf(ch => `let child = first + ${ch};
+    ${L.CNT < 0 ? `let n = wCnt[child];
+    if (n == 0u) { continue; }
+    ${loadVec4s('a', 'wRec', `child * ${L.CS4}u`, L.CS4)}` : `${loadVec4s('a', 'wRec', `child * ${L.CS4}u`, L.CS4)}
+    let n = u32(${word('a', L.CNT)});
+    if (n == 0u) { continue; }`}`)}
+  return r;
+}
+// r: this thread's record, in a level of \`count\` cells from cell \`off\`; \`at\`: the workgroup's first
+// cell there. Writes the cells of up to \`steps\` levels above, as far as the WG cells reach.
+fn tree_block(li: u32, at: u32, r: TreeRec, count: u32, off: u32, steps: u32, metaCount: u32) {
+  ${each(L.CS4, j => `wRec[li * ${L.CS4}u + ${j}u] = r.v[${j}];`)}${L.CNT < 0 ? ' wCnt[li] = r.n;' : ''}
+  var cells = count;
+  var base = off;
+  for (var j = 1u; j <= steps; j++) {
+    workgroupBarrier();
+    let parents = base + cells;
+    cells = cells >> ${D}u;
+    let first = at >> (${D}u * j);
+    let live = li < (${WG}u >> (${D}u * j)) && first + li < cells;
+    var up: TreeRec;
+    if (live) {
+      up = tree_up(li * ${CH}u);
+      ${putRec('parents + first + li', 'up', 'metaCount')}
+    }
+    workgroupBarrier();
+    if (live) { ${each(L.CS4, j => `wRec[li * ${L.CS4}u + ${j}u] = up.v[${j}];`)}${L.CNT < 0 ? ' wCnt[li] = up.n;' : ''} }
+    base = parents;
+  }
+}` : '';
+
+  const AGG0 = paramsStruct(spec.lawWords) + mortonFns(D, L.bits) + recType + /* wgsl */`
 ${tp}
 @group(0) @binding(1) var<storage, read> treeSp: array<vec4f>;
 @group(0) @binding(2) var<storage, read_write> treeMeta: array<u32>;
 @group(0) @binding(3) var<storage, read_write> treeCells: array<vec4f>;
+@group(0) @binding(4) var<storage, read_write> treeLists: array<atomic<u32>>;${spec.heads ? `
+var<workgroup> wgOccupied: atomic<u32>;
+var<workgroup> wgBase: u32;` : ''}${block}
 @compute @workgroup_size(${WG})
-fn main(${LINEAR}) {
-  let c = ${LINEAR_ID};
-  if (c >= TP.nCells) { return; }
+fn main(${LINEAR}, @builtin(local_invocation_index) li: u32) {
+  let c = ${LINEAR_ID};${spec.heads ? `
+  if (li == 0u) { atomicStore(&wgOccupied, 0u); }
+  workgroupBarrier();` : ''}
+  var r: TreeRec;
+  if (c < TP.nCells) { r = tree_aggregate(c); }${spec.heads ? `
+  // the occupied finest cells, listed for LOCAL (a workgroup adds its own at once)
+  var slot = 0xffffffffu;
+  if (c < TP.nCells && r.n != 0u) { slot = atomicAdd(&wgOccupied, 1u); }
+  workgroupBarrier();
+  if (li == 0u) { wgBase = atomicAdd(&treeLists[4], atomicLoad(&wgOccupied)); }
+  let base = workgroupUniformLoad(&wgBase);
+  if (slot != 0xffffffffu) { atomicStore(&treeLists[TP.occList + base + slot], c); }` : ''}${UP ? `
+  tree_block(li, c - li, r, TP.nCells, 0u, min(${UP}u, TP.levels), TP.metaCount);` : ''}
+}
+fn tree_aggregate(c: u32) -> TreeRec {
   let s = treeMeta[c];
   let e = select(TP.n, treeMeta[c + 1u], c + 1u < TP.nCells);
+  // a crowded cell: its near pushes are TREE_LOCAL's crowd workgroups' work
+  if (e - s > TP.nearCap) { atomicStore(&treeLists[TP.crowdList + atomicAdd(&treeLists[1], 1u)], c); }
   ${each(K, q => `var m${q} = 0.0;`)}
-  ${own.map(q => each(D, k => `var s${q}_${k} = 0.0;`)).join(' ')}
+  ${own.map(q => `var w${q} = 0.0; ` + each(D, k => `var s${q}_${k} = 0.0;`)).join(' ')}
   ${each(D, k => `var u${k} = 0.0;`)}
   // only a border cell can hold clamped bodies
-  let border = ${each(D, k => `compact(c >> ${k}u) == 0u || compact(c >> ${k}u) == TP.G - 1u`, ' || ')};
+  let border = ${each(D, k => `tree_compact(c >> ${k}u) == 0u || tree_compact(c >> ${k}u) == TP.G - 1u`, ' || ')};
   var cnt = 0u;
   for (var t = s; t < e; t++) {
     if (border && treeMeta[TP.metaTag + 2u * t + 1u] >= 0x80000000u) { continue; }
     cnt++;
     ${loadVec4s('b', 'treeSp', `t * ${L.SP4}u`, L.SP4)}
     ${each(K, q => `m${q} += ${word('b', D + q)};`)}
-    ${own.map(q => each(D, k => `s${q}_${k} += ${word('b', D + q)} * ${word('b', k)};`)).join(' ')}
+    ${own.map(q => `w${q} += abs(${word('b', D + q)}); ` + each(D, k => `s${q}_${k} += abs(${word('b', D + q)}) * ${word('b', k)};`)).join(' ')}
     ${each(D, k => `u${k} += ${word('b', k)};`)}
   }
   let mean = select(0.0, 1.0 / f32(cnt), cnt > 0u);
-  ${own.map(q => `let i${q} = select(0.0, 1.0 / m${q}, m${q} != 0.0);`).join(' ')}
-  ${each(D, k => `let c0_${k} = select(u${k} * mean, s0_${k} * i0, m0 != 0.0);`)}
-  ${storeVec4s('treeCells', `${L.TAB4}u + c * ${L.CS4}u`, recordWords(q => `m${q}`, (q, k) => (q === 0 ? `c0_${k}` : `s${q}_${k} * i${q}`), 'cnt'))}${L.CNT < 0 ? `
-  treeMeta[TP.metaCount + c] = cnt;` : ''}
+  ${own.map(q => `let i${q} = select(0.0, 1.0 / w${q}, w${q} != 0.0);`).join(' ')}
+  ${each(D, k => `let c0_${k} = select(u${k} * mean, s0_${k} * i0, w0 != 0.0);`)}
+  ${recOf('r', recordWords(q => `m${q}`, (q, k) => (q === 0 ? `c0_${k}` : `s${q}_${k} * i${q}`), 'cnt'), 'cnt')}
+  ${putRec('c', 'r', 'TP.metaCount')}
+  return r;
 }`;
 
-  // One level up: 2^D children, contiguous in Morton order
-  const PYR = /* wgsl */`
+  // Levels above: with UP, a dispatch reads one level's records into its workgroups and reduces
+  // UP levels above it (tree_block); without, one level up a dispatch
+  const PYR = recType + (UP ? /* wgsl */`
+struct Level { count: u32, off: u32, steps: u32, metaCount: u32 };
+@group(0) @binding(0) var<uniform> lv: Level;
+@group(0) @binding(1) var<storage, read_write> treeCells: array<vec4f>;${L.CNT < 0 ? `
+@group(0) @binding(2) var<storage, read_write> treeMeta: array<u32>;` : ''}${block}
+@compute @workgroup_size(${WG})
+fn main(${LINEAR}, @builtin(local_invocation_index) li: u32) {
+  let q = ${LINEAR_ID};
+  var r: TreeRec;
+  if (q < lv.count) {
+    ${each(L.CS4, j => `r.v[${j}] = treeCells[${L.TAB4}u + (lv.off + q) * ${L.CS4}u + ${j}u];`)}
+    r.n = ${L.CNT < 0 ? 'treeMeta[lv.metaCount + lv.off + q]' : `u32(r.v[${L.CNT >> 2}].${AX[L.CNT & 3]})`};
+  }
+  tree_block(li, q - li, r, lv.count, lv.off, lv.steps, lv.metaCount);
+}` : /* wgsl */`
 struct Level { count: u32, childOff: u32, parentOff: u32, metaCount: u32 };
 @group(0) @binding(0) var<uniform> lv: Level;
 @group(0) @binding(1) var<storage, read_write> treeCells: array<vec4f>;${L.CNT < 0 ? `
@@ -603,31 +732,20 @@ struct Level { count: u32, childOff: u32, parentOff: u32, metaCount: u32 };
 @compute @workgroup_size(${WG})
 fn main(${LINEAR}) {
   let q = ${LINEAR_ID};
-  if (q >= lv.count) { return; }
-  ${each(K, c => `var m${c} = 0.0;`)}
-  ${own.map(c => each(D, k => `var s${c}_${k} = 0.0;`)).join(' ')}
-  ${each(D, k => `var u${k} = 0.0;`)}
-  var cnt = 0u;
-  for (var ch = 0u; ch < ${1 << D}u; ch++) {
-    let child = lv.childOff + ${1 << D}u * q + ch;
+  if (q >= lv.count) { return; }${parentOf(ch => `let child = lv.childOff + ${CH}u * q + ${ch};
     ${L.CNT < 0 ? `let n = treeMeta[lv.metaCount + child];
     if (n == 0u) { continue; }
     ${loadVec4s('a', 'treeCells', `${L.TAB4}u + child * ${L.CS4}u`, L.CS4)}` : `${loadVec4s('a', 'treeCells', `${L.TAB4}u + child * ${L.CS4}u`, L.CS4)}
     let n = u32(${word('a', L.CNT)});
-    if (n == 0u) { continue; }`}
-    cnt += n;
-    ${each(K, c => `m${c} += ${word('a', L.S[c])};`)}
-    ${own.map(c => each(D, k => `s${c}_${k} += ${word('a', L.S[c])} * ${word('a', L.C[c] + k)};`)).join(' ')}
-    ${each(D, k => `u${k} += f32(n) * ${word('a', L.C[0] + k)};`)}
-  }
-  let mean = select(0.0, 1.0 / f32(cnt), cnt > 0u);
-  ${own.map(c => `let i${c} = select(0.0, 1.0 / m${c}, m${c} != 0.0);`).join(' ')}
-  ${each(D, k => `let c0_${k} = select(u${k} * mean, s0_${k} * i0, m0 != 0.0);`)}
-  ${storeVec4s('treeCells', `${L.TAB4}u + (lv.parentOff + q) * ${L.CS4}u`, recordWords(c => `m${c}`, (c, k) => (c === 0 ? `c0_${k}` : `s${c}_${k} * i${c}`), 'cnt'))}${L.CNT < 0 ? `
-  treeMeta[lv.metaCount + lv.parentOff + q] = cnt;` : ''}
-}`;
+    if (n == 0u) { continue; }`}`)}
+  ${putRec('lv.parentOff + q', 'r', 'lv.metaCount')}
+}`);
 
   const lawCode = lawFunctions(spec) + tableWordFn(L);
+  // The near cells reach SEP cells around a body's cell (1: 3^D cells; 2 for laws that fall
+  // slower than 1/r^2 in 2D, whose far field is mostly monopoles at every level: a source cell
+  // then sits at least 3 cells away, not 2), and the interaction lists start past them.
+  const SEP = spec.sep || 1, SIDE = 2 * SEP + 1, NEAR = SIDE ** D;
   const lawGroups = spec.groups;
   // The centres channels act from: channel 0's (shared) and each own one
   const centres = [{ word: L.C[0], channels: [] }];
@@ -636,6 +754,25 @@ fn main(${LINEAR}) {
     else centres.push({ word: L.C[c], channels: [c] });
   });
 
+  // A source of charge `S` at d = source - point, added to channel c's field F, Jacobian J
+  // (d/dp of S k1(r) d = S (k2 d d^T - k1 I)) and, at second order, T (the next derivative:
+  // S (k3 d_a d_b d_c - k2 (delta_ab d_c + delta_ac d_b + delta_bc d_a))), from k = (k1, k2[, k3])
+  const expansionTerms = (c, S) => {
+    const lines = [`let g${c} = ${S} * k.x; let h${c} = ${S} * k.y;`];
+    lines.push(each(D, k => `F${c}_${k} += g${c} * d${k};`));
+    lines.push(L.pairs.map(([p, q], e) => `J${c}_${e} += h${c} * d${p} * d${q}${p === q ? ` - g${c}` : ''};`).join(' '));
+    if (L.T[c] >= 0) {
+      lines.push(`let u${c} = ${S} * k.z;`);
+      lines.push(L.triples.map(([a, b, q], e) => {
+        const deltas = [];
+        if (a === b) deltas.push(`d${q}`);
+        if (a === q) deltas.push(`d${b}`);
+        if (b === q) deltas.push(`d${a}`);
+        return `T${c}_${e} += u${c} * d${a} * d${b} * d${q}${deltas.length ? ` - h${c} * (${deltas.join(' + ')})` : ''};`;
+      }).join(' '));
+    }
+    return lines.join('\n');
+  };
   // The far field of one source cell record `a` (loaded) at the point (x<k>), for every channel:
   // field and Jacobian into F<c>_<k>, J<c>_<e> (jacobian), or field only (monopole) into acc<c>_<k>
   const sourceCell = (at, jacobian) => centres.map(centre => {
@@ -660,13 +797,8 @@ fn main(${LINEAR}) {
       const open = conds.length ? `if (${conds.join(' && ')}) {` : '{';
       lines.push(open);
       if (jacobian) {
-        lines.push(`let k = tree_k12_${g}(r, r2);`);
-        channels.forEach(c => {
-          lines.push(`let g${c} = ${word('a', L.S[c])} * k.x; let h${c} = ${word('a', L.S[c])} * k.y;`);
-          lines.push(each(D, k => `F${c}_${k} += g${c} * d${k};`));
-          // d/dp of S k1(r) (q - p) = S (k2 d d^T - k1 I)
-          lines.push(L.pairs.map(([p, q], e) => `J${c}_${e} += h${c} * d${p} * d${q}${p === q ? ` - g${c}` : ''};`).join(' '));
-        });
+        lines.push(lawGroups[g].second ? `let k = tree_k123_${g}(r, r2);` : `let k = tree_k12_${g}(r, r2);`);
+        channels.forEach(c => lines.push(expansionTerms(c, word('a', L.S[c]))));
       } else {
         lines.push(`let k1 = tree_k1_${g}(r, r2);`);
         channels.forEach(c => {
@@ -687,39 +819,158 @@ fn main(${LINEAR}) {
   const interactionList = (body, indent) => `
 ${indent}let poff = off + ${each(D, () => 'Gl', ' * ')};
 ${indent}let Gp = Gi / 2;
-${indent}${each(D, k => `let lo${k} = max((xl${k} >> 1u) - 1, 0); let hi${k} = min((xl${k} >> 1u) + 1, Gp - 1);`)}
+${indent}${each(D, k => `let lo${k} = max((xl${k} >> 1u) - ${SEP}, 0); let hi${k} = min((xl${k} >> 1u) + ${SEP}, Gp - 1);`)}
 ${boxLoops(D, `
 if (${countAt('poff + mm0')} == 0u) { continue; }
 for (var ch = 0u; ch < ${1 << D}u; ch++) {
   ${each(D, k => `let y${k} = 2 * x${k} + i32((ch >> ${k}u) & 1u);`)}
-  if (${each(D, k => `abs(y${k} - xl${k}) <= 1`, ' && ')}) { continue; }
+  if (${each(D, k => `abs(y${k} - xl${k}) <= ${SEP}`, ' && ')}) { continue; }
   let src = off + ((mm0 << ${D}u) | ch);
   ${loadVec4s('a', 'treeCells', `${L.TAB4}u + src * ${L.CS4}u`, L.CS4)}
   ${body}
 }`, indent)}`;
 
   // With more finest cells than bodies (3D), most finest cells are empty, and a thread per cell
-  // would leave most of a SIMD group idle: there LOCAL runs a thread per body for the finest
-  // level, the first body of each cell doing its cell, then a thread per cell above.
+  // would leave most of a SIMD group idle: there AGG0 lists the occupied finest cells and LOCAL
+  // runs a thread per entry (up to n of them), then a thread per cell above.
   const heads = spec.heads;
-  // treeMeta when it holds the counts or the bodies' cells, the heavy list, then the caller's step
-  // values (law numbers per step) when they hold them
-  const localUsesMeta = L.CNT < 0 || heads;
-  let localBinding = 2;
-  const localMeta = localUsesMeta ? `\n@group(0) @binding(${localBinding++}) var<storage, read> treeMeta: array<u32>;` : '';
-  const localHeavy = heavyCells ? `\n@group(0) @binding(${localBinding++}) var<storage, read_write> treeHeavy: array<atomic<u32>>;` : '';
-  const valueBinding = stepDecl ? '\n' + stepDecl(localBinding) : '';
+  const valueBinding = stepDecl ? '\n' + stepDecl(5) : '';
+
+  // Crowded cells (more than nearCap bodies; AGG0 lists them). The section skips them, and the
+  // CROWD_GROUPS workgroups TREE_LOCAL adds after its own compute their bodies' pushes on every
+  // body of their 3^D cells, per channel, exactly: a workgroup owns the targets whose slot is its
+  // index modulo CROWD_GROUPS, its threads split a crowded cell's bodies, and partial sums add up
+  // in a fixed tree, so no thread does more than a cell's size / 256 pairs per target and runs
+  // repeat exactly. If the step's crowded work passes TP.workCap pair evaluations, nothing is
+  // computed and the status word names the largest cell: the runner halts at the readback
+  // (pyramidStatus()).
+  const CR4 = Math.ceil(D * K / 4);
+  const crowdWord = (c, k) => c * D + k;
+  const crowdPair = (() => {
+    const lines = [];
+    lines.push(loadVec4s('b', 'treeSp', `j * ${L.SP4}u`, L.SP4));
+    lines.push(each(D, k => `var d${k} = ${word('b', k)} - p${k};`));
+    lines.push(`var r2 = ${each(D, k => `d${k} * d${k}`, ' + ')};`);
+    lines.push(`if (r2 == 0.0) { let jt = tree_jitter(i, treeMeta[TP.metaTag + 2u * j]); ${each(D, k => `d${k} = jt.${AX[k]};`)} r2 = ${each(D, k => `d${k} * d${k}`, ' + ')}; }`);
+    lines.push(`let r = sqrt(r2);`);
+    lawGroups.forEach((group, g) => {
+      const conds = [];
+      if (K > 1) conds.push(`(${nonzero(group.channels, c => word('b', D + c))})`);
+      if (group.law && group.law.hasRange) conds.push(`tree_in_${g}(r2)`);
+      const body = [`let k1 = tree_k1_${g}(r, r2);`].concat(group.channels.map(c => each(D, k => `cr${c}_${k} += (${word('b', D + c)} * k1) * d${k};`))).join(' ');
+      lines.push(conds.length ? `if (${conds.join(' && ')}) { ${body} }` : `{ ${body} }`);
+    });
+    return lines.join('\n');
+  })();
+  const crowdFn = /* wgsl */`
+var<workgroup> crowdPart: array<f32, ${WG * D}>;
+var<workgroup> crowdHead: vec4u;
+var<workgroup> crowdRange: vec4u;
+fn tree_count(b: u32) -> u32 { return select(TP.n, treeMeta[b + 1u], b + 1u < TP.nCells) - treeMeta[b]; }
+// cell b's near cell number nu (base SIDE digits, minus SEP per axis), or nCells off the grid
+fn tree_near(b: u32, nu: u32) -> u32 {
+  let Gi = i32(TP.G);
+  ${each(D, k => `let x${k} = i32(tree_compact(b >> ${k}u)) + i32((nu / ${SIDE ** k}u) % ${SIDE}u) - ${SEP};`)}
+  if (${each(D, k => `x${k} < 0 || x${k} >= Gi`, ' || ')}) { return TP.nCells; }
+  return ${each(D, k => `(tree_spread(u32(x${k})) << ${k}u)`, ' | ')};
+}
+fn tree_crowd(w: u32, li: u32) {
+  // (a 2D grid of workgroups may pad past CROWD_GROUPS)
+  if (w >= ${CROWD_GROUPS}u) { return; }
+  if (li == 0u) {
+    let crowded = atomicLoad(&treeLists[1]);
+    var work = 0.0; var biggest = 0u;
+    for (var l = 0u; l < crowded; l++) {
+      let b = atomicLoad(&treeLists[TP.crowdList + l]);
+      let nb = tree_count(b);
+      biggest = max(biggest, nb);
+      var targets = 0u;
+      for (var nu = 0u; nu < ${NEAR}u; nu++) {
+        let a = tree_near(b, nu);
+        if (a < TP.nCells) { targets += tree_count(a); }
+      }
+      work += f32(nb) * f32(targets);
+    }
+    let over = work > TP.workCap;
+    crowdHead = vec4u(crowded, select(0u, 1u, over), 0u, 0u);
+    if (w == 0u) {
+      atomicStore(&treeLists[3], u32(min(work * 1e-6, 4e9)));
+      if (over) { atomicStore(&treeLists[2], biggest); }
+    }
+  }
+  let head = workgroupUniformLoad(&crowdHead);
+  if (head.y != 0u) { return; }
+  // A target cell is visited from each crowded cell near it, and done from the first of them in
+  // neighbour order: its bodies then take every crowded neighbour's push in that order, so the
+  // sums do not depend on the order AGG0 listed the cells in.
+  for (var l = 0u; l < head.x; l++) {
+    for (var nu = 0u; nu < ${NEAR}u; nu++) {
+      workgroupBarrier();
+      if (li == 0u) {
+        let b = atomicLoad(&treeLists[TP.crowdList + l]);
+        let a = tree_near(b, nu);
+        crowdRange = vec4u(0u);
+        if (a < TP.nCells) {
+          var first = TP.nCells;
+          for (var m = 0u; m < ${NEAR}u; m++) {
+            let x = tree_near(a, m);
+            if (x < TP.nCells && tree_count(x) > TP.nearCap) { first = x; break; }
+          }
+          if (first == b) { crowdRange = vec4u(a, treeMeta[a], treeMeta[a] + tree_count(a), 0u); }
+        }
+      }
+      let tr = workgroupUniformLoad(&crowdRange);
+      var t = tr.y + (w + ${CROWD_GROUPS}u - tr.y % ${CROWD_GROUPS}u) % ${CROWD_GROUPS}u;
+      loop {
+        if (t >= tr.z) { break; }
+        let i = treeMeta[TP.metaTag + 2u * t];
+        ${loadVec4s('me', 'treeSp', `t * ${L.SP4}u`, L.SP4)}
+        ${each(D, k => `let p${k} = ${word('me', k)};`)}
+        ${each(K, c => each(D, k => `var cr${c}_${k} = 0.0;`))}
+        for (var m = 0u; m < ${NEAR}u; m++) {
+          let x = tree_near(tr.x, m);
+          if (x >= TP.nCells) { continue; }
+          let xs = treeMeta[x];
+          let xe = xs + tree_count(x);
+          if (xe - xs <= TP.nearCap) { continue; }
+          for (var j = xs + li; j < xe; j += ${WG}u) {
+            if (j == t) { continue; }
+            ${crowdPair}
+          }
+        }${each(K, c => `
+        ${each(D, k => `crowdPart[li * ${D}u + ${k}u] = cr${c}_${k};`)}
+        workgroupBarrier();
+        for (var h = ${WG / 2}u; h > 0u; h >>= 1u) {
+          if (li < h) { ${each(D, k => `crowdPart[li * ${D}u + ${k}u] += crowdPart[(li + h) * ${D}u + ${k}u];`)} }
+          workgroupBarrier();
+        }
+        if (li == 0u) { ${each(D, k => `treeCells[TP.crowdOff + t * ${CR4}u + ${crowdWord(c, k) >> 2}u].${AX[crowdWord(c, k) & 3]} = crowdPart[${k}u];`)} }
+        workgroupBarrier();`, '')}
+        t += ${CROWD_GROUPS}u;
+      }
+    }
+  }
+}`;
+
   const LOCAL = common + lawCode + /* wgsl */`
 ${tp}
-@group(0) @binding(1) var<storage, read_write> treeCells: array<vec4f>;${localMeta}${localHeavy}${valueBinding}
+@group(0) @binding(1) var<storage, read_write> treeCells: array<vec4f>;
+@group(0) @binding(2) var<storage, read> treeMeta: array<u32>;
+@group(0) @binding(3) var<storage, read_write> treeLists: array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read> treeSp: array<vec4f>;${valueBinding}
+${crowdFn}
 @compute @workgroup_size(${WG})
-fn main(${LINEAR}) {
+fn main(${LINEAR}, @builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
+  let wl = wid.x + wid.y * nwg.x;
+  if (wl >= TP.localGroups) {
+    tree_crowd(wl - TP.localGroups, li);
+    return;
+  }
   let t = ${LINEAR_ID};
   var off = 0u; var Gl = TP.G; var l = 0u; var c = 0u;${heads ? `
   if (t < TP.n) {
-    // the first body of a finest cell does its cell
-    c = treeMeta[TP.metaTag + 2u * t + 1u] & 0x7fffffffu;
-    if (t > 0u && (treeMeta[TP.metaTag + 2u * t - 1u] & 0x7fffffffu) == c) { return; }
+    if (t >= atomicLoad(&treeLists[4])) { return; }
+    c = atomicLoad(&treeLists[TP.occList + t]);
   } else {
     var u = t - TP.n + TP.nCells;` : `
   {
@@ -739,16 +990,16 @@ fn main(${LINEAR}) {
   if (off == 0u) {
     ${loadVec4s('top', 'treeCells', `${L.TAB4}u + TP.top * ${L.CS4}u`, L.CS4)}
     if ((${each(K, q => `abs(${word('m', L.S[q])})`, ' + ')}) * f32(TP.n) > ${lit(HEAVY)} * f32(cnt) * (${each(K, q => `abs(${word('top', L.S[q])})`, ' + ')})) {
-      atomicStore(&treeHeavy[1u + atomicAdd(&treeHeavy[0], 1u)], c);
+      atomicStore(&treeLists[${LIST_HEAD}u + atomicAdd(&treeLists[0], 1u)], c);
       return;
     }
   }` : ''}
   let Gi = i32(Gl);
-  ${each(D, k => `let xl${k} = i32(compact(c >> ${k}u));`, ' ')}
+  ${each(D, k => `let xl${k} = i32(tree_compact(c >> ${k}u));`, ' ')}
   // the expansion centre: the cell's centre of channel 0's charge (of its bodies when that is
   // 0), where its bodies are, rather than its middle: half the error or less on hub graphs
   ${each(D, k => `let ce${k} = ${word('m', L.C[0] + k)};`)}
-  ${each(K, c => each(D, k => `var F${c}_${k} = 0.0;`) + ' ' + L.pairs.map((_, e) => `var J${c}_${e} = 0.0;`).join(' '), '\n  ')}
+  ${each(K, c => each(D, k => `var F${c}_${k} = 0.0;`) + ' ' + L.pairs.map((_, e) => `var J${c}_${e} = 0.0;`).join(' ') + ' ' + (L.T[c] >= 0 ? L.triples.map((_, e) => `var T${c}_${e} = 0.0;`).join(' ') : ''), '\n  ')}
 ${interactionList(sourceCell(k => `ce${k}`, true), '  ')}
   let o = TP.locOff + (off + c) * ${L.LS4}u;
   ${storeVec4s('treeCells', 'o', (() => {
@@ -757,6 +1008,7 @@ ${interactionList(sourceCell(k => `ce${k}`, true), '  ')}
     for (let c = 0; c < K; c++) {
       for (let k = 0; k < D; k++) words[L.F[c] + k] = `F${c}_${k}`;
       L.pairs.forEach((_, e) => { words[L.J[c] + e] = `J${c}_${e}`; });
+      if (L.T[c] >= 0) L.triples.forEach((_, e) => { words[L.T[c] + e] = `T${c}_${e}`; });
     }
     return words;
   })())}
@@ -768,7 +1020,7 @@ ${interactionList(sourceCell(k => `ce${k}`, true), '  ')}
   // were 1.5 to 2.7 times further from exact than the CPU tree's). A workgroup takes a cell and
   // its threads split the list; partial sums add up in a fixed tree, so runs repeat exactly.
   // A fixed number of workgroups walk the list, which holds the few hubs' cells.
-  const NC = K * (D + L.JN);
+  const NC = K * (D + L.JN) + L.T.filter(t => t >= 0).length * L.TN;
   let HT = HEAVY_THREADS;
   while (HT > 8 && HT * NC * 4 > 16384) HT >>= 1;
   const NQ = 3 ** D << D;
@@ -783,12 +1035,8 @@ ${interactionList(sourceCell(k => `ce${k}`, true), '  ')}
       const conds = [`(${nonzero(group.channels, c => word('b', D + c))})`];
       if (group.law && group.law.hasRange) conds.push(`tree_in_${g}(r2)`);
       lines.push(`if (${conds.join(' && ')}) {`);
-      lines.push(`let k = tree_k12_${g}(r, r2);`);
-      group.channels.forEach(c => {
-        lines.push(`let g${c} = ${word('b', D + c)} * k.x; let h${c} = ${word('b', D + c)} * k.y;`);
-        lines.push(each(D, k => `F${c}_${k} += g${c} * d${k};`));
-        lines.push(L.pairs.map(([p, q], e) => `J${c}_${e} += h${c} * d${p} * d${q}${p === q ? ` - g${c}` : ''};`).join(' '));
-      });
+      lines.push(group.second ? `let k = tree_k123_${g}(r, r2);` : `let k = tree_k12_${g}(r, r2);`);
+      group.channels.forEach(c => lines.push(expansionTerms(c, word('b', D + c))));
       lines.push(`}`);
     });
     lines.push(`}`);
@@ -798,34 +1046,35 @@ ${interactionList(sourceCell(k => `ce${k}`, true), '  ')}
   for (let c = 0; c < K; c++) {
     for (let k = 0; k < D; k++) accNames.push(`F${c}_${k}`);
     L.pairs.forEach((_, e) => accNames.push(`J${c}_${e}`));
+    if (L.T[c] >= 0) L.triples.forEach((_, e) => accNames.push(`T${c}_${e}`));
   }
   const HEAVY_KERNEL = common + lawCode + /* wgsl */`
 ${tp}
 @group(0) @binding(1) var<storage, read> treeSp: array<vec4f>;
 @group(0) @binding(2) var<storage, read> treeMeta: array<u32>;
 @group(0) @binding(3) var<storage, read_write> treeCells: array<vec4f>;
-@group(0) @binding(4) var<storage, read> treeHeavy: array<u32>;${stepDecl ? '\n' + stepDecl(5) : ''}
+@group(0) @binding(4) var<storage, read> treeLists: array<u32>;${stepDecl ? '\n' + stepDecl(5) : ''}
 var<workgroup> parts: array<f32, ${HT * NC}>;
 var<workgroup> todo: u32;
 @compute @workgroup_size(${HT})
 fn main(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
-  if (li == 0u) { todo = treeHeavy[0]; }
+  if (li == 0u) { todo = treeLists[0]; }
   let count = workgroupUniformLoad(&todo);
   let Gi = i32(TP.G);
   let Gp = Gi / 2;
   let poff = ${each(D, () => 'TP.G', ' * ')};
   for (var h = wid.x; h < count; h += nwg.x) {
-    let c = treeHeavy[1u + h];
+    let c = treeLists[${LIST_HEAD}u + h];
     ${loadVec4s('m', 'treeCells', `${L.TAB4}u + c * ${L.CS4}u`, L.CS4)}
     ${each(D, k => `let ce${k} = ${word('m', L.C[0] + k)};`)}
-    ${each(D, k => `let xl${k} = i32(compact(c >> ${k}u));`)}
+    ${each(D, k => `let xl${k} = i32(tree_compact(c >> ${k}u));`)}
     ${accNames.map(x => `var ${x} = 0.0;`).join(' ')}
     for (var q = li; q < ${NQ}u; q += ${HT}u) {
       let pi = q >> ${D}u;
       let ch = q & ${(1 << D) - 1}u;
       ${each(D, k => `let x${k} = (xl${k} >> 1u) + i32((pi / ${3 ** k}u) % 3u) - 1;`)}
       if (${each(D, k => `x${k} < 0 || x${k} >= Gp`, ' || ')}) { continue; }
-      let mm0 = ${each(D, k => `(spread(u32(x${k})) << ${k}u)`, ' | ')};
+      let mm0 = ${each(D, k => `(tree_spread(u32(x${k})) << ${k}u)`, ' | ')};
       if (${countAt('poff + mm0')} == 0u) { continue; }
       ${each(D, k => `let y${k} = 2 * x${k} + i32((ch >> ${k}u) & 1u);`)}
       let dist = ${maxOf(Array.from({ length: D }, (_, k) => `abs(y${k} - xl${k})`))};
@@ -858,6 +1107,7 @@ ${sourceCell(k => `ce${k}`, true)}
     for (let c = 0; c < K; c++) {
       for (let k = 0; k < D; k++) words[L.F[c] + k] = `parts[${j++}]`;
       L.pairs.forEach((_, e) => { words[L.J[c] + e] = `parts[${j++}]`; });
+      if (L.T[c] >= 0) L.triples.forEach((_, e) => { words[L.T[c] + e] = `parts[${j++}]`; });
     }
     return words;
   })())}
@@ -873,7 +1123,7 @@ ${sourceCell(k => `ce${k}`, true)}
     lines.push(loadVec4s('q', 'treeSp', `t * ${L.SP4}u`, L.SP4));
     lines.push(each(D, k => `var d${k} = ${word('q', k)} - p${k};`));
     lines.push(`var r2 = ${each(D, k => `d${k} * d${k}`, ' + ')};`);
-    lines.push(`if (r2 == 0.0) { let jt = jitter(i, treeMeta[TP.metaTag + 2u * t]); ${each(D, k => `d${k} = jt.${AX[k]};`)} r2 = ${each(D, k => `d${k} * d${k}`, ' + ')}; }`);
+    lines.push(`if (r2 == 0.0) { let jt = tree_jitter(i, treeMeta[TP.metaTag + 2u * t]); ${each(D, k => `d${k} = jt.${AX[k]};`)} r2 = ${each(D, k => `d${k} * d${k}`, ' + ')}; }`);
     lines.push(`let r = sqrt(r2);`);
     lines.push(`var g = 0.0;`);
     lawGroups.forEach((group, gi) => {
@@ -885,25 +1135,27 @@ ${sourceCell(k => `ce${k}`, true)}
       const add = `g += wt${gi} * tree_k1_${gi}(r, r2);`;
       lines.push(conds.length ? `if (${conds.join(' && ')}) { ${add} }` : add);
     });
-    lines.push(each(D, k => `na${k} += (wgt * g) * d${k};`));
+    lines.push(each(D, k => `na${k} += g * d${k};`));
     return lines.join('\n');
   })();
 
   const nearField = `
-  // near field: exact pairs in my 3^D cells (sampled with weights past nearCap bodies)
+  // near field: exact pairs in my 3^D cells; a crowded cell's pushes come summed by TREE_LOCAL
+  var crowded = false;
   {
-    ${each(D, k => `let lo${k} = max(cx${k} - 1, 0); let hi${k} = min(cx${k} + 1, Gi - 1);`, ' ')}
+    ${each(D, k => `let lo${k} = max(cx${k} - ${SEP}, 0); let hi${k} = min(cx${k} + ${SEP}, Gi - 1);`, ' ')}
 ${boxLoops(D, `
 let s0 = treeMeta[mm0];
 let e0 = select(TP.n, treeMeta[mm0 + 1u], mm0 + 1u < TP.nCells);
-let cnt = e0 - s0;
-var stride = 1u;
-if (cnt > TP.nearCap) { stride = (cnt + TP.nearCap - 1u) / TP.nearCap; }
-let wgt = f32(stride);
-for (var t = s0; t < e0; t += stride) {
+if (e0 - s0 > TP.nearCap) { crowded = true; continue; }
+for (var t = s0; t < e0; t++) {
   if (t == k) { continue; }
   ${nearPair}
 }`, '    ')}
+  }
+  if (crowded) {
+    ${loadVec4s('cw', 'treeCells', `TP.crowdOff + k * ${CR4}u`, CR4)}
+    ${each(D, q => `na${q} += ${each(K, c => `s[${c}] * ${word('cw', c * D + q)}`, ' + ')};`)}
   }`;
 
   const farInside = `
@@ -914,7 +1166,11 @@ for (var t = s0; t < e0; t += stride) {
       ${each(K, c => each(D, q => `b${q} += s[${c}] * (${word('e', L.F[c] + q)} + ${each(D, r => {
     const e = L.pairs.findIndex(([x, y]) => (x === q && y === r) || (x === r && y === q));
     return `${word('e', L.J[c] + e)} * h${r}`;
-  }, ' + ')});`), '\n      ')}
+  }, ' + ')}${L.T[c] >= 0 ? ' + 0.5 * (' + each(D, r => each(D, t => {
+    const key = [q, r, t].sort().join();
+    const e = L.triples.findIndex(x => x.join() === key);
+    return `${word('e', L.T[c] + e)} * h${r} * h${t}`;
+  }, ' + '), ' + ') + ')' : ''});`), '\n      ')}
       off += ${each(D, () => 'Gl', ' * ')}; Gl >>= 1u; cc >>= ${D}u;
     }`;
 
@@ -938,7 +1194,7 @@ fn tree_force(k: u32, s: array<f32, ${K}>) -> ${vec} {
   ${loadVec4s('me', 'treeSp', `k * ${L.SP4}u`, L.SP4)}
   ${each(D, q => `let p${q} = ${word('me', q)};`)}
   let Gi = i32(TP.G);
-  ${each(D, q => `let cx${q} = i32(compact(c >> ${q}u));`, ' ')}
+  ${each(D, q => `let cx${q} = i32(tree_compact(c >> ${q}u));`, ' ')}
   ${each(D, q => `var na${q} = 0.0;`)}
   ${each(D, q => `var b${q} = 0.0;`)}
 ${nearField}

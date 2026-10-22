@@ -27,6 +27,8 @@ const READBACK_BUFFERS = 3;
 const STATS_WINDOW = 30;
 // Steps per submit before a step has been timed (today's module always used 64)
 const DEFAULT_BATCH = 64;
+// The same with pair formulas above N*, whose steps can each come near the work cap
+const FIRST_PAIR_BATCH = 8;
 const MAX_BATCH = 1024;
 // A submit holds at most this much GPU work, far below the 2-second watchdog
 const MAX_SUBMIT_MS = 100;
@@ -210,13 +212,18 @@ function createRunner(layout, backend) {
       return false;
     }
     if (springStore.versions.length !== linkVersions[2] || springStore.versions.coefficient !== linkVersions[3]) {
-      // a change mark re-plans: links may now have their own lengths
+      // a change mark re-plans: links may now have their own lengths (no more stock template,
+      // the springs read the columns), or all have the defaults again
       const verdict = backend.lower(simulator.program(), simulator);
       if (!verdict.runs) {
         halt({ message: refusal(reasonsOf(verdict)).message, kernel: null, stages: ['springs'] });
         return false;
       }
       linkVersions = LINK_COLUMNS.map(name => springStore.versions[name]);
+      if (verdict.plan.dataKey !== lowering.plan.dataKey) {
+        syncPoint();
+        return false;
+      }
     }
     const prepared = engine.prepare(hostOwns, queued);
     hostOwns = false;
@@ -225,9 +232,60 @@ function createRunner(layout, backend) {
     return true;
   }
 
-  // Encodes `count` steps in as few submits as the batching allows, and reads positions back
+  // Encodes `count` steps in as few submits as the batching allows, and reads positions back. A
+  // host step splits the batch at the steps where its `when` holds (asked one step at a time, so
+  // the steps after it see what it did): the steps before it run, then that step stops at the
+  // host step, which runs on the host while later steps wait (as at a sync point).
   function run(count) {
     if (!engine) { queued += count; return; }
+    const hostSteps = (lowering.plan && lowering.plan.hostSteps) || [];
+    for (let s = 0; hostSteps.length && s < count; s++) {
+      const at = firstStep + queued + s;
+      const holding = hostSteps.filter(name => simulator.stageValues(name, simulator.stepContext(at)).when);
+      if (!holding.length) continue;
+      if (s > 0) runSteps(s);
+      if (halted) return;
+      pending += count - s - 1;
+      busy = hostStep(firstStep + queued, holding).then(() => {
+        busy = null;
+        if (pending && !halted && !stopped) {
+          const rest = pending;
+          pending = 0;
+          step(rest);
+        }
+      }, error => {
+        busy = null;
+        halt({ message: error.message, kernel: null, stages: [] });
+      });
+      return;
+    }
+    runSteps(count);
+  }
+
+  // One step at a host step: its kernels up to each host step that holds, the device's numbers
+  // back into the store, the host step on the host, what it wrote back up, then the rest of the
+  // step (whose numbers are read after the host step ran)
+  async function hostStep(at, holding) {
+    const names = lowering.plan.hostSteps;
+    const from = engine;
+    for (let part = 0; part < engine.segments; part++) {
+      engine.run(1, at, { segment: part });
+      if (part === names.length || holding.indexOf(names[part]) < 0) continue;
+      await readDevice();
+      if (released || halted || from !== engine) return;
+      simulator.iteration(at);
+      try {
+        simulator.getStage(names[part])(simulator.store, simulator);
+      } catch (e) {
+        throw new Error(`the host step ${names[part]} failed: ${e.message}`);
+      }
+      const prepared = engine.prepare(false, queued);
+      if (prepared && prepared.halt) throw new Error(prepared.halt);
+    }
+    queued += 1;
+  }
+
+  function runSteps(count) {
     const rb = free.pop();
     const withTs = !!rb && timestamps;
     const at = timestampsAt(engine.positionBytes);
@@ -240,6 +298,8 @@ function createRunner(layout, backend) {
           enc.resolveQuerySet(querySet, 0, 2, resolveBuffer, 0);
           enc.copyBufferToBuffer(resolveBuffer, 0, rb.buffer, at, 16);
         }
+        // the structures' status words (a work cap passed, a lattice too wide) come back too
+        if (engine.statusBytes) engine.copyStatus(enc, rb.buffer, at + 16);
       } : null,
     });
     queued += result.ran;
@@ -252,7 +312,8 @@ function createRunner(layout, backend) {
   // own cost stays under 10% of the work
   function stepsPerSubmit() {
     const ms = gpuMsPerStep();
-    if (!(ms > 0)) return DEFAULT_BATCH;
+    // before a step is timed: pair formulas near their work cap could make 64 steps long
+    if (!(ms > 0)) return engine && engine.pairs ? FIRST_PAIR_BATCH : DEFAULT_BATCH;
     const most = Math.floor(MAX_SUBMIT_MS / ms);
     const least = Math.ceil(submitMs / (0.1 * ms));
     return Math.max(1, Math.min(MAX_BATCH, Math.max(most, least)));
@@ -273,6 +334,7 @@ function createRunner(layout, backend) {
       if (rb.serial > appliedSerial && from === engine && !replaced) {
         apply(rb.serial, rb.steps, new Float32Array(rb.buffer.getMappedRange(0, bytes)), rb.ordered);
       }
+      const status = from === engine && engine.statusBytes ? engine.statusMessage(new Uint32Array(rb.buffer.getMappedRange(timestampsAt(bytes) + 16, engine.statusBytes))) : null;
       if (withTs) {
         const t = new BigUint64Array(rb.buffer.getMappedRange(timestampsAt(bytes), 16));
         const ns = Number(t[1] - t[0]);
@@ -284,6 +346,10 @@ function createRunner(layout, backend) {
       }
       rb.buffer.unmap();
       if (rb.engine === engine) free.push(rb); else rb.buffer.destroy();
+      if (status) {
+        halt({ message: status.message, kernel: null, stages: status.stages || [] });
+        return;
+      }
       afterReadback();
     }, () => { issuedAt.delete(rb.serial); /* destroyed, or the device was lost */ }).catch(error => {
       // a bug here, or a listener that threw: say so, rather than stop reading back in silence
@@ -433,7 +499,8 @@ function createRunner(layout, backend) {
 
   function makeReadbacks() {
     if (!engine) return;
-    const size = Math.max(16, timestampsAt(engine.positionBytes) + (timestamps ? 16 : 0));
+    // positions | timestamps (16 bytes) | the structures' status words
+    const size = Math.max(16, timestampsAt(engine.positionBytes) + 16 + (engine.statusBytes || 0));
     for (let r = 0; r < READBACK_BUFFERS; r++) {
       const rb = { buffer: device.createBuffer({ size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }), engine };
       all.push(rb);
@@ -485,7 +552,8 @@ function createRunner(layout, backend) {
   function markList(plan) {
     const columns = plan.reads || ['pos', 'velocity', 'mass', 'pinned'];
     const out = columns.map(name => ({ name: 'the column ' + name, read: () => store.versions[name] }));
-    LINK_COLUMNS.forEach(name => out.push({ name: 'the link column ' + name, read: () => springStore.versions[name] }));
+    const links = LINK_COLUMNS.concat(Object.keys(plan.linkColumns || {}).filter(name => LINK_COLUMNS.indexOf(name) < 0));
+    links.forEach(name => out.push({ name: 'the link column ' + name, read: () => springStore.versions[name] }));
     PHYSICS_SETTINGS.forEach(key => out.push({ name: 'the setting ' + key, read: () => simulator.settings[key] }));
     out.push({ name: 'the repulsion law', read: () => simulator.repulsionLaw() });
     out.push({ name: 'the inertia', read: () => simulator.settings.inertia });

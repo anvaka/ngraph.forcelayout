@@ -126,11 +126,11 @@ function wholeLiteral(code) {
 
 /**
  * Code that sets `k1Name` to F(r) / r (and `k2Name`, when given, to (F(r)/r - F'(r)) / r^2),
- * both declared with `let`. Throws for what the GPU cannot run, literals included.
+ * both declared with `let`. Throws for what the GPU cannot run, literals included. A lookup table
+ * prints as `lawFunctions.T.value(x)` (and its slope's guard): the caller puts its own lookup there.
  */
 export function emitLaw(law, dimension, rName, k1Name, k2Name, printer = WGSL) {
-  if (law.tableNames.length) throw new Error('Laws with lookup tables cannot run on the GPU yet');
-  if (Object.keys(law.functions).length) throw new Error('Laws with custom functions cannot run on the GPU');
+  if (Object.keys(law.functions).some(name => law.tableNames.indexOf(name) < 0)) throw new Error('Laws with custom functions cannot run on the GPU');
   return law.emit(printer, dimension, rName, k1Name, k2Name);
 }
 
