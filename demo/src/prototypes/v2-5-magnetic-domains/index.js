@@ -26,9 +26,9 @@ domains.</p>
 <p>Look for separate clusters with open space between them; on <i>sbm8x50</i> the domains only
 partly match the real groups.</p>
 <p>What gets worse: edges between groups get longer, crossings rise on <i>communities</i> and
-<i>Miserables</i>, and <i>Miserables</i> gets stretched. Each step takes about 2 times as long, or 6
-times with Repulsion = dual tree, because the extra push ignores that setting and always uses its
-own, slightly less exact tree.</p>
+<i>Miserables</i>, and <i>Miserables</i> gets stretched. A step takes about as long as without the
+idea: the extra push shares the library's own tree walk. With Repulsion = dual tree that shared walk
+uses the quad tree, so a step takes 3 to 4 times as long as the stock dual tree.</p>
 <p>Grids, trees, random graphs, and temperatures where no domains form are left unchanged in the
 default color (try <i>grid20</i>, or set <i>Auto-off</i> to 0); with 3 or more dimensions it does
 nothing, and the browser console says why.</p>`,

@@ -20,9 +20,9 @@ main branches (paTree3k); grid20 has no leaves and looks the same.</p>
 closer and overlap. On EVA, a piece of two linked nodes counts as two leaves, so it loses all
 long-range push and mixes into the main part, which is much of why EVA fills the screen
 better.</p>
-<p>2D only (it does nothing in 3D), and it ignores the Repulsion setting, since it uses its own
-quad tree. A step takes about 1.2 to 1.7 times as long as the stock quad tree, and 9 to 14 times
-as long as the dual tree.</p>`,
+<p>2D only (it does nothing in 3D). Its pushes always walk one quad tree, whichever Repulsion
+setting is picked: a step takes about 1.35 to 1.55 times as long as the stock quad tree, and about 8
+times as long as the dual tree.</p>`,
   tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: EVA', 'Benchmark: paTree3k', 'Benchmark: grid20'],
   params: [
     {

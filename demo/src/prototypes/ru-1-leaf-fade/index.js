@@ -20,9 +20,10 @@ of springs with no decay, unless every node is also tied to a fixed spot, and th
 within a few nodes.</p>
 <p>What gets worse: links cross about 2.5× more often on the star graphs, neighbouring fans
 overlap in leafy trees (paTree3k: 0.07 → 0.30 crossings per link), graphs with many pieces (CSphd)
-draw their main piece smaller, and each step costs about 1.6–2× stock. <i>Fade every push</i> = 1
+draw their main piece smaller, and each step costs about 1.75× the stock quad tree. <i>Fade every push</i> = 1
 packs the stars tighter, but trees and sheets stop unfolding (paTree3k: 0.85 crossings per link).
-It works in 2D only. Its pushes always walk one quad tree, whichever Repulsion method is picked.</p>`,
+It works in 2D only. Its pushes always walk one quad tree, whichever Repulsion method is picked, so
+with dual tree a step takes about 10× as long as the stock dual tree.</p>`,
   tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: grid20'],
   params: [
     {
