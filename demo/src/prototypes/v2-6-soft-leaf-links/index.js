@@ -16,13 +16,13 @@ const NAME = 'v2-6-soft-leaf-links';
 // A fan link is `current` times the spring length and softer by current^soften, like a longer
 // rod (Hooke); every other link is the stock spring. The library reads a negative length as
 // "use the spring length", and a stiffness of 0 or less as "use the global one", so the fan
-// links do the same. A huge softening that rounds the stiffness down to 0 keeps the smallest
-// positive number instead.
+// links do the same. A huge softening that takes the stiffness below 1e-30 keeps 1e-30 instead
+// (a tiny number that 32-bit floats, on a GPU, still hold).
 const SOFT_LEAF_LINKS = `
   progress = grow > 0 ? min(1, (step + before) / grow) : 1;
   current = 1 + (fanStretch - 1) * progress;
   fanLength = springLength * current;
-  fanCoefficient = max(5e-324, springCoefficient / current^soften);
+  fanCoefficient = max(1e-30, springCoefficient / current^soften);
   pull = fanStretch > 1 ?
     (springCoefficient > 0 && fanCoefficient > 0 ? fanCoefficient : springCoefficient) * (r - (fanLength < 0 ? springLength : fanLength)) :
     coefficient * (r - length)`;
