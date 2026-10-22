@@ -9,6 +9,7 @@
 //   node modules/gpu/test/t8.js <demo root>   (a checkout with demo/src/prototypes, e.g. the demo branch)
 import fs from 'node:fs';
 import path from 'node:path';
+import { registerHooks } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { gpuCapabilities } from '../index.js';
 
@@ -26,6 +27,15 @@ async function main(root) {
   if (!root || !fs.existsSync(path.join(root, 'demo/src/prototypes'))) {
     throw new Error('usage: node modules/gpu/test/t8.js <demo root> (a checkout with demo/src/prototypes)');
   }
+  // ideas import the add-ons by package name (ngraph.forcelayout.gridfield), as the demo's vite
+  // config resolves them: here, the root's modules/<name>/index.js
+  registerHooks({
+    resolve(specifier, context, nextResolve) {
+      const match = /^ngraph\.forcelayout\.([\w-]+)$/.exec(specifier);
+      if (match) return { url: pathToFileURL(path.resolve(root, 'modules', match[1], 'index.js')).href, shortCircuit: true };
+      return nextResolve(specifier, context);
+    },
+  });
   const load = file => import(pathToFileURL(path.join(root, file)).href);
   const { default: createLayout } = await load('index.js');
   const { default: createGraph } = await load('node_modules/ngraph.graph/index.js');
