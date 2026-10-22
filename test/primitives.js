@@ -1,8 +1,9 @@
 var test = require('tap').test;
 var {generateCreateBodyFunctionBody} = require('../lib/codeGenerators/generateCreateBody');
+var {createSingleBodyStore} = require('../lib/createBodyStore');
 
 function primitive(dimension) {
-  let res = (new Function(generateCreateBodyFunctionBody(dimension)))();
+  let res = (new Function('createSingleBodyStore', generateCreateBodyFunctionBody(dimension)))(createSingleBodyStore);
   return res;
 }
 

@@ -25,10 +25,14 @@ export default defineConfig({
  * so that library edits show up immediately. The library is CommonJS, which Vite
  * only converts inside node_modules, so this plugin bundles it into a single ES
  * module with esbuild and reloads the page whenever one of its files changes.
+ * Files under lib/ get the same treatment, so prototypes can reuse library internals.
  */
 function localForceLayout() {
   const virtualId = '\0local-forcelayout';
-  let libraryFiles = new Set();
+  const virtualPrefix = virtualId + ':';
+  const libFolder = path.join(libraryRoot, 'lib') + path.sep;
+  // virtual module id -> library files it was built from
+  const builtFrom = new Map();
 
   return {
     name: 'local-forcelayout',
@@ -38,13 +42,16 @@ function localForceLayout() {
       if (!importer || !source.startsWith('.')) return null;
       const resolved = path.resolve(path.dirname(importer), source);
       if (resolved === libraryRoot || resolved === path.join(libraryRoot, 'index.js')) return virtualId;
+      const file = resolved.endsWith('.js') ? resolved : resolved + '.js';
+      if (file.startsWith(libFolder)) return virtualPrefix + file;
       return null;
     },
 
     async load(id) {
-      if (id !== virtualId) return null;
+      if (id !== virtualId && !id.startsWith(virtualPrefix)) return null;
+      const entry = id === virtualId ? path.join(libraryRoot, 'index.js') : id.slice(virtualPrefix.length);
       const result = await build({
-        entryPoints: [path.join(libraryRoot, 'index.js')],
+        entryPoints: [entry],
         absWorkingDir: libraryRoot,
         bundle: true,
         format: 'esm',
@@ -52,17 +59,21 @@ function localForceLayout() {
         metafile: true,
         logLevel: 'silent'
       });
-      libraryFiles = new Set(Object.keys(result.metafile.inputs).map(file => path.resolve(libraryRoot, file)));
-      libraryFiles.forEach(file => this.addWatchFile(file));
+      const files = new Set(Object.keys(result.metafile.inputs).map(file => path.resolve(libraryRoot, file)));
+      builtFrom.set(id, files);
+      files.forEach(file => this.addWatchFile(file));
       return result.outputFiles[0].text;
     },
 
     hotUpdate({ file }) {
-      if (!libraryFiles.has(file)) return;
+      const stale = [...builtFrom].filter(([, files]) => files.has(file)).map(([id]) => id);
+      if (!stale.length) return;
       // Reload the page rather than hot-swapping App.vue: a fresh simulation with the
       // new library code is what we want, and layout settings survive in the URL.
-      const mod = this.environment.moduleGraph.getModuleById(virtualId);
-      if (mod) this.environment.moduleGraph.invalidateModule(mod);
+      stale.forEach(id => {
+        const mod = this.environment.moduleGraph.getModuleById(id);
+        if (mod) this.environment.moduleGraph.invalidateModule(mod);
+      });
       this.environment.hot.send({ type: 'full-reload' });
       return [];
     }

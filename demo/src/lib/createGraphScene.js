@@ -7,7 +7,7 @@ import createForceLayout from './createForceLayout';
 import findLargestComponent from './findLargestComponent';
 // Add-ons from modules/ in this repository (see vite.config.js), not part of ngraph.forcelayout
 import placeNodes from 'ngraph.forcelayout.pivot';
-import {initWebGPU, createGpuLayout} from 'ngraph.forcelayout.gpu';
+import {createWebGPUBackend, runOnGpu} from 'ngraph.forcelayout.gpu';
 import createGraph from 'ngraph.graph';
 
 const layoutProps = ['timeStep', 'springLength', 'springCoefficient', 'dimensions', 'dragCoefficient', 'gravity', 'theta', 'maxVelocity', 'integrator', 'nbody'];
@@ -20,10 +20,14 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   let graph, layout;
   let scene, nodes, lines, guide;
 
-  // When WebGPU backend is on, gpuLayout runs the simulation, and `layout` only keeps
-  // positions for the moment we switch back to CPU.
+  // With WebGPU picked, the GPU runs the layout's own simulator (`gpu`, from runOnGpu()) whenever
+  // its plan says it can; otherwise the layout stays on the CPU and `gpuReasons` says why. The
+  // layout keeps the positions, read back after each batch of steps.
   let backend = 'cpu';
-  let gpuDevice, gpuLayout;
+  let gpuBackend, gpu = null;
+  let gpuReasons = '', gpuError = '';
+  // Starting and stopping the GPU runs one change at a time; frames don't step meanwhile
+  let changes = Promise.resolve(), changing = false;
 
   let fixedViewBox = false;
   let isRunning = false;
@@ -50,7 +54,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   function loadGraph(newGraph, desiredLayout) {
     if (scene) {
       scene.dispose();
-      stopGpuLayout(false);
+      gpu = null; // disposing the layout stops it
       layout.dispose();
       scene = null
       cancelAnimationFrame(rafHandle);
@@ -67,7 +71,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     // this is a standard force layout
     layout = createForceLayout(graph, layoutSettings);
     applyPlacement();
-    if (backend === 'webgpu') startGpuLayout();
+    changeLayout(null);
     stats.reset();
 
     fitView();
@@ -79,11 +83,11 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
 
   function restart() {
     // Fresh layout keeps the settings, but forgets positions and velocities.
-    stopGpuLayout(false);
+    gpu = null; // disposing the layout stops it
     layout.dispose();
     layout = createForceLayout(graph, layoutSettings);
     applyPlacement();
-    if (backend === 'webgpu') startGpuLayout();
+    changeLayout(null);
     stats.reset();
     fitView();
   }
@@ -109,55 +113,88 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
 
   async function setBackend(newBackend) {
     if (newBackend === 'webgpu' && backend !== 'webgpu') {
-      if ((layoutSettings.dimensions || 2) !== 2) return backend;
-      gpuDevice = gpuDevice || await initWebGPU();
-      if (!gpuDevice) return backend;
-      backend = 'webgpu';
-      if (graph) startGpuLayout();
-    } else if (newBackend === 'cpu' && backend !== 'cpu') {
-      backend = 'cpu';
-      stopGpuLayout(true);
+      gpuBackend = gpuBackend || await createWebGPUBackend();
+      if (!gpuBackend) return backend;
     }
-    stats.reset();
+    if (newBackend !== backend) {
+      backend = newBackend;
+      gpuError = '';
+      stats.reset();
+      await changeLayout(null);
+    }
     return backend;
   }
 
-  function startGpuLayout() {
-    gpuLayout = createGpuLayout(gpuDevice, graph, {
-      settings: layoutSettings,
-      getInitialPosition: nodeId => layout.getNodePosition(nodeId)
+  // Runs `change` (which may replace the layout) with the GPU stopped, then starts the GPU again
+  // when WebGPU is picked. Stopping the GPU leaves the latest positions in the layout.
+  function changeLayout(change) {
+    changes = changes.then(async () => {
+      changing = true;
+      try {
+        if (gpu) {
+          let running = gpu;
+          gpu = null;
+          await running.stop();
+        }
+        if (change) change();
+        if (backend === 'webgpu' && layout) await startGpu();
+      } catch (e) {
+        console.error('Switching the layout failed:', e);
+      } finally {
+        changing = false;
+      }
     });
+    return changes;
   }
 
-  function stopGpuLayout(keepPositions) {
-    if (!gpuLayout) return;
-    if (keepPositions) {
-      graph.forEachNode(node => {
-        let pos = gpuLayout.getNodePosition(node.id);
-        layout.setNodePosition(node.id, pos.x, pos.y);
-      });
+  async function startGpu() {
+    let target = layout;
+    let plan = target.simulator.plan(gpuBackend);
+    if (!plan.runs) {
+      // Each kind of refusal once, without the stage names
+      let whole = plan.reasons.filter(reason => !plan.stages.some(stage => reason.startsWith(stage.stage + ': ')));
+      let reasons = whole.concat(plan.stages.filter(stage => !stage.runs).map(stage => stage.reason));
+      gpuReasons = Array.from(new Set(reasons)).join('; ');
+      return;
     }
-    gpuLayout.dispose();
-    gpuLayout = null;
+    gpuReasons = '';
+    try {
+      let running = await runOnGpu(target, gpuBackend);
+      if (target !== layout) {
+        await running.stop();
+        return;
+      }
+      gpu = running;
+      gpu.on('error', e => {
+        // Stepping stopped on the GPU: carry on with the CPU from the last positions
+        gpuError = e.lost ? 'the WebGPU device was lost' : e.message;
+        // a lost device never comes back: picking WebGPU again asks for a new one
+        if (e.lost) gpuBackend = null;
+        backend = 'cpu';
+        changeLayout(null);
+      });
+    } catch (e) {
+      gpuReasons = e.reasons ? e.reasons.join('; ') : e.message;
+    }
   }
 
   function getStats() {
     return {
-      backend,
+      // where the layout runs now (WebGPU may be picked and refuse it)
+      backend: gpu ? 'webgpu' : 'cpu',
       nodes: graph ? graph.getNodesCount() : 0,
       links: graph ? graph.getLinksCount() : 0,
       steps: stats.steps,
-      msPerStep: gpuLayout ? gpuLayout.getStats().msPerStep : stats.msPerStep(),
-      placement: placementChoice
+      msPerStep: gpu ? gpu.stats().msPerStep : stats.msPerStep(),
+      placement: placementChoice,
+      // why the layout runs on the CPU although WebGPU is picked
+      gpuReasons: backend === 'webgpu' && !gpu && !changing ? gpuReasons : '',
+      gpuError
     };
   }
 
-  function activeLayout() {
-    return gpuLayout || layout;
-  }
-
   function fitView() {
-    let rect = activeLayout().getGraphRect();
+    let rect = layout.getGraphRect();
     let cx = (rect.min_x + rect.max_x) / 2;
     let cy = (rect.min_y + rect.max_y) / 2;
     let half = Math.max(rect.max_x - rect.min_x, rect.max_y - rect.min_y) * 0.6;
@@ -184,32 +221,30 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     layoutSettings = props.reduce((settings, name) => (settings[name] = newLayoutSettings[name], settings), {});
     if (!layout) return;
 
-    if (gpuLayout && layoutSettings.dimensions !== 2) {
-      // WebGPU layout is 2D only
-      backend = 'cpu';
-      stopGpuLayout(true);
-    }
-
     if (layoutSettings.dimensions !== previousDimensions) {
-      let prevLayout = layout;
-      layout = createForceLayout(graph, layoutSettings)
-      graph.forEachNode(node => {
-        let prevPos = prevLayout.getNodePosition(node.id);
-        let positions = Object.keys(prevPos).map(name => prevPos[name]);
-        for (let i = previousDimensions; i < layoutSettings.dimensions; ++i) {
-          // If new layout has more dimensions than the previous layout, fill those with random values:
-          positions.push(Math.random());
-        }
-        positions.unshift(node.id);
-        layout.setNodePosition.apply(layout, positions);
-      });
+      // a new layout in the new dimensions, back on the GPU when its plan runs there
+      changeLayout(() => {
+        let prevLayout = layout;
+        layout = createForceLayout(graph, layoutSettings)
+        graph.forEachNode(node => {
+          // a plain {x, y, ...} copy: positions are views into the layout's arrays
+          let prevPos = prevLayout.getNodePosition(node.id).toJSON();
+          let positions = Object.keys(prevPos).map(name => prevPos[name]);
+          for (let i = previousDimensions; i < layoutSettings.dimensions; ++i) {
+            // If new layout has more dimensions than the previous layout, fill those with random values:
+            positions.push(Math.random());
+          }
+          positions.unshift(node.id);
+          layout.setNodePosition.apply(layout, positions);
+        });
 
-      prevLayout.dispose();
+        prevLayout.dispose();
+      });
     } else {
+      // the GPU, if it runs the layout, reads them at its next step
       props.forEach(name => {
         layout.simulator[name](layoutSettings[name]);
       });
-      if (gpuLayout) gpuLayout.updateSettings(layoutSettings);
     }
   }
 
@@ -229,7 +264,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     });
 
     graph.forEachNode(node => {
-      var point = activeLayout().getNodePosition(node.id);
+      var point = layout.getNodePosition(node.id);
       let size = 1;
       if (node.data && node.data.size) {
         size = node.data.size;
@@ -244,8 +279,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     lines = new LineCollection(scene.getGL(), { capacity: graph.getLinksCount() });
 
     graph.forEachLink(link => {
-      var from = activeLayout().getNodePosition(link.fromId);
-      var to = activeLayout().getNodePosition(link.toId);
+      var from = layout.getNodePosition(link.fromId);
+      var to = layout.getNodePosition(link.toId);
       var line = { from: [from.x, from.y, from.z || 0], to: [to.x, to.y, to.z || 0], color: 0xFFFFFF10 };
       link.ui = line;
       link.uiId = lines.add(link.ui);
@@ -259,22 +294,16 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   function frame() {
     rafHandle = requestAnimationFrame(frame);
 
-    if (gpuLayout && gpuLayout.getStats().lost) {
-      // GPU device is gone (e.g. driver reset) - continue on CPU from the last known positions
-      backend = 'cpu';
-      stopGpuLayout(true);
-    }
-
-    if (isRunning) {
+    if (isRunning && !changing) {
       let start = performance.now();
-      if (gpuLayout) {
-        gpuLayout.step(stepsPerFrame);
+      if (gpu) {
+        gpu.step(stepsPerFrame);
       } else {
         for (let i = 0; i < stepsPerFrame; ++i) layout.step();
       }
       stats.record(performance.now() - start, stepsPerFrame);
       if (fixedViewBox) {
-        let rect = activeLayout().getGraphRect();
+        let rect = layout.getGraphRect();
         scene.setViewBox({
           left:  rect.min_x,
           top:   rect.min_y,
@@ -289,7 +318,6 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
 
   function drawGraph() {
     let names = ['x', 'y', 'z']
-    let layout = activeLayout();
     // let minR = Infinity; let maxR = -minR;
     // let minG = Infinity; let maxG = -minG;
     // let minB = Infinity; let maxB = -minB;
@@ -357,7 +385,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   function dispose() {
     cancelAnimationFrame(rafHandle);
 
-    stopGpuLayout(false);
+    if (gpu) gpu.stop();
+    gpu = null;
     scene.dispose();
     bus.off('load-graph', loadGraph);
   }
