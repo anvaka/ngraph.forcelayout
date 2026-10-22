@@ -2502,7 +2502,28 @@ fn tree_slope_${e}_${t.name}(x: f32) -> f32 {
   return (${i(`k + 1u`)} - ${i(`k`)}) * ${gp(r)};
 }`}function Fp(e){return e.TAB4?`
 fn tree_tableWord(w: u32) -> f32 { return treeCells[w >> 2u][w & 3u]; }`:``}function Ip(e,t){return e.map(e=>`${t(e)} != 0.0`).join(` || `)}function Lp(e){let{D:t,L:n}=e,r=n.K,i=n.box,a=lp,o=jp(e.lawWords)+Tp(t,n.bits)+Ep(t),s=`@group(0) @binding(0) var<uniform> TP: TreeParams;`,c=e.values?e.values.decl:null,l=e.values&&e.values.gravity?e.values.gravity:`TP.gravity`,u=(e,t)=>{let n=[];e.forEach(e=>{n.indexOf(e.buffer)<0&&n.push(e.buffer)});let r={};return e.forEach(e=>{r[e.buffer]=e.type||`array<f32>`}),{names:n,decl:n.map((e,n)=>`@group(0) @binding(${t+n}) var<storage, read> ${e}: ${r[e]};`).join(`
-`)}},d=(t,n)=>e.pos.at(t,n),f=!!e.hubs,p=(()=>{let n=u(f?[e.pos].concat(e.charges):[e.pos],1);return o+`
+`)}},d=(t,n)=>e.pos.at(t,n),f=!!e.hubs,p=e.sep||1,m=2*p+1,h=m**t,g=e=>`
+fn tree_crowd_work() -> u32 {
+  let crowded = ${e(`1u`)};
+  let Gi = i32(TP.G);
+  var work = 0u;
+  for (var l = 0u; l < crowded; l++) {
+    let b = ${e(`TP.crowdList + l`)};
+    ${X(t,e=>`let x${e} = i32(tree_compact(b >> ${e}u));`,` `)}
+    var targets = 0u;
+    for (var nu = 0u; nu < ${h}u; nu++) {
+      ${X(t,e=>`let y${e} = x${e} + i32((nu / ${m**e}u) % ${m}u) - ${p};`,` `)}
+      if (${X(t,e=>`y${e} < 0 || y${e} >= Gi`,` || `)}) { continue; }
+      let y = ${X(t,e=>`(tree_spread(u32(y${e})) << ${e}u)`,` | `)};
+      targets += select(TP.n, treeMeta[y + 1u], y + 1u < TP.nCells) - treeMeta[y];
+    }
+    let nb = select(TP.n, treeMeta[b + 1u], b + 1u < TP.nCells) - treeMeta[b];
+    work += u32(ceil(f32(nb) * f32(targets) * 1e-6));
+  }
+  return work;
+}
+// the cap refuses this step's crowded cells (weighted by the charges, see chargeWeight)
+fn tree_refused() -> bool { return f32(tree_crowd_work()) * ${gp(hp(r)*1e6)} > TP.workCap; }`,_=(()=>{let n=u(f?[e.pos].concat(e.charges):[e.pos],1);return o+`
 ${s}
 ${n.decl}
 @group(0) @binding(${1+n.names.length}) var<storage, read_write> treeBox: array<atomic<u32>>;
@@ -2553,7 +2574,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocation_ind
     }
     if (li == 0u) { atomicStore(&treeBox[${i.PART}u + wid.x], bitcast<u32>(qpart[0])); }
   }`:``}
-}`})(),m=!!e.heavyCells,h=o+`
+}`})(),v=!!e.heavyCells,y=o+`
 ${s}
 @group(0) @binding(1) var<storage, read_write> treeBox: array<u32>;
 @group(0) @binding(2) var<storage, read_write> treeLists: array<u32>;
@@ -2632,7 +2653,7 @@ fn main(@builtin(local_invocation_index) li: u32) {
     ${X(t,e=>`treeBox[${i.BB_MIN+e}] = 0xffffffffu; treeBox[${i.BB_MAX+e}] = 0u;`,`
     `)}
   }
-}`,g=(()=>{let n=u([e.pos],1),r=1+n.names.length;return o+`
+}`,b=(()=>{let n=u([e.pos],1),r=1+n.names.length;return o+`
 ${s}
 ${n.decl}
 @group(0) @binding(${r}) var<storage, read> treeBox: array<u32>;
@@ -2651,7 +2672,38 @@ fn main(${kp}) {
   let c = ${X(t,e=>`(tree_spread(u32(clamp(floor(q${e}), 0.0, gmax))) << ${e}u)`,` | `)};
   treeWork[2u * i] = c | select(0x80000000u, 0u, inside);
   treeWork[2u * i + 1u] = atomicAdd(&treeCount[c], 1u);
-}`})(),_=jp(e.lawWords)+`
+}`})(),x=jp(e.lawWords)+`
+@group(0) @binding(0) var<storage, read_write> treeCount: array<u32>;
+@group(0) @binding(1) var<storage, read_write> treeMeta: array<u32>;
+@group(0) @binding(2) var<storage, read_write> blockSums: array<u32>;
+@group(0) @binding(3) var<uniform> TP: TreeParams;
+@group(0) @binding(4) var<storage, read_write> treeLists: array<atomic<u32>>;
+var<workgroup> tmp: array<u32, 256>;
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: vec3u) {
+  let base = wid.x * 1024u + li * 4u;
+  let a0 = treeCount[base]; let a1 = treeCount[base + 1u]; let a2 = treeCount[base + 2u]; let a3 = treeCount[base + 3u];
+  if (max(max(a0, a1), max(a2, a3)) > TP.nearCap) {
+    let a = array<u32, 4>(a0, a1, a2, a3);
+    for (var k = 0u; k < 4u; k++) {
+      if (a[k] > TP.nearCap) { atomicStore(&treeLists[TP.crowdList + atomicAdd(&treeLists[1], 1u)], base + k); }
+    }
+  }
+  treeCount[base] = 0u; treeCount[base + 1u] = 0u; treeCount[base + 2u] = 0u; treeCount[base + 3u] = 0u;
+  let t = a0 + a1 + a2 + a3;
+  tmp[li] = t;
+  workgroupBarrier();
+  for (var off = 1u; off < 256u; off <<= 1u) {
+    var v = tmp[li];
+    if (li >= off) { v += tmp[li - off]; }
+    workgroupBarrier();
+    tmp[li] = v;
+    workgroupBarrier();
+  }
+  let ex = tmp[li] - t;
+  treeMeta[base] = ex; treeMeta[base + 1u] = ex + a0; treeMeta[base + 2u] = ex + a0 + a1; treeMeta[base + 3u] = ex + a0 + a1 + a2;
+  if (li == 255u) { blockSums[wid.x] = tmp[255]; }
+}`,S=jp(e.lawWords)+`
 ${s}
 @group(0) @binding(1) var<storage, read_write> treeMeta: array<u32>;
 @group(0) @binding(2) var<storage, read> blockSums: array<u32>;
@@ -2660,7 +2712,7 @@ fn main(${kp}) {
   let e = ${Ap};
   if (e >= TP.nCells) { return; }
   treeMeta[e] += blockSums[e >> 10u];
-}`,v=jp(e.lawWords)+`
+}`,C=jp(e.lawWords)+`
 ${s}
 @group(0) @binding(1) var<storage, read> treeMeta: array<u32>;
 @group(0) @binding(2) var<storage, read_write> treeWork: array<u32>;
@@ -2669,12 +2721,14 @@ fn main(${kp}) {
   let i = ${Ap};
   if (i >= TP.n) { return; }
   treeWork[2u * TP.n + treeMeta[treeWork[2u * i] & 0x7fffffffu] + treeWork[2u * i + 1u]] = i;
-}`,y=(()=>{let r=u([e.pos].concat(e.charges),1),i=1+r.names.length,a=[];for(let e=0;e<t;e++)a.push(`${d(`i`,e)}`);return e.charges.forEach(e=>a.push(e.at(`i`,0))),jp(e.lawWords)+`
+}`,w=(()=>{let r=u([e.pos].concat(e.charges),1),i=1+r.names.length,a=[];for(let e=0;e<t;e++)a.push(`${d(`i`,e)}`);return e.charges.forEach(e=>a.push(e.at(`i`,0))),jp(e.lawWords)+Tp(t,n.bits)+`
 ${s}
 ${r.decl}
 @group(0) @binding(${i}) var<storage, read> treeWork: array<u32>;
 @group(0) @binding(${i+1}) var<storage, read_write> treeMeta: array<u32>;
 @group(0) @binding(${i+2}) var<storage, read_write> treeSp: array<vec4f>;
+@group(0) @binding(${i+3}) var<storage, read> treeLists: array<u32>;
+${g(e=>`treeLists[${e}]`)}
 @compute @workgroup_size(256)
 fn main(${kp}) {
   let i = ${Ap};
@@ -2684,9 +2738,9 @@ fn main(${kp}) {
   let s = treeMeta[c];
   let e = select(TP.n, treeMeta[c + 1u], c + 1u < TP.nCells);
   var rank = treeWork[2u * i + 1u];
-  // a cell of more than 65,536 bodies keeps the atomic order; the crowded cells' work cap refuses
-  // such a step anyway (65,536^2 pairs)
-  if (e - s <= 65536u) {
+  // A crowded cell keeps the atomic order on a step the cap refuses (nothing is computed from it),
+  // and so does a cell of more than 65,536 bodies (65,536^2 pairs are refused)
+  if (e - s <= 65536u && !(e - s > TP.nearCap && tree_refused())) {
     rank = 0u;
     for (var t = s; t < e; t++) { if (treeWork[2u * TP.n + t] < i) { rank++; } }
   }
@@ -2695,25 +2749,25 @@ fn main(${kp}) {
   treeMeta[TP.metaTag + 2u * k] = i;
   treeMeta[TP.metaTag + 2u * k + 1u] = raw;
   treeMeta[TP.metaRow + i] = k;
-}`})(),b=[];e.channels.forEach((e,t)=>{(t===0||e.own)&&b.push(t)});let x=(e,i,a)=>{let o=[];for(let a=0;a<r;a++)if(o[n.S[a]]=e(a),b.indexOf(a)>=0)for(let e=0;e<t;e++)o[n.C[a]+e]=i(a,e);return n.CNT>=0&&(o[n.CNT]=`f32(${a})`),o},S=`struct TreeRec { v: array<vec4f, ${n.CS4}>, n: u32 };`,C=(e,t,n)=>`var ${e}: TreeRec; ${yp(t).map((t,n)=>`${e}.v[${n}] = ${t};`).join(` `)} ${e}.n = ${n};`,w=(e,t,r)=>X(n.CS4,r=>`treeCells[${n.TAB4}u + (${e}) * ${n.CS4}u + ${r}u] = ${t}.v[${r}];`)+(n.CNT<0?` treeMeta[${r} + ${e}] = ${t}.n;`:``),T=1<<t,E=e=>`
+}`})(),T=[];e.channels.forEach((e,t)=>{(t===0||e.own)&&T.push(t)});let E=(e,i,a)=>{let o=[];for(let a=0;a<r;a++)if(o[n.S[a]]=e(a),T.indexOf(a)>=0)for(let e=0;e<t;e++)o[n.C[a]+e]=i(a,e);return n.CNT>=0&&(o[n.CNT]=`f32(${a})`),o},D=`struct TreeRec { v: array<vec4f, ${n.CS4}>, n: u32 };`,O=(e,t,n)=>`var ${e}: TreeRec; ${yp(t).map((t,n)=>`${e}.v[${n}] = ${t};`).join(` `)} ${e}.n = ${n};`,k=(e,t,r)=>X(n.CS4,r=>`treeCells[${n.TAB4}u + (${e}) * ${n.CS4}u + ${r}u] = ${t}.v[${r}];`)+(n.CNT<0?` treeMeta[${r} + ${e}] = ${t}.n;`:``),A=1<<t,j=e=>`
   ${X(r,e=>`var m${e} = 0.0;`)}
-  ${b.map(e=>`var w${e} = 0.0; `+X(t,t=>`var s${e}_${t} = 0.0;`)).join(` `)}
+  ${T.map(e=>`var w${e} = 0.0; `+X(t,t=>`var s${e}_${t} = 0.0;`)).join(` `)}
   ${X(t,e=>`var u${e} = 0.0;`)}
   var cnt = 0u;
-  for (var ch = 0u; ch < ${T}u; ch++) {
+  for (var ch = 0u; ch < ${A}u; ch++) {
     ${e(`ch`)}
     cnt += n;
     ${X(r,e=>`m${e} += ${_p(`a`,n.S[e])};`)}
-    ${b.map(e=>`w${e} += abs(${_p(`a`,n.S[e])}); `+X(t,t=>`s${e}_${t} += abs(${_p(`a`,n.S[e])}) * ${_p(`a`,n.C[e]+t)};`)).join(` `)}
+    ${T.map(e=>`w${e} += abs(${_p(`a`,n.S[e])}); `+X(t,t=>`s${e}_${t} += abs(${_p(`a`,n.S[e])}) * ${_p(`a`,n.C[e]+t)};`)).join(` `)}
     ${X(t,e=>`u${e} += f32(n) * ${_p(`a`,n.C[0]+e)};`)}
   }
   let mean = select(0.0, 1.0 / f32(cnt), cnt > 0u);
-  ${b.map(e=>`let i${e} = select(0.0, 1.0 / w${e}, w${e} != 0.0);`).join(` `)}
+  ${T.map(e=>`let i${e} = select(0.0, 1.0 / w${e}, w${e} != 0.0);`).join(` `)}
   ${X(t,e=>`let c0_${e} = select(u${e} * mean, s0_${e} * i0, w0 != 0.0);`)}
-  ${C(`r`,x(e=>`m${e}`,(e,t)=>e===0?`c0_${t}`:`s${e}_${t} * i${e}`,`cnt`),`cnt`)}`,D=e.blockSteps||0,O=D?`
+  ${O(`r`,E(e=>`m${e}`,(e,t)=>e===0?`c0_${t}`:`s${e}_${t} * i${e}`,`cnt`),`cnt`)}`,M=e.blockSteps||0,N=M?`
 var<workgroup> wRec: array<vec4f, ${256*n.CS4}>;${n.CNT<0?`
 var<workgroup> wCnt: array<u32, 256>;`:``}
-fn tree_up(first: u32) -> TreeRec {${E(e=>`let child = first + ${e};
+fn tree_up(first: u32) -> TreeRec {${j(e=>`let child = first + ${e};
     ${n.CNT<0?`let n = wCnt[child];
     if (n == 0u) { continue; }
     ${vp(`a`,`wRec`,`child * ${n.CS4}u`,n.CS4)}`:`${vp(`a`,`wRec`,`child * ${n.CS4}u`,n.CS4)}
@@ -2735,8 +2789,8 @@ fn tree_block(li: u32, at: u32, r: TreeRec, count: u32, off: u32, steps: u32, me
     let live = li < (256u >> (${t}u * j)) && first + li < cells;
     var up: TreeRec;
     if (live) {
-      up = tree_up(li * ${T}u);
-      ${w(`parents + first + li`,`up`,`metaCount`)}${f?`
+      up = tree_up(li * ${A}u);
+      ${k(`parents + first + li`,`up`,`metaCount`)}${f?`
       // the top cell: the next step's |charge| total (see BOX)
       if (cells == 1u) { treeBox[${i.TOTAL}] = bitcast<u32>(${X(r,e=>`abs(up.v[${n.S[e]>>2}].${mp[n.S[e]&3]})`,` + `)}); }`:``}
     }
@@ -2744,15 +2798,16 @@ fn tree_block(li: u32, at: u32, r: TreeRec, count: u32, off: u32, steps: u32, me
     if (live) { ${X(n.CS4,e=>`wRec[li * ${n.CS4}u + ${e}u] = up.v[${e}];`)}${n.CNT<0?` wCnt[li] = up.n;`:``} }
     base = parents;
   }
-}`:``,k=jp(e.lawWords)+Tp(t,n.bits)+S+`
+}`:``,P=jp(e.lawWords)+Tp(t,n.bits)+D+`
 ${s}
 @group(0) @binding(1) var<storage, read> treeSp: array<vec4f>;
 @group(0) @binding(2) var<storage, read_write> treeMeta: array<u32>;
 @group(0) @binding(3) var<storage, read_write> treeCells: array<vec4f>;
 @group(0) @binding(4) var<storage, read_write> treeLists: array<atomic<u32>>;${f?`
-@group(0) @binding(5) var<storage, read_write> treeBox: array<u32>;`:``}${e.heads?`
+@group(0) @binding(5) var<storage, read_write> treeBox: array<u32>;`:``}
+${g(e=>`atomicLoad(&treeLists[${e}])`)}${e.heads?`
 var<workgroup> wgOccupied: atomic<u32>;
-var<workgroup> wgBase: u32;`:``}${O}
+var<workgroup> wgBase: u32;`:``}${N}
 @compute @workgroup_size(256)
 fn main(${kp}, @builtin(local_invocation_index) li: u32) {
   let c = ${Ap};${e.heads?`
@@ -2766,16 +2821,17 @@ fn main(${kp}, @builtin(local_invocation_index) li: u32) {
   workgroupBarrier();
   if (li == 0u) { wgBase = atomicAdd(&treeLists[4], atomicLoad(&wgOccupied)); }
   let base = workgroupUniformLoad(&wgBase);
-  if (slot != 0xffffffffu) { atomicStore(&treeLists[TP.occList + base + slot], c); }`:``}${D?`
-  tree_block(li, c - li, r, TP.nCells, 0u, min(${D}u, TP.levels), TP.metaCount);`:``}
+  if (slot != 0xffffffffu) { atomicStore(&treeLists[TP.occList + base + slot], c); }`:``}${M?`
+  tree_block(li, c - li, r, TP.nCells, 0u, min(${M}u, TP.levels), TP.metaCount);`:``}
 }
 fn tree_aggregate(c: u32) -> TreeRec {
   let s = treeMeta[c];
   let e = select(TP.n, treeMeta[c + 1u], c + 1u < TP.nCells);
-  // a crowded cell: its near pushes are TREE_LOCAL's crowd workgroups' work
-  if (e - s > TP.nearCap) { atomicStore(&treeLists[TP.crowdList + atomicAdd(&treeLists[1], 1u)], c); }
+  // a crowded cell (SCAN_BLOCKS listed it): its near pushes are TREE_LOCAL's crowd workgroups'
+  // work, and on a step the cap refuses nothing is computed from its sums
+  if (e - s > TP.nearCap && tree_refused()) { var none: TreeRec; ${k(`c`,`none`,`TP.metaCount`)} return none; }
   ${X(r,e=>`var m${e} = 0.0;`)}
-  ${b.map(e=>`var w${e} = 0.0; `+X(t,t=>`var s${e}_${t} = 0.0;`)).join(` `)}
+  ${T.map(e=>`var w${e} = 0.0; `+X(t,t=>`var s${e}_${t} = 0.0;`)).join(` `)}
   ${X(t,e=>`var u${e} = 0.0;`)}
   // only a border cell can hold clamped bodies
   let border = ${X(t,e=>`tree_compact(c >> ${e}u) == 0u || tree_compact(c >> ${e}u) == TP.G - 1u`,` || `)};${f?`
@@ -2790,21 +2846,21 @@ fn tree_aggregate(c: u32) -> TreeRec {
       if (h < ${pp}u) { atomicStore(&treeLists[TP.hubList + h], t); }
     }`:``}
     ${X(r,e=>`m${e} += ${_p(`b`,t+e)};`)}
-    ${b.map(e=>`w${e} += abs(${_p(`b`,t+e)}); `+X(t,n=>`s${e}_${n} += abs(${_p(`b`,t+e)}) * ${_p(`b`,n)};`)).join(` `)}
+    ${T.map(e=>`w${e} += abs(${_p(`b`,t+e)}); `+X(t,n=>`s${e}_${n} += abs(${_p(`b`,t+e)}) * ${_p(`b`,n)};`)).join(` `)}
     ${X(t,e=>`u${e} += ${_p(`b`,e)};`)}
   }
   let mean = select(0.0, 1.0 / f32(cnt), cnt > 0u);
-  ${b.map(e=>`let i${e} = select(0.0, 1.0 / w${e}, w${e} != 0.0);`).join(` `)}
+  ${T.map(e=>`let i${e} = select(0.0, 1.0 / w${e}, w${e} != 0.0);`).join(` `)}
   ${X(t,e=>`let c0_${e} = select(u${e} * mean, s0_${e} * i0, w0 != 0.0);`)}
-  ${C(`r`,x(e=>`m${e}`,(e,t)=>e===0?`c0_${t}`:`s${e}_${t} * i${e}`,`cnt`),`cnt`)}
-  ${w(`c`,`r`,`TP.metaCount`)}
+  ${O(`r`,E(e=>`m${e}`,(e,t)=>e===0?`c0_${t}`:`s${e}_${t} * i${e}`,`cnt`),`cnt`)}
+  ${k(`c`,`r`,`TP.metaCount`)}
   return r;
-}`,A=S+(D?`
+}`,F=D+(M?`
 struct Level { count: u32, off: u32, steps: u32, metaCount: u32 };
 @group(0) @binding(0) var<uniform> lv: Level;
 @group(0) @binding(1) var<storage, read_write> treeCells: array<vec4f>;${n.CNT<0?`
 @group(0) @binding(2) var<storage, read_write> treeMeta: array<u32>;`:``}${f?`
-@group(0) @binding(${n.CNT<0?3:2}) var<storage, read_write> treeBox: array<u32>;`:``}${O}
+@group(0) @binding(${n.CNT<0?3:2}) var<storage, read_write> treeBox: array<u32>;`:``}${N}
 @compute @workgroup_size(256)
 fn main(${kp}, @builtin(local_invocation_index) li: u32) {
   let q = ${Ap};
@@ -2823,40 +2879,41 @@ struct Level { count: u32, childOff: u32, parentOff: u32, metaCount: u32 };
 @compute @workgroup_size(256)
 fn main(${kp}) {
   let q = ${Ap};
-  if (q >= lv.count) { return; }${E(e=>`let child = lv.childOff + ${T}u * q + ${e};
+  if (q >= lv.count) { return; }${j(e=>`let child = lv.childOff + ${A}u * q + ${e};
     ${n.CNT<0?`let n = treeMeta[lv.metaCount + child];
     if (n == 0u) { continue; }
     ${vp(`a`,`treeCells`,`${n.TAB4}u + child * ${n.CS4}u`,n.CS4)}`:`${vp(`a`,`treeCells`,`${n.TAB4}u + child * ${n.CS4}u`,n.CS4)}
     let n = u32(${_p(`a`,n.CNT)});
     if (n == 0u) { continue; }`}`)}
-  ${w(`lv.parentOff + q`,`r`,`lv.metaCount`)}${f?`
+  ${k(`lv.parentOff + q`,`r`,`lv.metaCount`)}${f?`
   if (lv.count == 1u) { treeBox[${i.TOTAL}] = bitcast<u32>(${X(r,e=>`abs(r.v[${n.S[e]>>2}].${mp[n.S[e]&3]})`,` + `)}); }`:``}
-}`),j=Mp(e)+Fp(n),M=e.sep||1,N=2*M+1,P=N**t,F=e.groups,I=[{word:n.C[0],channels:[]}];e.channels.forEach((e,t)=>{t===0||!e.own?I[0].channels.push(t):I.push({word:n.C[t],channels:[t]})});let L=(e,r)=>{let i=[`let g${e} = ${r} * k.x; let h${e} = ${r} * k.y;`];return i.push(X(t,t=>`F${e}_${t} += g${e} * d${t};`)),i.push(n.pairs.map(([t,n],r)=>`J${e}_${r} += h${e} * d${t} * d${n}${t===n?` - g${e}`:``};`).join(` `)),n.T[e]>=0&&(i.push(`let u${e} = ${r} * k.z;`),i.push(n.triples.map(([t,n,r],i)=>{let a=[];return t===n&&a.push(`d${r}`),t===r&&a.push(`d${n}`),n===r&&a.push(`d${t}`),`T${e}_${i} += u${e} * d${t} * d${n} * d${r}${a.length?` - h${e} * (${a.join(` + `)})`:``};`}).join(` `))),i.join(`
-`)},R=(r,i)=>I.map(a=>{let o=[];o.push(`{`),o.push(X(t,e=>`let d${e} = ${_p(`a`,a.word+e)} - ${r(e)};`)),o.push(`let r2 = ${X(t,e=>`d${e} * d${e}`,` + `)};`);let s=[];return a.channels.forEach(t=>{let n=e.channels[t].group,r=s.find(e=>e.g===n);r||s.push(r={g:n,channels:[]}),r.channels.push(t)}),o.push(`if (r2 > 0.0) {`),o.push(`let r = sqrt(r2);`),s.forEach(({g:e,channels:r})=>{let a=[];a.push(`(${Ip(r,e=>_p(`a`,n.S[e]))})`),F[e].law&&F[e].law.hasRange&&a.push(`tree_in_${e}(r2)`);let s=a.length?`if (${a.join(` && `)}) {`:`{`;o.push(s),i?(o.push(F[e].second?`let k = tree_k123_${e}(r, r2);`:`let k = tree_k12_${e}(r, r2);`),r.forEach(e=>o.push(L(e,_p(`a`,n.S[e]))))):(o.push(`let k1 = tree_k1_${e}(r, r2);`),r.forEach(e=>{o.push(X(t,t=>`acc${e}_${t} += (${_p(`a`,n.S[e])} * k1) * d${t};`))})),o.push(`}`)}),o.push(`}`),o.push(`}`),o.join(`
+}`),I=Mp(e)+Fp(n),L=e.groups,R=[{word:n.C[0],channels:[]}];e.channels.forEach((e,t)=>{t===0||!e.own?R[0].channels.push(t):R.push({word:n.C[t],channels:[t]})});let z=(e,r)=>{let i=[`let g${e} = ${r} * k.x; let h${e} = ${r} * k.y;`];return i.push(X(t,t=>`F${e}_${t} += g${e} * d${t};`)),i.push(n.pairs.map(([t,n],r)=>`J${e}_${r} += h${e} * d${t} * d${n}${t===n?` - g${e}`:``};`).join(` `)),n.T[e]>=0&&(i.push(`let u${e} = ${r} * k.z;`),i.push(n.triples.map(([t,n,r],i)=>{let a=[];return t===n&&a.push(`d${r}`),t===r&&a.push(`d${n}`),n===r&&a.push(`d${t}`),`T${e}_${i} += u${e} * d${t} * d${n} * d${r}${a.length?` - h${e} * (${a.join(` + `)})`:``};`}).join(` `))),i.join(`
+`)},ee=(r,i)=>R.map(a=>{let o=[];o.push(`{`),o.push(X(t,e=>`let d${e} = ${_p(`a`,a.word+e)} - ${r(e)};`)),o.push(`let r2 = ${X(t,e=>`d${e} * d${e}`,` + `)};`);let s=[];return a.channels.forEach(t=>{let n=e.channels[t].group,r=s.find(e=>e.g===n);r||s.push(r={g:n,channels:[]}),r.channels.push(t)}),o.push(`if (r2 > 0.0) {`),o.push(`let r = sqrt(r2);`),s.forEach(({g:e,channels:r})=>{let a=[];a.push(`(${Ip(r,e=>_p(`a`,n.S[e]))})`),L[e].law&&L[e].law.hasRange&&a.push(`tree_in_${e}(r2)`);let s=a.length?`if (${a.join(` && `)}) {`:`{`;o.push(s),i?(o.push(L[e].second?`let k = tree_k123_${e}(r, r2);`:`let k = tree_k12_${e}(r, r2);`),r.forEach(e=>o.push(z(e,_p(`a`,n.S[e]))))):(o.push(`let k1 = tree_k1_${e}(r, r2);`),r.forEach(e=>{o.push(X(t,t=>`acc${e}_${t} += (${_p(`a`,n.S[e])} * k1) * d${t};`))})),o.push(`}`)}),o.push(`}`),o.push(`}`),o.join(`
 `)}).join(`
-`),z=e=>n.CNT<0?`treeMeta[TP.metaCount + ${e}]`:`u32(treeCells[${n.TAB4}u + (${e}) * ${n.CS4}u + ${n.CNT>>2}u].${mp[n.CNT&3]})`,ee=(e,r)=>`
+`),B=e=>n.CNT<0?`treeMeta[TP.metaCount + ${e}]`:`u32(treeCells[${n.TAB4}u + (${e}) * ${n.CS4}u + ${n.CNT>>2}u].${mp[n.CNT&3]})`,te=(e,r)=>`
 ${r}let poff = off + ${X(t,()=>`Gl`,` * `)};
 ${r}let Gp = Gi / 2;
-${r}${X(t,e=>`let lo${e} = max((xl${e} >> 1u) - ${M}, 0); let hi${e} = min((xl${e} >> 1u) + ${M}, Gp - 1);`)}
+${r}${X(t,e=>`let lo${e} = max((xl${e} >> 1u) - ${p}, 0); let hi${e} = min((xl${e} >> 1u) + ${p}, Gp - 1);`)}
 ${Dp(t,`
-if (${z(`poff + mm0`)} == 0u) { continue; }
+if (${B(`poff + mm0`)} == 0u) { continue; }
 for (var ch = 0u; ch < ${1<<t}u; ch++) {
   ${X(t,e=>`let y${e} = 2 * x${e} + i32((ch >> ${e}u) & 1u);`)}
-  if (${X(t,e=>`abs(y${e} - xl${e}) <= ${M}`,` && `)}) { continue; }
+  if (${X(t,e=>`abs(y${e} - xl${e}) <= ${p}`,` && `)}) { continue; }
   let src = off + ((mm0 << ${t}u) | ch);
   ${vp(`a`,`treeCells`,`${n.TAB4}u + src * ${n.CS4}u`,n.CS4)}
   ${e}
-}`,r)}`,B=e.heads,te=c?`
-`+c(5):``,ne=Math.ceil(t*r/4),re=(e,n)=>e*t+n,ie=(()=>{let e=[];return e.push(vp(`b`,`treeSp`,`j * ${n.SP4}u`,n.SP4)),e.push(X(t,e=>`var d${e} = ${_p(`b`,e)} - p${e};`)),e.push(`var r2 = ${X(t,e=>`d${e} * d${e}`,` + `)};`),e.push(`if (r2 == 0.0) { let jt = tree_jitter(i, treeMeta[TP.metaTag + 2u * j]); ${X(t,e=>`d${e} = jt.${mp[e]};`)} r2 = ${X(t,e=>`d${e} * d${e}`,` + `)}; }`),e.push(`let r = sqrt(r2);`),F.forEach((n,i)=>{let a=[];r>1&&a.push(`(${Ip(n.channels,e=>_p(`b`,t+e))})`),n.law&&n.law.hasRange&&a.push(`tree_in_${i}(r2)`);let o=[`let k1 = tree_k1_${i}(r, r2);`].concat(n.channels.map(e=>X(t,n=>`cr${e}_${n} += (${_p(`b`,t+e)} * k1) * d${n};`))).join(` `);e.push(a.length?`if (${a.join(` && `)}) { ${o} }`:`{ ${o} }`)}),e.join(`
-`)})(),ae=`
+}`,r)}`,ne=e.heads,re=c?`
+`+c(5):``,ie=Math.ceil(t*r/4),ae=(e,n)=>e*t+n,V=(()=>{let e=[];return e.push(vp(`b`,`treeSp`,`j * ${n.SP4}u`,n.SP4)),e.push(X(t,e=>`var d${e} = ${_p(`b`,e)} - p${e};`)),e.push(`var r2 = ${X(t,e=>`d${e} * d${e}`,` + `)};`),e.push(`if (r2 == 0.0) { let jt = tree_jitter(i, treeMeta[TP.metaTag + 2u * j]); ${X(t,e=>`d${e} = jt.${mp[e]};`)} r2 = ${X(t,e=>`d${e} * d${e}`,` + `)}; }`),e.push(`let r = sqrt(r2);`),L.forEach((n,i)=>{let a=[];r>1&&a.push(`(${Ip(n.channels,e=>_p(`b`,t+e))})`),n.law&&n.law.hasRange&&a.push(`tree_in_${i}(r2)`);let o=[`let k1 = tree_k1_${i}(r, r2);`].concat(n.channels.map(e=>X(t,n=>`cr${e}_${n} += (${_p(`b`,t+e)} * k1) * d${n};`))).join(` `);e.push(a.length?`if (${a.join(` && `)}) { ${o} }`:`{ ${o} }`)}),e.join(`
+`)})(),oe=`
 var<workgroup> crowdPart: array<f32, ${256*t}>;
 var<workgroup> crowdHead: vec4u;
 var<workgroup> crowdRange: vec4u;
+${g(e=>`atomicLoad(&treeLists[${e}])`)}
 fn tree_count(b: u32) -> u32 { return select(TP.n, treeMeta[b + 1u], b + 1u < TP.nCells) - treeMeta[b]; }
 // cell b's near cell number nu (base SIDE digits, minus SEP per axis), or nCells off the grid
 fn tree_near(b: u32, nu: u32) -> u32 {
   let Gi = i32(TP.G);
-  ${X(t,e=>`let x${e} = i32(tree_compact(b >> ${e}u)) + i32((nu / ${N**e}u) % ${N}u) - ${M};`)}
+  ${X(t,e=>`let x${e} = i32(tree_compact(b >> ${e}u)) + i32((nu / ${m**e}u) % ${m}u) - ${p};`)}
   if (${X(t,e=>`x${e} < 0 || x${e} >= Gi`,` || `)}) { return TP.nCells; }
   return ${X(t,e=>`(tree_spread(u32(x${e})) << ${e}u)`,` | `)};
 }
@@ -2865,18 +2922,10 @@ fn tree_crowd(w: u32, li: u32) {
   if (w >= 128u) { return; }
   if (li == 0u) {
     let crowded = atomicLoad(&treeLists[1]);
-    var work = 0.0; var biggest = 0u;
-    for (var l = 0u; l < crowded; l++) {
-      let b = atomicLoad(&treeLists[TP.crowdList + l]);
-      let nb = tree_count(b);
-      biggest = max(biggest, nb);
-      var targets = 0u;
-      for (var nu = 0u; nu < ${P}u; nu++) {
-        let a = tree_near(b, nu);
-        if (a < TP.nCells) { targets += tree_count(a); }
-      }
-      work += f32(nb) * f32(targets);
-    }
+    var biggest = 0u;
+    for (var l = 0u; l < crowded; l++) { biggest = max(biggest, tree_count(atomicLoad(&treeLists[TP.crowdList + l]))); }
+    // the work ORDER and AGG0 refused by (tree_crowd_work)
+    let work = f32(tree_crowd_work()) * 1e6;
     // in evaluations of one charge (chargeWeight)
     let weighted = work * ${gp(hp(r))};
     let over = weighted > TP.workCap;
@@ -2895,7 +2944,7 @@ fn tree_crowd(w: u32, li: u32) {
   // neighbour order: its bodies then take every crowded neighbour's push in that order, so the
   // sums do not depend on the order AGG0 listed the cells in.
   for (var l = 0u; l < head.x; l++) {
-    for (var nu = 0u; nu < ${P}u; nu++) {
+    for (var nu = 0u; nu < ${h}u; nu++) {
       workgroupBarrier();
       if (li == 0u) {
         let b = atomicLoad(&treeLists[TP.crowdList + l]);
@@ -2903,7 +2952,7 @@ fn tree_crowd(w: u32, li: u32) {
         crowdRange = vec4u(0u);
         if (a < TP.nCells) {
           var first = TP.nCells;
-          for (var m = 0u; m < ${P}u; m++) {
+          for (var m = 0u; m < ${h}u; m++) {
             let x = tree_near(a, m);
             if (x < TP.nCells && tree_count(x) > TP.nearCap) { first = x; break; }
           }
@@ -2918,7 +2967,7 @@ fn tree_crowd(w: u32, li: u32) {
         ${vp(`me`,`treeSp`,`t * ${n.SP4}u`,n.SP4)}
         ${X(t,e=>`let p${e} = ${_p(`me`,e)};`)}
         ${X(r,e=>X(t,t=>`var cr${e}_${t} = 0.0;`))}
-        for (var m = 0u; m < ${P}u; m++) {
+        for (var m = 0u; m < ${h}u; m++) {
           let x = tree_near(tr.x, m);
           if (x >= TP.nCells) { continue; }
           let xs = treeMeta[x];
@@ -2926,7 +2975,7 @@ fn tree_crowd(w: u32, li: u32) {
           if (xe - xs <= TP.nearCap) { continue; }
           for (var j = xs + li; j < xe; j += 256u) {
             if (j == t) { continue; }
-            ${ie}
+            ${V}
           }
         }${X(r,e=>`
         ${X(t,n=>`crowdPart[li * ${t}u + ${n}u] = cr${e}_${n};`)}
@@ -2935,13 +2984,13 @@ fn tree_crowd(w: u32, li: u32) {
           if (li < h) { ${X(t,e=>`crowdPart[li * ${t}u + ${e}u] += crowdPart[(li + h) * ${t}u + ${e}u];`)} }
           workgroupBarrier();
         }
-        if (li == 0u) { ${X(t,t=>`treeCells[TP.crowdOff + t * ${ne}u + ${re(e,t)>>2}u].${mp[re(e,t)&3]} = crowdPart[${t}u];`)} }
+        if (li == 0u) { ${X(t,t=>`treeCells[TP.crowdOff + t * ${ie}u + ${ae(e,t)>>2}u].${mp[ae(e,t)&3]} = crowdPart[${t}u];`)} }
         workgroupBarrier();`,``)}
         t += 128u;
       }
     }
   }
-}`,V=M+1,oe=2*V+1,se=oe**t<<t;if(f&&se>256)throw Error(`tree_hub: more candidate cells than threads`);let ce=f?`
+}`,se=p+1,ce=2*se+1,H=ce**t<<t;if(f&&H>256)throw Error(`tree_hub: more candidate cells than threads`);let U=f?`
 var<workgroup> hubHead: u32;
 fn tree_hub(w: u32, li: u32) {
   if (w >= 32u) { return; }
@@ -2961,18 +3010,18 @@ fn tree_hub(w: u32, li: u32) {
       let Gp = Gi / 2;
       let poff = off + ${X(t,()=>`Gl`,` * `)};
       // the finest level skips my near cells only; the levels above the cells a list has had
-      let skip = select(${V}, ${M}, l == 0u);
-      if (li < ${se}u) {
+      let skip = select(${se}, ${p}, l == 0u);
+      if (li < ${H}u) {
         let pi = li >> ${t}u;
         let ch = li & ${(1<<t)-1}u;
-        ${X(t,e=>`let xl${e} = cx${e} >> l; let x${e} = (xl${e} >> 1u) + i32((pi / ${oe**e}u) % ${oe}u) - ${V};`)}
+        ${X(t,e=>`let xl${e} = cx${e} >> l; let x${e} = (xl${e} >> 1u) + i32((pi / ${ce**e}u) % ${ce}u) - ${se};`)}
         if (${X(t,e=>`x${e} >= 0 && x${e} < Gp`,` && `)}) {
           let mm0 = ${X(t,e=>`(tree_spread(u32(x${e})) << ${e}u)`,` | `)};
           ${X(t,e=>`let y${e} = 2 * x${e} + i32((ch >> ${e}u) & 1u);`)}
-          if (${z(`poff + mm0`)} != 0u && !(${X(t,e=>`abs(y${e} - xl${e}) <= skip`,` && `)})) {
+          if (${B(`poff + mm0`)} != 0u && !(${X(t,e=>`abs(y${e} - xl${e}) <= skip`,` && `)})) {
             let src = off + ((mm0 << ${t}u) | ch);
             ${vp(`a`,`treeCells`,`${n.TAB4}u + src * ${n.CS4}u`,n.CS4)}
-${R(e=>`p${e}`,!1)}
+${ee(e=>`p${e}`,!1)}
           }
         }
       }
@@ -2984,17 +3033,17 @@ ${R(e=>`p${e}`,!1)}
       if (li < h) { ${X(t,e=>`crowdPart[li * ${t}u + ${e}u] += crowdPart[(li + h) * ${t}u + ${e}u];`)} }
       workgroupBarrier();
     }
-    if (li == 0u) { ${X(t,t=>`treeCells[TP.hubOff + hb * ${ne}u + ${re(e,t)>>2}u].${mp[re(e,t)&3]} = crowdPart[${t}u];`)} }
+    if (li == 0u) { ${X(t,t=>`treeCells[TP.hubOff + hb * ${ie}u + ${ae(e,t)>>2}u].${mp[ae(e,t)&3]} = crowdPart[${t}u];`)} }
     workgroupBarrier();`,``)}
     if (li == 0u) { treeMeta[TP.metaTag + 2u * k + 1u] = raw | ((hb + 1u) << 20u); }
   }
-}`:``,H=o+j+`
+}`:``,le=o+I+`
 ${s}
 @group(0) @binding(1) var<storage, read_write> treeCells: array<vec4f>;
 @group(0) @binding(2) var<storage, ${f?`read_write`:`read`}> treeMeta: array<u32>;
 @group(0) @binding(3) var<storage, read_write> treeLists: array<atomic<u32>>;
-@group(0) @binding(4) var<storage, read> treeSp: array<vec4f>;${te}
-${ae}${ce}
+@group(0) @binding(4) var<storage, read> treeSp: array<vec4f>;${re}
+${oe}${U}
 @compute @workgroup_size(256)
 fn main(${kp}, @builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
   let wl = wid.x + wid.y * nwg.x;${f?`
@@ -3007,7 +3056,7 @@ fn main(${kp}, @builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_inde
     return;
   }
   let t = ${Ap};
-  var off = 0u; var Gl = TP.G; var l = 0u; var c = 0u;${B?`
+  var off = 0u; var Gl = TP.G; var l = 0u; var c = 0u;${ne?`
   if (t < TP.n) {
     if (t >= atomicLoad(&treeLists[4])) { return; }
     c = atomicLoad(&treeLists[TP.occList + t]);
@@ -3025,7 +3074,7 @@ fn main(${kp}, @builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_inde
   }
   ${vp(`m`,`treeCells`,`${n.TAB4}u + (off + c) * ${n.CS4}u`,n.CS4)}
   let cnt = ${n.CNT<0?`treeMeta[TP.metaCount + off + c]`:`u32(${_p(`m`,n.CNT)})`};
-  if (cnt == 0u) { return; }${m?`
+  if (cnt == 0u) { return; }${v?`
   // a heavy finest cell (a hub amid its leaves) is done by TREE_HEAVY
   if (off == 0u) {
     ${vp(`top`,`treeCells`,`${n.TAB4}u + TP.top * ${n.CS4}u`,n.CS4)}
@@ -3041,20 +3090,20 @@ fn main(${kp}, @builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_inde
   ${X(t,e=>`let ce${e} = ${_p(`m`,n.C[0]+e)};`)}
   ${X(r,e=>X(t,t=>`var F${e}_${t} = 0.0;`)+` `+n.pairs.map((t,n)=>`var J${e}_${n} = 0.0;`).join(` `)+` `+(n.T[e]>=0?n.triples.map((t,n)=>`var T${e}_${n} = 0.0;`).join(` `):``),`
   `)}
-${ee(R(e=>`ce${e}`,!0),`  `)}
+${te(ee(e=>`ce${e}`,!0),`  `)}
   let o = TP.locOff + (off + c) * ${n.LS4}u;
   ${bp(`treeCells`,`o`,(()=>{let e=[];for(let n=0;n<t;n++)e[n]=`ce${n}`;for(let i=0;i<r;i++){for(let r=0;r<t;r++)e[n.F[i]+r]=`F${i}_${r}`;n.pairs.forEach((t,r)=>{e[n.J[i]+r]=`J${i}_${r}`}),n.T[i]>=0&&n.triples.forEach((t,r)=>{e[n.T[i]+r]=`T${i}_${r}`})}return e})())}
-}`,U=r*(t+n.JN)+n.T.filter(e=>e>=0).length*n.TN,le=fp;for(;le>8&&le*U*4>16384;)le>>=1;let ue=3**t<<t,W=(()=>{let e=[];return e.push(X(t,e=>`let d${e} = ${_p(`b`,e)} - ce${e};`)),e.push(`let r2 = ${X(t,e=>`d${e} * d${e}`,` + `)};`),e.push(`if (r2 > 0.0) {`),e.push(`let r = sqrt(r2);`),F.forEach((n,r)=>{let i=[`(${Ip(n.channels,e=>_p(`b`,t+e))})`];n.law&&n.law.hasRange&&i.push(`tree_in_${r}(r2)`),e.push(`if (${i.join(` && `)}) {`),e.push(n.second?`let k = tree_k123_${r}(r, r2);`:`let k = tree_k12_${r}(r, r2);`),n.channels.forEach(n=>e.push(L(n,_p(`b`,t+n)))),e.push(`}`)}),e.push(`}`),e.join(`
-`)})(),de=[];for(let e=0;e<r;e++){for(let n=0;n<t;n++)de.push(`F${e}_${n}`);n.pairs.forEach((t,n)=>de.push(`J${e}_${n}`)),n.T[e]>=0&&n.triples.forEach((t,n)=>de.push(`T${e}_${n}`))}let fe=o+j+`
+}`,ue=r*(t+n.JN)+n.T.filter(e=>e>=0).length*n.TN,W=fp;for(;W>8&&W*ue*4>16384;)W>>=1;let de=3**t<<t,fe=(()=>{let e=[];return e.push(X(t,e=>`let d${e} = ${_p(`b`,e)} - ce${e};`)),e.push(`let r2 = ${X(t,e=>`d${e} * d${e}`,` + `)};`),e.push(`if (r2 > 0.0) {`),e.push(`let r = sqrt(r2);`),L.forEach((n,r)=>{let i=[`(${Ip(n.channels,e=>_p(`b`,t+e))})`];n.law&&n.law.hasRange&&i.push(`tree_in_${r}(r2)`),e.push(`if (${i.join(` && `)}) {`),e.push(n.second?`let k = tree_k123_${r}(r, r2);`:`let k = tree_k12_${r}(r, r2);`),n.channels.forEach(n=>e.push(z(n,_p(`b`,t+n)))),e.push(`}`)}),e.push(`}`),e.join(`
+`)})(),pe=[];for(let e=0;e<r;e++){for(let n=0;n<t;n++)pe.push(`F${e}_${n}`);n.pairs.forEach((t,n)=>pe.push(`J${e}_${n}`)),n.T[e]>=0&&n.triples.forEach((t,n)=>pe.push(`T${e}_${n}`))}let me=o+I+`
 ${s}
 @group(0) @binding(1) var<storage, read> treeSp: array<vec4f>;
 @group(0) @binding(2) var<storage, read> treeMeta: array<u32>;
 @group(0) @binding(3) var<storage, read_write> treeCells: array<vec4f>;
 @group(0) @binding(4) var<storage, read> treeLists: array<u32>;${c?`
 `+c(5):``}
-var<workgroup> parts: array<f32, ${le*U}>;
+var<workgroup> parts: array<f32, ${W*ue}>;
 var<workgroup> todo: u32;
-@compute @workgroup_size(${le})
+@compute @workgroup_size(${W})
 fn main(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
   if (li == 0u) { todo = treeLists[0]; }
   let count = workgroupUniformLoad(&todo);
@@ -3066,14 +3115,14 @@ fn main(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: ve
     ${vp(`m`,`treeCells`,`${n.TAB4}u + c * ${n.CS4}u`,n.CS4)}
     ${X(t,e=>`let ce${e} = ${_p(`m`,n.C[0]+e)};`)}
     ${X(t,e=>`let xl${e} = i32(tree_compact(c >> ${e}u));`)}
-    ${de.map(e=>`var ${e} = 0.0;`).join(` `)}
-    for (var q = li; q < ${ue}u; q += ${le}u) {
+    ${pe.map(e=>`var ${e} = 0.0;`).join(` `)}
+    for (var q = li; q < ${de}u; q += ${W}u) {
       let pi = q >> ${t}u;
       let ch = q & ${(1<<t)-1}u;
       ${X(t,e=>`let x${e} = (xl${e} >> 1u) + i32((pi / ${3**e}u) % 3u) - 1;`)}
       if (${X(t,e=>`x${e} < 0 || x${e} >= Gp`,` || `)}) { continue; }
       let mm0 = ${X(t,e=>`(tree_spread(u32(x${e})) << ${e}u)`,` | `)};
-      if (${z(`poff + mm0`)} == 0u) { continue; }
+      if (${B(`poff + mm0`)} == 0u) { continue; }
       ${X(t,e=>`let y${e} = 2 * x${e} + i32((ch >> ${e}u) & 1u);`)}
       let dist = ${Op(Array.from({length:t},(e,t)=>`abs(y${t} - xl${t})`))};
       if (dist <= 1) { continue; }
@@ -3085,16 +3134,16 @@ fn main(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: ve
         let e0 = select(TP.n, treeMeta[src + 1u], src + 1u < TP.nCells);
         for (var t = s0; t < e0; t++) {
           ${vp(`b`,`treeSp`,`t * ${n.SP4}u`,n.SP4)}
-          ${W}
+          ${fe}
         }
       } else {
-${R(e=>`ce${e}`,!0)}
+${ee(e=>`ce${e}`,!0)}
       }
     }
-    ${de.map((e,t)=>`parts[li * ${U}u + ${t}u] = ${e};`).join(` `)}
+    ${pe.map((e,t)=>`parts[li * ${ue}u + ${t}u] = ${e};`).join(` `)}
     workgroupBarrier();
-    for (var w = ${le/2}u; w > 0u; w >>= 1u) {
-      if (li < w) { for (var j = 0u; j < ${U}u; j++) { parts[li * ${U}u + j] += parts[(li + w) * ${U}u + j]; } }
+    for (var w = ${W/2}u; w > 0u; w >>= 1u) {
+      if (li < w) { for (var j = 0u; j < ${ue}u; j++) { parts[li * ${ue}u + j] += parts[(li + w) * ${ue}u + j]; } }
       workgroupBarrier();
     }
     if (li == 0u) {
@@ -3102,25 +3151,25 @@ ${R(e=>`ce${e}`,!0)}
     }
     workgroupBarrier();
   }
-}`,pe=`vec${t}f`,me=(()=>{let e=[];return e.push(vp(`q`,`treeSp`,`t * ${n.SP4}u`,n.SP4)),e.push(X(t,e=>`var d${e} = ${_p(`q`,e)} - p${e};`)),e.push(`var r2 = ${X(t,e=>`d${e} * d${e}`,` + `)};`),e.push(`if (r2 == 0.0) { let jt = tree_jitter(i, treeMeta[TP.metaTag + 2u * t]); ${X(t,e=>`d${e} = jt.${mp[e]};`)} r2 = ${X(t,e=>`d${e} * d${e}`,` + `)}; }`),e.push(`let r = sqrt(r2);`),e.push(`var g = 0.0;`),F.forEach((n,i)=>{let a=n.channels.map(e=>`s[${e}] * ${_p(`q`,t+e)}`).join(` + `),o=[];r>1&&!n.isDefault&&o.push(`wt${i} != 0.0`),n.law&&n.law.hasRange&&o.push(`tree_in_${i}(r2)`),e.push(`let wt${i} = ${a};`);let s=`g += wt${i} * tree_k1_${i}(r, r2);`;e.push(o.length?`if (${o.join(` && `)}) { ${s} }`:s)}),e.push(X(t,e=>`na${e} += g * d${e};`)),e.join(`
-`)})(),he=`
+}`,he=`vec${t}f`,ge=(()=>{let e=[];return e.push(vp(`q`,`treeSp`,`t * ${n.SP4}u`,n.SP4)),e.push(X(t,e=>`var d${e} = ${_p(`q`,e)} - p${e};`)),e.push(`var r2 = ${X(t,e=>`d${e} * d${e}`,` + `)};`),e.push(`if (r2 == 0.0) { let jt = tree_jitter(i, treeMeta[TP.metaTag + 2u * t]); ${X(t,e=>`d${e} = jt.${mp[e]};`)} r2 = ${X(t,e=>`d${e} * d${e}`,` + `)}; }`),e.push(`let r = sqrt(r2);`),e.push(`var g = 0.0;`),L.forEach((n,i)=>{let a=n.channels.map(e=>`s[${e}] * ${_p(`q`,t+e)}`).join(` + `),o=[];r>1&&!n.isDefault&&o.push(`wt${i} != 0.0`),n.law&&n.law.hasRange&&o.push(`tree_in_${i}(r2)`),e.push(`let wt${i} = ${a};`);let s=`g += wt${i} * tree_k1_${i}(r, r2);`;e.push(o.length?`if (${o.join(` && `)}) { ${s} }`:s)}),e.push(X(t,e=>`na${e} += g * d${e};`)),e.join(`
+`)})(),_e=`
   // near field: exact pairs in my 3^D cells; a crowded cell's pushes come summed by TREE_LOCAL
   var crowded = false;
   {
-    ${X(t,e=>`let lo${e} = max(cx${e} - ${M}, 0); let hi${e} = min(cx${e} + ${M}, Gi - 1);`,` `)}
+    ${X(t,e=>`let lo${e} = max(cx${e} - ${p}, 0); let hi${e} = min(cx${e} + ${p}, Gi - 1);`,` `)}
 ${Dp(t,`
 let s0 = treeMeta[mm0];
 let e0 = select(TP.n, treeMeta[mm0 + 1u], mm0 + 1u < TP.nCells);
 if (e0 - s0 > TP.nearCap) { crowded = true; continue; }
 for (var t = s0; t < e0; t++) {
   if (t == k) { continue; }
-  ${me}
+  ${ge}
 }`,`    `)}
   }
   if (crowded) {
-    ${vp(`cw`,`treeCells`,`TP.crowdOff + k * ${ne}u`,ne)}
+    ${vp(`cw`,`treeCells`,`TP.crowdOff + k * ${ie}u`,ie)}
     ${X(t,e=>`na${e} += ${X(r,n=>`s[${n}] * ${_p(`cw`,n*t+e)}`,` + `)};`)}
-  }`,ge=`
+  }`,ve=`
     var off = 0u; var Gl = TP.G; var cc = c;
     for (var l = 0u; l < TP.levels; l++) {
       ${vp(`e`,`treeCells`,`TP.locOff + (off + cc) * ${n.LS4}u`,n.LS4)}
@@ -3128,19 +3177,19 @@ for (var t = s0; t < e0; t++) {
       ${X(r,e=>X(t,r=>`b${r} += s[${e}] * (${_p(`e`,n.F[e]+r)} + ${X(t,t=>{let i=n.pairs.findIndex(([e,n])=>e===r&&n===t||e===t&&n===r);return`${_p(`e`,n.J[e]+i)} * h${t}`},` + `)}${n.T[e]>=0?` + 0.5 * (`+X(t,i=>X(t,t=>{let a=[r,i,t].sort().join(),o=n.triples.findIndex(e=>e.join()===a);return`${_p(`e`,n.T[e]+o)} * h${i} * h${t}`},` + `),` + `)+`)`:``});`),`
       `)}
       off += ${X(t,()=>`Gl`,` * `)}; Gl >>= 1u; cc >>= ${t}u;
-    }`,_e=`
+    }`,ye=`
     var off = 0u; var Gl = TP.G;
     ${X(r,e=>X(t,t=>`var acc${e}_${t} = 0.0;`))}
     for (var l = 0u; l < TP.levels; l++) {
       let Gi = i32(Gl);
       ${X(t,e=>`let xl${e} = cx${e} >> l;`)}
-${ee(R(e=>`p${e}`,!1),`      `)}
+${te(ee(e=>`p${e}`,!1),`      `)}
       off += ${X(t,()=>`Gl`,` * `)}; Gl >>= 1u;
     }
     ${X(r,e=>X(t,t=>`b${t} += s[${e}] * acc${e}_${t};`),`
-    `)}`,ve=`
-fn tree_force(k: u32, s: array<f32, ${r}>) -> ${pe} {
-  if (${X(r,e=>`s[${e}] == 0.0`,` && `)}) { return ${pe}(0.0); }
+    `)}`,be=`
+fn tree_force(k: u32, s: array<f32, ${r}>) -> ${he} {
+  if (${X(r,e=>`s[${e}] == 0.0`,` && `)}) { return ${he}(0.0); }
   let i = treeMeta[TP.metaTag + 2u * k];
   let raw = treeMeta[TP.metaTag + 2u * k + 1u];
   let c = raw & ${f?`0xfffffu`:`0x7fffffffu`};
@@ -3150,18 +3199,18 @@ fn tree_force(k: u32, s: array<f32, ${r}>) -> ${pe} {
   ${X(t,e=>`let cx${e} = i32(tree_compact(c >> ${e}u));`,` `)}
   ${X(t,e=>`var na${e} = 0.0;`)}
   ${X(t,e=>`var b${e} = 0.0;`)}
-${he}
+${_e}
   ${f?`let hub = (raw >> 20u) & 0x7ffu;
   if (hub != 0u) {
     // a hub: its far field from tree_hub
-    ${vp(`hw`,`treeCells`,`TP.hubOff + (hub - 1u) * ${ne}u`,ne)}
-    ${X(t,e=>`b${e} += ${X(r,t=>`s[${t}] * ${_p(`hw`,re(t,e))}`,` + `)};`)}
+    ${vp(`hw`,`treeCells`,`TP.hubOff + (hub - 1u) * ${ie}u`,ie)}
+    ${X(t,e=>`b${e} += ${X(r,t=>`s[${t}] * ${_p(`hw`,ae(t,e))}`,` + `)};`)}
   } else `:``}if (raw == c) {
-    // far field: local expansions down my chain of parent cells${ge}
+    // far field: local expansions down my chain of parent cells${ve}
   } else {
-    // clamped into a border cell: monopoles of the interaction lists at my real position${_e}
+    // clamped into a border cell: monopoles of the interaction lists at my real position${ye}
   }
-  return ${l} * ${pe}(${X(t,e=>`na${e} + b${e}`,`, `)});
+  return ${l} * ${he}(${X(t,e=>`na${e} + b${e}`,`, `)});
 }
 // The charge of channel c of the body in sorted slot k (its sensitivity when the two are one column)
 fn tree_charge(k: u32, c: u32) -> f32 {
@@ -3169,30 +3218,7 @@ fn tree_charge(k: u32, c: u32) -> f32 {
   return treeSp[k * ${n.SP4}u + (w >> 2u)][w & 3u];
 }
 fn tree_slot(i: u32) -> u32 { return treeMeta[TP.metaRow + i]; }
-fn tree_row(k: u32) -> u32 { return treeMeta[TP.metaTag + 2u * k]; }`,ye={bindings:[{name:`treeSp`,access:`read`,type:`array<vec4f>`},{name:`treeMeta`,access:`read`,type:`array<u32>`},{name:`treeCells`,access:`read`,type:`array<vec4f>`}],uniform:{name:`TP`,struct:jp(e.lawWords),decl:e=>`@group(0) @binding(${e}) var<uniform> TP: TreeParams;`},declarations:Tp(t,n.bits)+Ep(t)+j+ve,row:e=>`tree_row(${e})`,code({t:e,i:n,force:i,sensitivity:a}){let o=e??`tree_slot(${n})`,s=[];for(let e=0;e<r;e++){let t=a?a(e):null;s.push(t??`tree_charge(tk, ${e}u)`)}return`{ let tk = ${o}; let tf = tree_force(tk, array<f32, ${r}>(${s.join(`, `)})); ${X(t,e=>`${i[e]} += tf.${mp[e]};`)} }`}};return{kernels:{TREE_HIST:p,TREE_BOX:h,TREE_BIN:g,TREE_SCAN_BLOCKS:`
-@group(0) @binding(0) var<storage, read_write> treeCount: array<u32>;
-@group(0) @binding(1) var<storage, read_write> treeMeta: array<u32>;
-@group(0) @binding(2) var<storage, read_write> blockSums: array<u32>;
-var<workgroup> tmp: array<u32, 256>;
-@compute @workgroup_size(256)
-fn main(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: vec3u) {
-  let base = wid.x * 1024u + li * 4u;
-  let a0 = treeCount[base]; let a1 = treeCount[base + 1u]; let a2 = treeCount[base + 2u]; let a3 = treeCount[base + 3u];
-  treeCount[base] = 0u; treeCount[base + 1u] = 0u; treeCount[base + 2u] = 0u; treeCount[base + 3u] = 0u;
-  let t = a0 + a1 + a2 + a3;
-  tmp[li] = t;
-  workgroupBarrier();
-  for (var off = 1u; off < 256u; off <<= 1u) {
-    var v = tmp[li];
-    if (li >= off) { v += tmp[li - off]; }
-    workgroupBarrier();
-    tmp[li] = v;
-    workgroupBarrier();
-  }
-  let ex = tmp[li] - t;
-  treeMeta[base] = ex; treeMeta[base + 1u] = ex + a0; treeMeta[base + 2u] = ex + a0 + a1; treeMeta[base + 3u] = ex + a0 + a1 + a2;
-  if (li == 255u) { blockSums[wid.x] = tmp[255]; }
-}`,TREE_SCAN_TOP:`
+fn tree_row(k: u32) -> u32 { return treeMeta[TP.metaTag + 2u * k]; }`,xe={bindings:[{name:`treeSp`,access:`read`,type:`array<vec4f>`},{name:`treeMeta`,access:`read`,type:`array<u32>`},{name:`treeCells`,access:`read`,type:`array<vec4f>`}],uniform:{name:`TP`,struct:jp(e.lawWords),decl:e=>`@group(0) @binding(${e}) var<uniform> TP: TreeParams;`},declarations:Tp(t,n.bits)+Ep(t)+I+be,row:e=>`tree_row(${e})`,code({t:e,i:n,force:i,sensitivity:a}){let o=e??`tree_slot(${n})`,s=[];for(let e=0;e<r;e++){let t=a?a(e):null;s.push(t??`tree_charge(tk, ${e}u)`)}return`{ let tk = ${o}; let tf = tree_force(tk, array<f32, ${r}>(${s.join(`, `)})); ${X(t,e=>`${i[e]} += tf.${mp[e]};`)} }`}};return{kernels:{TREE_HIST:_,TREE_BOX:y,TREE_BIN:b,TREE_SCAN_BLOCKS:x,TREE_SCAN_TOP:`
 @group(0) @binding(0) var<storage, read_write> blockSums: array<u32>;
 @group(0) @binding(1) var<uniform> nb: vec4u;
 var<workgroup> tmp: array<u32, 256>;
@@ -3213,7 +3239,7 @@ fn main(@builtin(local_invocation_index) li: u32) {
   }
   var ex = tmp[li] - t;
   for (var k = 0u; k < 4u; k++) { if (base + k < nb.x) { blockSums[base + k] = ex; } ex += a[k]; }
-}`,TREE_SCAN_ADD:_,TREE_PLACE:v,TREE_ORDER:y,TREE_AGG0:k,TREE_PYR:A,TREE_LOCAL:H,...m?{TREE_HEAVY:fe}:{}},columns:{TREE_HIST:u(f?[e.pos].concat(e.charges):[e.pos],1).names,TREE_BIN:u([e.pos],1).names,TREE_ORDER:u([e.pos].concat(e.charges),1).names},section:ye,heavyGroups:dp}}var Rp=1024,zp=`xyzw`;function Bp(e,t){if(t===2){let t=32;for(;t*t*2<e&&t<1024;)t*=2;return t<=64?2*t:t}let n=2;for(;(n**t<1024||n**t<2*e)&&(2*n)**t<=1<<20;)n*=2;return n}function Vp({D:e,n:t,limits:n,channels:r,pos:i,values:a=null,grid:o=0,heads:s,heavyCells:c,hubs:l,secondOrder:u,separation:d,blocks:f=!0,warn:p}){let m=(e,t={})=>({refusal:e,buffers:t,kernels:{},section:null,dispatches:0});if(e!==2&&e!==3)return m(`the grid pyramid is 2D and 3D; this layout is ${e}D`);if(!r.length)return m(`a tree pass needs at least one charge`);let h=[],g=Wu(p);for(let t=0;t<r.length;t++){let n=r[t].law&&!r[t].law.isDefault?r[t].law:null,i=h.find(e=>n?e.law===n||e.law&&e.law.spec===n.spec:e.isDefault);if(!i){if(n){let i=Gp(n,e,g);if(i)return m(`${r[t].stage||`channel `+t}: ${i}`)}i={law:n,isDefault:!n,channels:[],first:t},h.push(i)}i.channels.push(t)}let _=0,v=0;h.forEach(e=>{e.law&&(e.tables=e.law.describe().tables.map(e=>{let t={name:e.name,from:e.from,to:e.to,length:e.values.length,values:e.values,base:_};return _+=e.values.length,t}),e.base=v,v+=Math.ceil(Qu(e.law)/4)*4,e.value=a?t=>a.law(e.first,t):t=>`TP.law[${e.base+t>>2}].${zp[e.base+t&3]}`)}),h.forEach(t=>{t.second=u===void 0?!!t.law&&!(t.tables||[]).length&&Wp(t.law,e):!!u&&!(t.tables||[]).length});let y=r.map((e,t)=>{let n=h.findIndex(e=>e.channels.indexOf(t)>=0);return{own:t===0||e.centroid!==`shared`,group:n,second:h[n].second}}),b=xp(e,y,_),x=o||Bp(t,e);if(x**e>1<<20)return m(`the grid pyramid takes up to 2^20 cells; ${x}^${e} is more`);let S=d===void 0?e===2&&h.some(e=>e.second)?2:1:d,C=(c===void 0?e===3:c)&&S===1,w=l===void 0?e===2:!!l,{sizes:T,buffers:E}=Up(e,t,x,b,r.length,C,w),D=T.nCells,O=T.levels,k=Math.min(n.maxStorageBufferBindingSize,n.maxBufferSize),A=Object.keys(E).filter(e=>E[e]>k);if(A.length){let n=A.sort((e,t)=>E[t]-E[e])[0];return m(`the tree pass with ${r.length} charge${r.length>1?`s`:``} in ${e}D at ${t.toLocaleString(`en-US`)} bodies needs ${Kp(E[n])} for ${n===`treeCells`?`its cells`:n}; this device allows ${Kp(k)} per buffer`,E)}if(Math.ceil(t/256)>n.maxComputeWorkgroupsPerDimension**2)return m(`the grid pyramid runs up to ${(n.maxComputeWorkgroupsPerDimension**2*256).toLocaleString(`en-US`)} bodies`);let j=256*b.CS4*16+(b.CNT<0?1024:0)+16,M=f&&j<=(n.maxComputeWorkgroupStorageSize||16384)?Math.floor(Math.log2(256)/e):0,N={D:e,L:b,groups:h,lawWords:a?0:v,values:a,warn:p,heads:s===void 0?D>t:s,heavyCells:C,hubs:w,sep:S,blockSteps:M,channels:y,pos:i,charges:r.map(e=>e.charge)},P=Lp(N);return{refusal:null,D:e,n:t,K:r.length,layout:b,groups:h,sizes:T,buffers:E,heads:N.heads,heavyCells:N.heavyCells,hubs:w,lawWords:N.lawWords,values:a,channels:r,kernels:P.kernels,columns:P.columns,section:P.section,dispatches:10+Hp(O,M).length+ +!!N.heavyCells,blockSteps:M,heavyGroups:P.heavyGroups}}function Hp(e,t){let n=[];if(!t){for(let t=0;t<e;t++)n.push({from:t,steps:1});return n}for(let r=Math.min(t,e);r<e;r+=t)n.push({from:r,steps:Math.min(t,e-r)});return n}function Up(e,t,n,r,i,a,o=!1){let s=Math.log2(n),c=n**e,l=[],u=0;for(let t=0,r=n;t<=s;t++,r>>=1)l.push(u),u+=r**e;let d=l[s],f=r.TAB4+u*r.CS4,p=f+d*r.LS4,m=Math.floor(t/1025)+1,h=Math.ceil(e*i/4),g=p+t*h,_=8+(a?c:0)+m,v=_+(c>t?Math.min(t,c):0),y=e=>Math.max(16,Math.ceil(e/16)*16);return{sizes:{n:t,G:n,levels:s,nCells:c,levelOff:l,pyrSize:u,localCells:d,locOff:f,crowdOff:p,crowdList:8+(a?c:0),occList:_,hubOff:g,hubList:v,metaTag:c,metaRow:c+2*t,metaCount:c+3*t},buffers:{treeBox:y(Sp(e).size*4),treeCount:y(c*4),treeBlocks:y(Math.max(c/1024,4)*4),treeWork:y(3*t*4),treeMeta:y((c+3*t+u)*4),treeSp:y(t*r.SP4*16),treeCells:y((g+(o?pp*h:0))*16),treeLists:y((v+(o?pp:0))*4)}}}function Wp(e,t){let n=e.prologue(`values`)+` var k1; `+e.emit(t,`r`,`k1`)+` return k1;`,r=Function(`r`,`values`,`lawFunctions`,n),i=null;for(let t=-8;t<=24;t++){let n=Math.abs(r(2**t,e.values,e.functions));if(i!==null&&i>0&&n>0&&Math.log2(n/i)>-2.5)return!0;i=n}return!1}function Gp(e,t,n){if(Object.keys(e.functions).filter(t=>e.tableNames.indexOf(t)<0).length)return`laws with JavaScript functions run on the CPU only`;try{e.emit(n,t,`r`,`k1`,`k2`)}catch(e){return`the law: `+e.message}for(let t of e.describe().tables){let e=Array.from(t.values).find(e=>!Number.isFinite(e)||Math.abs(e)>34028234663852886e22);if(e!==void 0)return`the law's table ${t.name}: ${Hu(e)}`}let r=td(e);return r?`the law's ${r.name} is ${r.problem}`:null}function Kp(e){return(e/1048576).toFixed(+(e<10485760))+` MiB`}function qp(e,t,n){let r=[];return e.writes.forEach(i=>{if(i.space!==`nodes`||i.mode!==`add`||i.column===`force`||i.via||r.some(e=>e.column===i.column))return;let a=n[i.column],o=a&&a.width===`D`?t:1;r.push({column:i.column,width:o,startAtZero:(e.args.startAtZero||[]).indexOf(i.column)>=0})}),r}function Jp(e){let t=[];return e.reads.forEach(e=>{e.space!==`nodes`||e.column===`pos`||t.indexOf(e.column)>=0||t.push(e.column)}),t}function Yp(e,t){let{D:n,printer:r}=t;if(e.tables&&e.tables.length)throw Error(`WebGPU does not run lookup tables in pair formulas yet`);let i=e.args.symmetric!==!1,a=qp(e,n,t.columns),o=n=>zu.compile(e.formula,Qp(e,t,n,a),r).lines;return{i:o(`i`),j:i?o(`j`):null,accumulators:a,reads:Jp(e)}}function Xp(e,{D:t,me:n,other:r,r2:i,radius:a,force:o,reach2:s=null,valid:c=null}){let l=e=>e.map(e=>`    `+e),u=e.j?[`if (${n} < ${r}) {`].concat(l(e.i),[`} else {`],l(e.j),[`}`]):[`{`].concat(l(e.i),[`}`]);return[`if (${[`${i} > 0.0`].concat(s?[`${i} <= ${s}`]:[],c?[c]:[]).join(` && `)}) {`,`  let pair_r = sqrt(${i});`,`  if (pair_r < ${a}) {`,`    var pair_push = 0.0;`].concat(u.map(e=>`    `+e),[`    let pair_scale = pair_push / pair_r;`,`    `+Array.from({length:t},(e,t)=>`${o(t)} += pair_scale * d${t};`).join(` `),`  }`,`}`])}function Zp(e,t,n){return n===1?`pair_acc_${e}`:`pair_acc_${e}_${t}`}function Qp(e,t,n,r){let{D:i,columns:a}=t,o=e=>e===n?`me`:`other`;return{D:i,name(n){if(n===`r`)return{type:`num`,code:`pair_r`};if(n===`push`)return{type:`num`,code:`pair_push`,write:(e,t)=>[`pair_push ${e} ${t.code};`]};let r=/^(\w+)_([ij])$/.exec(n);if(r&&(r[1]===`pos`||a[r[1]]&&!a[r[1]].hidden))return s(r[1],r[2]);if(e.params.some(e=>e.name===n))return{type:`num`,code:t.param(n)};if(t.sumWidth&&t.sumWidth(n)){let e=t.sumWidth(n),r=Array.from({length:e},(e,r)=>t.sum(n,r));return e===1?{type:`num`,code:r[0]}:{type:`vec`,codes:r}}if(e.builtIns.indexOf(n)>=0)return{type:`num`,code:t.builtIn(n)}}};function s(e,s){let c=(e===`pos`?{width:`D`}:a[e]).width===`D`?i:1,l=e===`force`,u=l||r.some(t=>t.column===e),d=Array.from({length:c},(n,r)=>u?`pair_unread`:t.read(e,o(s),r)),f=n=>l?t.force?t.force(n):`pair_force_${n}`:Zp(e,n,c),p=u?(e,t)=>{if(s!==n)return[];let r=t.codes||[t.code];return Array.from({length:c},(t,n)=>`${f(n)} ${e} ${r[n]};`)}:null,m=c===1?{type:`num`,code:d[0]}:{type:`vec`,codes:d};return p&&(m.write=p,m.ops=[`+=`,`-=`]),m}}var $p=1024,em=1+1/1024,tm=1073741823,Z={RANK_X:0,RANK_Y:1,RANK_Z:2,EVAL_X:3,EVAL_Y:4,EVAL_Z:5,RANK_TOTAL:6,FLAGS:7,ALLOC:8,OK:9,EVAL_COUNT:10,RANK_COUNT:11,SLICE_EVAL:16,SLICE_RANK:208,WORDS:400},nm=1,rm=2,im={BUCKET:0,SLOT:1,RANK:2,FIRST:3,COUNT:4,RANK_FIRST:5,CELL:6},am=`xyzw`;function om(e,t,n=` `){let r=[];for(let n=0;n<e;n++)r.push(t(n));return r.join(n)}function Q(e){return e+`u`}var sm=`@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u`,cm=e=>`gid.x + gid.y * nwg.x * ${Q(e)}`,lm=e=>`struct PairSlice { k: u32, index: u32, pad0: u32, pad1: u32 };
+}`,TREE_SCAN_ADD:S,TREE_PLACE:C,TREE_ORDER:w,TREE_AGG0:P,TREE_PYR:F,TREE_LOCAL:le,...v?{TREE_HEAVY:me}:{}},columns:{TREE_HIST:u(f?[e.pos].concat(e.charges):[e.pos],1).names,TREE_BIN:u([e.pos],1).names,TREE_ORDER:u([e.pos].concat(e.charges),1).names},section:xe,heavyGroups:dp}}var Rp=1024,zp=`xyzw`;function Bp(e,t){if(t===2){let t=32;for(;t*t*2<e&&t<1024;)t*=2;return t<=64?2*t:t}let n=2;for(;(n**t<1024||n**t<2*e)&&(2*n)**t<=1<<20;)n*=2;return n}function Vp({D:e,n:t,limits:n,channels:r,pos:i,values:a=null,grid:o=0,heads:s,heavyCells:c,hubs:l,secondOrder:u,separation:d,blocks:f=!0,warn:p}){let m=(e,t={})=>({refusal:e,buffers:t,kernels:{},section:null,dispatches:0});if(e!==2&&e!==3)return m(`the grid pyramid is 2D and 3D; this layout is ${e}D`);if(!r.length)return m(`a tree pass needs at least one charge`);let h=[],g=Wu(p);for(let t=0;t<r.length;t++){let n=r[t].law&&!r[t].law.isDefault?r[t].law:null,i=h.find(e=>n?e.law===n||e.law&&e.law.spec===n.spec:e.isDefault);if(!i){if(n){let i=Gp(n,e,g);if(i)return m(`${r[t].stage||`channel `+t}: ${i}`)}i={law:n,isDefault:!n,channels:[],first:t},h.push(i)}i.channels.push(t)}let _=0,v=0;h.forEach(e=>{e.law&&(e.tables=e.law.describe().tables.map(e=>{let t={name:e.name,from:e.from,to:e.to,length:e.values.length,values:e.values,base:_};return _+=e.values.length,t}),e.base=v,v+=Math.ceil(Qu(e.law)/4)*4,e.value=a?t=>a.law(e.first,t):t=>`TP.law[${e.base+t>>2}].${zp[e.base+t&3]}`)}),h.forEach(t=>{t.second=u===void 0?!!t.law&&!(t.tables||[]).length&&Wp(t.law,e):!!u&&!(t.tables||[]).length});let y=r.map((e,t)=>{let n=h.findIndex(e=>e.channels.indexOf(t)>=0);return{own:t===0||e.centroid!==`shared`,group:n,second:h[n].second}}),b=xp(e,y,_),x=o||Bp(t,e);if(x**e>1<<20)return m(`the grid pyramid takes up to 2^20 cells; ${x}^${e} is more`);let S=d===void 0?e===2&&h.some(e=>e.second)?2:1:d,C=(c===void 0?e===3:c)&&S===1,w=l===void 0?e===2:!!l,{sizes:T,buffers:E}=Up(e,t,x,b,r.length,C,w),D=T.nCells,O=T.levels,k=Math.min(n.maxStorageBufferBindingSize,n.maxBufferSize),A=Object.keys(E).filter(e=>E[e]>k);if(A.length){let n=A.sort((e,t)=>E[t]-E[e])[0];return m(`the tree pass with ${r.length} charge${r.length>1?`s`:``} in ${e}D at ${t.toLocaleString(`en-US`)} bodies needs ${Kp(E[n])} for ${n===`treeCells`?`its cells`:n}; this device allows ${Kp(k)} per buffer`,E)}if(Math.ceil(t/256)>n.maxComputeWorkgroupsPerDimension**2)return m(`the grid pyramid runs up to ${(n.maxComputeWorkgroupsPerDimension**2*256).toLocaleString(`en-US`)} bodies`);let j=256*b.CS4*16+(b.CNT<0?1024:0)+16,M=f&&j<=(n.maxComputeWorkgroupStorageSize||16384)?Math.floor(Math.log2(256)/e):0,N={D:e,L:b,groups:h,lawWords:a?0:v,values:a,warn:p,heads:s===void 0?D>t:s,heavyCells:C,hubs:w,sep:S,blockSteps:M,channels:y,pos:i,charges:r.map(e=>e.charge)},P=Lp(N);return{refusal:null,D:e,n:t,K:r.length,layout:b,groups:h,sizes:T,buffers:E,heads:N.heads,heavyCells:N.heavyCells,hubs:w,lawWords:N.lawWords,values:a,channels:r,kernels:P.kernels,columns:P.columns,section:P.section,dispatches:10+Hp(O,M).length+ +!!N.heavyCells,blockSteps:M,heavyGroups:P.heavyGroups}}function Hp(e,t){let n=[];if(!t){for(let t=0;t<e;t++)n.push({from:t,steps:1});return n}for(let r=Math.min(t,e);r<e;r+=t)n.push({from:r,steps:Math.min(t,e-r)});return n}function Up(e,t,n,r,i,a,o=!1){let s=Math.log2(n),c=n**e,l=[],u=0;for(let t=0,r=n;t<=s;t++,r>>=1)l.push(u),u+=r**e;let d=l[s],f=r.TAB4+u*r.CS4,p=f+d*r.LS4,m=Math.floor(t/1025)+1,h=Math.ceil(e*i/4),g=p+t*h,_=8+(a?c:0)+m,v=_+(c>t?Math.min(t,c):0),y=e=>Math.max(16,Math.ceil(e/16)*16);return{sizes:{n:t,G:n,levels:s,nCells:c,levelOff:l,pyrSize:u,localCells:d,locOff:f,crowdOff:p,crowdList:8+(a?c:0),occList:_,hubOff:g,hubList:v,metaTag:c,metaRow:c+2*t,metaCount:c+3*t},buffers:{treeBox:y(Sp(e).size*4),treeCount:y(c*4),treeBlocks:y(Math.max(c/1024,4)*4),treeWork:y(3*t*4),treeMeta:y((c+3*t+u)*4),treeSp:y(t*r.SP4*16),treeCells:y((g+(o?pp*h:0))*16),treeLists:y((v+(o?pp:0))*4)}}}function Wp(e,t){let n=e.prologue(`values`)+` var k1; `+e.emit(t,`r`,`k1`)+` return k1;`,r=Function(`r`,`values`,`lawFunctions`,n),i=null;for(let t=-8;t<=24;t++){let n=Math.abs(r(2**t,e.values,e.functions));if(i!==null&&i>0&&n>0&&Math.log2(n/i)>-2.5)return!0;i=n}return!1}function Gp(e,t,n){if(Object.keys(e.functions).filter(t=>e.tableNames.indexOf(t)<0).length)return`laws with JavaScript functions run on the CPU only`;try{e.emit(n,t,`r`,`k1`,`k2`)}catch(e){return`the law: `+e.message}for(let t of e.describe().tables){let e=Array.from(t.values).find(e=>!Number.isFinite(e)||Math.abs(e)>34028234663852886e22);if(e!==void 0)return`the law's table ${t.name}: ${Hu(e)}`}let r=td(e);return r?`the law's ${r.name} is ${r.problem}`:null}function Kp(e){return(e/1048576).toFixed(+(e<10485760))+` MiB`}function qp(e,t,n){let r=[];return e.writes.forEach(i=>{if(i.space!==`nodes`||i.mode!==`add`||i.column===`force`||i.via||r.some(e=>e.column===i.column))return;let a=n[i.column],o=a&&a.width===`D`?t:1;r.push({column:i.column,width:o,startAtZero:(e.args.startAtZero||[]).indexOf(i.column)>=0})}),r}function Jp(e){let t=[];return e.reads.forEach(e=>{e.space!==`nodes`||e.column===`pos`||t.indexOf(e.column)>=0||t.push(e.column)}),t}function Yp(e,t){let{D:n,printer:r}=t;if(e.tables&&e.tables.length)throw Error(`WebGPU does not run lookup tables in pair formulas yet`);let i=e.args.symmetric!==!1,a=qp(e,n,t.columns),o=n=>zu.compile(e.formula,Qp(e,t,n,a),r).lines;return{i:o(`i`),j:i?o(`j`):null,accumulators:a,reads:Jp(e)}}function Xp(e,{D:t,me:n,other:r,r2:i,radius:a,force:o,reach2:s=null,valid:c=null}){let l=e=>e.map(e=>`    `+e),u=e.j?[`if (${n} < ${r}) {`].concat(l(e.i),[`} else {`],l(e.j),[`}`]):[`{`].concat(l(e.i),[`}`]);return[`if (${[`${i} > 0.0`].concat(s?[`${i} <= ${s}`]:[],c?[c]:[]).join(` && `)}) {`,`  let pair_r = sqrt(${i});`,`  if (pair_r < ${a}) {`,`    var pair_push = 0.0;`].concat(u.map(e=>`    `+e),[`    let pair_scale = pair_push / pair_r;`,`    `+Array.from({length:t},(e,t)=>`${o(t)} += pair_scale * d${t};`).join(` `),`  }`,`}`])}function Zp(e,t,n){return n===1?`pair_acc_${e}`:`pair_acc_${e}_${t}`}function Qp(e,t,n,r){let{D:i,columns:a}=t,o=e=>e===n?`me`:`other`;return{D:i,name(n){if(n===`r`)return{type:`num`,code:`pair_r`};if(n===`push`)return{type:`num`,code:`pair_push`,write:(e,t)=>[`pair_push ${e} ${t.code};`]};let r=/^(\w+)_([ij])$/.exec(n);if(r&&(r[1]===`pos`||a[r[1]]&&!a[r[1]].hidden))return s(r[1],r[2]);if(e.params.some(e=>e.name===n))return{type:`num`,code:t.param(n)};if(t.sumWidth&&t.sumWidth(n)){let e=t.sumWidth(n),r=Array.from({length:e},(e,r)=>t.sum(n,r));return e===1?{type:`num`,code:r[0]}:{type:`vec`,codes:r}}if(e.builtIns.indexOf(n)>=0)return{type:`num`,code:t.builtIn(n)}}};function s(e,s){let c=(e===`pos`?{width:`D`}:a[e]).width===`D`?i:1,l=e===`force`,u=l||r.some(t=>t.column===e),d=Array.from({length:c},(n,r)=>u?`pair_unread`:t.read(e,o(s),r)),f=n=>l?t.force?t.force(n):`pair_force_${n}`:Zp(e,n,c),p=u?(e,t)=>{if(s!==n)return[];let r=t.codes||[t.code];return Array.from({length:c},(t,n)=>`${f(n)} ${e} ${r[n]};`)}:null,m=c===1?{type:`num`,code:d[0]}:{type:`vec`,codes:d};return p&&(m.write=p,m.ops=[`+=`,`-=`]),m}}var $p=1024,em=1+1/1024,tm=1073741823,Z={RANK_X:0,RANK_Y:1,RANK_Z:2,EVAL_X:3,EVAL_Y:4,EVAL_Z:5,RANK_TOTAL:6,FLAGS:7,ALLOC:8,OK:9,EVAL_COUNT:10,RANK_COUNT:11,SLICE_EVAL:16,SLICE_RANK:208,WORDS:400},nm=1,rm=2,im={BUCKET:0,SLOT:1,RANK:2,FIRST:3,COUNT:4,RANK_FIRST:5,CELL:6},am=`xyzw`;function om(e,t,n=` `){let r=[];for(let n=0;n<e;n++)r.push(t(n));return r.join(n)}function Q(e){return e+`u`}var sm=`@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u`,cm=e=>`gid.x + gid.y * nwg.x * ${Q(e)}`,lm=e=>`struct PairSlice { k: u32, index: u32, pad0: u32, pad1: u32 };
 @group(0) @binding(${e}) var<uniform> SL: PairSlice;`,um=`struct PairParams { n: u32, mask: u32, size: u32, blocks: u32, cap: u32, sort: u32, owners: u32, home: u32 };
 @group(0) @binding(0) var<uniform> PP: PairParams;`,dm=`fn pair_start(b: u32) -> u32 {
   return pairStart[b] + pairStart[PP.size + 1u + (b >> 10u)];
@@ -3728,7 +3754,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
   let row = gid.x;
   if (row >= count.x) { return; }
   out[row] = pos[toInternal[row]];
-}`;async function qg(e,{simulator:t,plan:n,fireState:r,warn:i}){let a=t.store,o=n.law,s=o?Qu(o):0,c=o?new Float32Array(s):null,l=zm(t,!0),u=l.n,[d,f,p]=await Promise.all([Rd(e,{n:u,edges:l.edges,init:l.init,mass:l.mass,law:o,variants:n.perStep}),l.permuted?Cu(e,{code:Kg,label:`UNPERMUTE`}):null,Vg(e)]);e.queue.writeBuffer(d.vel,0,l.velocity),r&&d.setFire(r);let m=null,h=null,g=[];if(f){let t=e.createBuffer({size:16,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST}),n=e.createBuffer({size:u*4,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});m=e.createBuffer({size:u*8,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC}),e.queue.writeBuffer(t,0,new Uint32Array([u,0,0,0])),e.queue.writeBuffer(n,0,l.toInternal),h=e.createBindGroup({layout:f.getBindGroupLayout(0),entries:[t,d.pos,n,m].map((e,t)=>({binding:t,resource:{buffer:e}}))}),g.push(t,n,m)}let _={};S();let v=Hg(a,u,2,l.origin,Nm(a.pos,u,2,l.origin)),y=Float64Array.from(a.velocity.subarray(0,2*u)),b=Uint8Array.from(a.pinned.subarray(0,u),e=>+!!e),x=D();return{kind:`grid`,n:u,D:2,get fence(){return[d.pos]},positionBytes:u*8,kernelStages:Nd,prepare(t,n){S();let r=D();if(t){let t=Nm(a.pos,u,2,l.origin);v.reset(t),e.queue.writeBuffer(d.pos,0,O(t,2)),e.queue.writeBuffer(d.vel,0,Bm(a,l.toInternal,new Float32Array(4*u))),y=Float64Array.from(a.velocity.subarray(0,2*u)),b=Uint8Array.from(a.pinned.subarray(0,u),e=>+!!e)}else{if(r.pos!==x.pos){let e=v.written(),t=v.uploaded(e,n);p(d.pos,0,2,e.map(e=>l.toInternal[e]),t)}(r.velocity!==x.velocity||r.pinned!==x.pinned)&&A(k())}return r.mass!==x.mass&&e.queue.writeBuffer(d.mass,0,Vm(a,l.toInternal,new Float32Array(u))),x=r,`ok`},run(e,t,r){let i=null,a;if(o){let r=n.perStep?w(e,t):C(t);if(a=r.halt,e=Math.min(e,r.count),e===0)return{ran:0,halt:a};r.perStep&&(i=(e,t,n)=>t.set(r.numbers.subarray(e*s,(e+1)*s),n))}return d.run(e,Object.assign({},r,{lawSteps:i})),{ran:e,halt:a}},copyPositions(e,t,n,r=Ug){if(f&&r>=Ug){let r=e.beginComputePass();return r.setPipeline(f),r.setBindGroup(0,h),r.dispatchWorkgroups(Math.ceil(u/256)),r.end(),e.copyBufferToBuffer(m,0,t,n,u*8),!0}return e.copyBufferToBuffer(d.pos,0,t,n,u*8),!l.permuted},readPositions(e,n,r,i){return Rm(t,l.bodies)?r?Pm(t,l.bodies,e,2,l.origin,n):Im(t,l.bodies,e,l.toInternal,l.origin,n):v.readBack(i,a.versions.pos!==x.pos,()=>{if(!r)return Im(t,l.bodies,e,l.toInternal,l.origin,n,v.mirror);let i=Pm(t,l.bodies,e,2,l.origin,n);return v.mirror.set(e.subarray(0,2*u)),i})},async readDevice(){let n=e.createBuffer({size:u*24+16,usage:GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST}),r=e.createCommandEncoder();this.copyPositions(r,n,0,Ug),r.copyBufferToBuffer(d.vel,0,n,u*8,u*16),r.copyBufferToBuffer(d.fire,0,n,u*24,16),e.queue.submit([r.finish()]);try{await n.mapAsync(GPUMapMode.READ)}catch{return n.destroy(),null}let i=new Float32Array(n.getMappedRange(0,u*8)).slice(),o=new Float32Array(n.getMappedRange(u*8,u*16)).slice(),s=Array.from(new Float32Array(n.getMappedRange(u*24,16)));return n.unmap(),n.destroy(),{positions:i,fireState:s,apply(){if(Rm(t,l.bodies))return;let e=a.versions.velocity===x.velocity?[]:k(),n=e.map(e=>[a.velocity[2*e],a.velocity[2*e+1]]);for(let e=0;e<u;e++){let t=4*l.toInternal[e];a.velocity[2*e]=o[t],a.velocity[2*e+1]=o[t+1]}e.forEach((e,t)=>{a.velocity[2*e]=n[t][0],a.velocity[2*e+1]=n[t][1]}),y=Float64Array.from(a.velocity.subarray(0,2*u))}}},destroy(){d.destroy(),g.forEach(e=>e.destroy())}};function S(){let e=t.settings;if(Wg.every(t=>_[t]===e[t]))return;let n=_.integrator===void 0,r=_.integrator===`fire`;_={},Wg.forEach(t=>{_[t]=e[t]}),d.setParams(Object.assign({},e,{maxVelocity:e.maxVelocity>0?e.maxVelocity:1})),!n&&!r&&e.integrator===`fire`&&d.resetFire()}function C(e){let t=T(e),n=E(t,e);if(n)return{count:0,halt:n};let r=new Float32Array(s);return $u(o,r,0,t),Jg(r,c)||(c=r,d.setLawValues(c)),{count:1/0}}function w(e,t){let n=new Float32Array(e*s),r=!0;for(let i=0;i<e;i++){let e=t+i,a=T(e),l=E(a,e);if(l)return{count:i,numbers:n,perStep:!0,halt:l};$u(o,n,i*s,a),r&&!Jg(n.subarray(i*s,(i+1)*s),c)&&(r=!1)}return r?{count:e,perStep:!1}:(c=n.slice((e-1)*s,e*s),d.setLawValues(c),{count:e,numbers:n,perStep:!0})}function T(e){let n=t.stageValues(Gg,t.stepContext(e));return n.lawValues||Object.assign({},n.law.values)}function E(e,t){let n=td(o,e);return n?{message:`the law's ${n.name} is ${n.problem} at step ${t}`,stages:[Gg]}:(nd(o,e).forEach(i),null)}function D(){return{pos:a.versions.pos,velocity:a.versions.velocity,mass:a.versions.mass,pinned:a.versions.pinned}}function O(e,t){if(!l.permuted)return e;let n=new Float32Array(e.length);for(let r=0;r<u;r++)for(let i=0;i<t;i++)n[l.toInternal[r]*t+i]=e[r*t+i];return n}function k(){let e=a.velocity,t=a.pinned,n=[];for(let r=0;r<u;r++)(e[2*r]!==y[2*r]||e[2*r+1]!==y[2*r+1]||+!!t[r]!==b[r])&&n.push(r);return n}function A(e){let t=new Float32Array(4*e.length),n=a.velocity,r=a.pinned;e.forEach((e,i)=>{t[4*i]=y[2*e]=n[2*e],t[4*i+1]=y[2*e+1]=n[2*e+1],t[4*i+3]=b[e]=+!!r[e]}),p(d.vel,0,4,e.map(e=>l.toInternal[e]),t)}}function Jg(e,t){if(!t||e.length!==t.length)return!1;for(let n=0;n<e.length;n++)if(!Object.is(e[n],t[n]))return!1;return!0}var Yg=20,Xg=2e9,Zg=65e6,Qg=2e8,$g=30;async function e_(e,t,{buffers:n={},step:r=null,groupLimit:i=0,workCap:a=Xg,slowdown:o=1}={}){if(t.refusal)throw Error(t.refusal);let{D:s,sizes:c,kernels:l,columns:u}=t,d=[].concat(...Object.values(u)).filter(e=>!n[e]);if(d.length)throw Error(`buildPyramid: no buffer for `+d.join(`, `));let f=Object.keys(l).map(n=>{let i={code:l[n],label:n},a=r?[r.dynamic?`dynamic`:`uniform`]:[];return n===`TREE_LOCAL`&&r&&(i.bindings=[`uniform`,`storage`,t.hubs?`storage`:`read`,`storage`,`read`].concat(a)),n===`TREE_HEAVY`&&r&&(i.bindings=[`uniform`,`read`,`read`,`storage`,`read`].concat(a)),Cu(e,i).then(e=>[n,e])}),p=Object.fromEntries(await Promise.all(f)),m=GPUBufferUsage.STORAGE,h=GPUBufferUsage.COPY_DST,g=GPUBufferUsage.COPY_SRC,_=GPUBufferUsage.UNIFORM,v=[];e.pushErrorScope(`validation`),e.pushErrorScope(`out-of-memory`);let y=(t,n=m)=>{let r=e.createBuffer({size:t,usage:n});return v.push(r),r},b=t.buffers,x=y(b.treeBox,m|h|g),S=y(b.treeCount,m|h),C=y(b.treeBlocks),w=y(b.treeWork),T=y(b.treeMeta,m|g),E=y(b.treeSp,m|g),D=y(b.treeCells,m|h|g),O=y(b.treeLists,m|g),k=(Yg+t.lawWords)*4,A=y(Math.max(64,Math.ceil(k/16)*16),_|h),j=y(16,_|h);e.queue.writeBuffer(j,0,new Uint32Array([c.nCells/1024,0,0,0]));let M=Sp(s),N=new Uint32Array(M.size);for(let e=0;e<s;e++)N[M.BB_MIN+e]=4294967295;e.queue.writeBuffer(x,0,N),t_(e,D,t);let P=new ArrayBuffer(Math.max(64,Math.ceil(k/16)*16)),F=new Uint32Array(P),I=new Float32Array(P);F[0]=c.n,F[1]=c.G,F[2]=c.levels,F[3]=c.nCells,F[4]=c.locOff,F[5]=c.metaTag,F[6]=c.metaRow,F[7]=c.metaCount,F[8]=Rp,F[9]=Math.max(1,Math.floor(c.n/1e3)),I[10]=-1,F[11]=c.pyrSize-1;let L=t.heads?c.n+c.localCells-c.nCells:c.localCells,R=Math.ceil(L/256);F[12]=R,F[13]=c.crowdOff,I[14]=a,F[15]=c.crowdList,F[16]=c.occList,F[17]=c.hubOff,F[18]=c.hubList;let z=(t,n,r=p[t])=>e.createBindGroup({layout:r.getBindGroupLayout(0),entries:n.map((e,t)=>({binding:t,resource:e.buffer?e:{buffer:e}}))}),ee=(e,t)=>u[e].map(e=>Array.isArray(n[e])?n[e][t]:n[e]),B=e=>u[e].some(e=>Array.isArray(n[e])),te=(e,t)=>B(e)?[0,1].map(n=>z(e,t(n))):z(e,t(0)),ne=r?[{buffer:r.buffer,size:r.size}]:[],re={TREE_HIST:te(`TREE_HIST`,e=>[A].concat(ee(`TREE_HIST`,e),[x])),TREE_BOX:z(`TREE_BOX`,[A,x,O]),TREE_BIN:te(`TREE_BIN`,e=>[A].concat(ee(`TREE_BIN`,e),[x,S,w])),TREE_SCAN_BLOCKS:z(`TREE_SCAN_BLOCKS`,[S,T,C]),TREE_SCAN_TOP:z(`TREE_SCAN_TOP`,[C,j]),TREE_SCAN_ADD:z(`TREE_SCAN_ADD`,[A,T,C]),TREE_PLACE:z(`TREE_PLACE`,[A,T,w]),TREE_ORDER:te(`TREE_ORDER`,e=>[A].concat(ee(`TREE_ORDER`,e),[w,T,E])),TREE_AGG0:z(`TREE_AGG0`,[A,E,T,D,O].concat(t.hubs?[x]:[])),TREE_LOCAL:z(`TREE_LOCAL`,[A,D,T,O,E].concat(ne))};t.heavyCells&&(re.TREE_HEAVY=z(`TREE_HEAVY`,[A,E,T,D,O].concat(ne)));let ie=Hp(c.levels,t.blockSteps).map(({from:n,steps:r})=>{let i=y(16,_|h),a=t.blockSteps?(c.G>>n)**s:(c.G>>n+1)**s;return e.queue.writeBuffer(i,0,new Uint32Array(t.blockSteps?[a,c.levelOff[n],r,c.metaCount]:[a,c.levelOff[n],c.levelOff[n+1],c.metaCount])),{count:a,group:z(`TREE_PYR`,[i,D].concat(t.layout.CNT<0?[T]:[],t.hubs?[x]:[]))}}),ae=(await Promise.all([e.popErrorScope(),e.popErrorScope()])).find(Boolean);if(ae)throw v.forEach(e=>e.destroy()),Error(`could not create the tree buffers: `+ae.message);let V=a,oe=Zg/Math.max(1,o),se=0;function ce(){let t=Math.min(a,Math.max(oe*$g,1.5*se));t!==V&&(V=t,I[14]=V,e.queue.writeBuffer(A,56,new Float32Array([V])))}let H=i||e.limits.maxComputeWorkgroupsPerDimension;function U(e){let t=Math.max(1,Math.ceil(e/256));if(t<=H)return[t,1];let n=H;return[n,Math.ceil(t/n)]}let le=U(c.n),ue=U(c.nCells),W=U((R+128+(t.hubs?32:0))*256),de=Math.min(le[0]*le[1],128),fe=0;function pe(e,t,n){e.setPipeline(p[t]),e.setBindGroup(0,Array.isArray(re[t])?re[t][fe]:re[t]),e.dispatchWorkgroups(n[0],n[1])}return{plan:t,buffers:{treeSp:E,treeMeta:T,treeCells:D,TP:A},nodeGrid:le,setValues(n,r){I[10]=n.gravity,r&&t.lawWords&&t.groups.forEach(e=>{e.law&&$u(r[e.first]||e.law,I,Yg+e.base)}),e.queue.writeBuffer(A,0,P)},encode(e,{stepOffset:n,parity:i=0}={}){fe=i,pe(e,`TREE_HIST`,[de,1]),pe(e,`TREE_BOX`,[1,1]),pe(e,`TREE_BIN`,le),pe(e,`TREE_SCAN_BLOCKS`,[c.nCells/1024,1]),pe(e,`TREE_SCAN_TOP`,[1,1]),pe(e,`TREE_SCAN_ADD`,ue),pe(e,`TREE_PLACE`,le),pe(e,`TREE_ORDER`,le),pe(e,`TREE_AGG0`,ue),e.setPipeline(p.TREE_PYR);for(let{count:t,group:n}of ie){e.setBindGroup(0,n);let r=U(t);e.dispatchWorkgroups(r[0],r[1])}let a=r&&r.dynamic?[n||0]:[];e.setPipeline(p.TREE_LOCAL),e.setBindGroup(0,re.TREE_LOCAL,a),e.dispatchWorkgroups(W[0],W[1]),t.heavyCells&&(e.setPipeline(p.TREE_HEAVY),e.setBindGroup(0,re.TREE_HEAVY,a),e.dispatchWorkgroups(t.heavyGroups))},boxBuffer:x,status:{buffer:O,offset:0,size:32},statusMessage:e=>n_(e,V,t.K),observe(e){se=e[7]*1e6},observeTime(e){!(e>0)||se<Qg||(oe=Math.min(Zg,se/e),ce())},cappedMs:()=>V/oe,destroy(){for(let e of v)e.destroy()}}}function t_(e,t,n){let r=n.layout.TAB4*4;if(!r)return;let i=new Float32Array(r);n.groups.forEach(e=>{(e.tables||[]).forEach(e=>{i.set(e.values,e.base)})}),e.queue.writeBuffer(t,0,i)}function n_(e,t=Xg,n=1){let r=e[2];if(!r)return null;let i=e=>e>=10?e.toFixed(0):e>=1?e.toFixed(1):e.toFixed(2),a=e[3]/1e3,o=hp(n);return`the tree pass: a grid cell holds ${r.toLocaleString(`en-US`)} bodies, and the crowded cells need about ${i(a)} billion pair evaluations a step`+(n>1?` with ${n} charges (the work of ${i(a*o)} billion with one)`:``)+`, more than the GPU takes (${i(t/1e9)} billion); the layout is piled too densely in one place for the grid`}var r_=1073741823;function i_(e,t,n,r,i){let a=i-1,o=1/(r*em),s=new Int32Array(t*n),c=new Uint32Array(i);for(let r=0;r<t;r++){for(let t=0;t<n;t++)s[r*n+t]=Math.max(-1073741823,Math.min(r_,Math.floor(e[r*n+t]*o)));c[a_(s,r*n,n,null)&a]+=1}let l=3**n,u=new Int32Array(n),d=0;for(let e=0;e<t;e++){let t=0;for(let r=0;r<l;r++){let i=r;for(let e=0;e<n;e++)u[e]=i%3-1,i=i/3|0;t+=c[a_(s,e*n,n,u)&a]}d+=Math.ceil(t/256)}let f=0;for(let e=0;e<i;e++)c[e]>1024&&(f+=c[e]*Math.ceil(c[e]/256));return{chunks:d,ranks:f}}function a_(e,t,n,r){let i=374761393;for(let a=0;a<n;a++)i=Math.imul(i^e[t+a]+(r?r[a]:0),668265261),i^=i>>>15;return i>>>0}var o_=1.5,s_=43e6/256,c_=2,l_=25,u_=100,d_=256;async function f_(e,t,{buffers:n,step:r,positions:i=null,estimateScale:a=1}){if(t.refusal)throw Error(t.refusal);let o=Object.fromEntries(await Promise.all(Object.keys(t.kernels).map(n=>Cu(e,{code:t.kernels[n],label:n,bindings:t.bindings[n]}).then(e=>[n,e])))),s=GPUBufferUsage.STORAGE,c=GPUBufferUsage.COPY_DST,l=GPUBufferUsage.COPY_SRC,u=[];e.pushErrorScope(`validation`),e.pushErrorScope(`out-of-memory`);let d=(n,r=s)=>{let i=e.createBuffer({size:t.buffers[n],usage:r,label:n});return u.push(i),i},f=d(`pairStatus`,s|l|c),p=t.sorts.map(n=>{let r=n.index,i=e.createBuffer({size:32,usage:GPUBufferUsage.UNIFORM|c,label:`PP`+r});return u.push(i),e.queue.writeBuffer(i,0,new Uint32Array([t.n,t.size-1,t.size,t.blocks,t.capChunks,r,t.n+t.capChunks,t.n+2*t.capChunks])),{sort:n,params:i,count:d(`pairCount`+r),start:d(`pairStart`+r),body:d(`pairBody`+r),list:d(`pairList`+r),args:d(`pairArgs`+r,s|GPUBufferUsage.INDIRECT|l),snap:d(`pairSnap`+r)}}),m=t.stages.map(e=>d(`pairPartial`+e.index)),h=e.createBuffer({size:d_*65,usage:GPUBufferUsage.UNIFORM|c,label:`pairSlices`});u.push(h);let g=new Uint32Array(d_/4*65);for(let e=0;e<64;e++)g[d_/4*(e+1)+1]=e;e.queue.writeBuffer(h,0,g);let _=(await Promise.all([e.popErrorScope(),e.popErrorScope()])).find(Boolean);if(_)throw u.forEach(e=>e.destroy()),Error(`could not create the pair buffers: `+_.message);let v={buffer:r.buffer,size:r.size},y={buffer:h,size:16},b=e=>e.buffer?e:{buffer:e},x=(t,n)=>e.createBindGroup({layout:o[t].getBindGroupLayout(0),entries:n.map((e,t)=>({binding:t,resource:b(e)}))}),S=(e,t)=>e.map(e=>Array.isArray(n[e])?n[e][t]:n[e]),C=e=>Array.isArray(n.X)?n.X[e]:n.X;p.forEach(e=>{let t=e.sort.kernels;e.groups={BIN:[0,1].map(n=>x(t.BIN,[e.params,v,C(n),e.count,e.body])),SCAN_BLOCKS:x(t.SCAN_BLOCKS,[e.params,e.count,e.start]),SCAN_TOP:x(t.SCAN_TOP,[e.params,e.start]),PLACE:x(t.PLACE,[e.params,e.start,e.body,e.list,e.args]),ARGS_RANK:x(t.ARGS_RANK,[e.params,e.args,f]),RANK:x(t.RANK,[e.params,e.args,e.start,e.body,e.list]),ARGS:x(t.ARGS,[e.params,e.args,f]),ORDER:[0,1].map(n=>x(t.ORDER,[e.params,e.args,e.start,e.body,e.list,e.snap,C(n)].concat(S(e.sort.columns,n)))),PLACE_S:x(t.PLACE_S,[e.params,e.start,e.body,e.list,e.args]),ARGS_RANK_S:x(t.ARGS_RANK_S,[e.params,e.args,f,y]),RANK_OWNERS_S:x(t.RANK_OWNERS_S,[e.params,e.args,e.start,e.body,e.list,y]),RANK_S:x(t.RANK_S,[e.params,e.args,e.start,e.body,e.list,y]),ORDER_S:[0,1].map(n=>x(t.ORDER_S,[e.params,e.args,e.start,e.body,e.list,e.snap,C(n)].concat(S(e.sort.columns,n),[y]))),ARGS_S:x(t.ARGS_S,[e.params,e.args,f,y]),EVAL_OWNERS_S:x(t.EVAL_OWNERS_S,[e.params,e.args,e.body,e.list,y])},e.known=null,e.lastRadius=0,e.lastSlices=0,e.lastStages=0});let w=t.stages.map(e=>{let t=p[e.sort];return{stage:e,sort:t,EVAL:x(e.kernels.EVAL,[t.params,v,t.args,t.start,t.list,t.snap,m[e.index]].concat(e.sumBuffer?S([e.sumBuffer],0):[])),GATHER:x(e.kernels.GATHER,[t.params,t.args,t.body,m[e.index]].concat(S(e.gatherColumns,0))),EVAL_S:x(e.kernels.EVAL_S,[t.params,v,t.args,t.start,t.list,t.snap,m[e.index]].concat(e.sumBuffer?S([e.sumBuffer],0):[],[y])),GATHER_S:x(e.kernels.GATHER_S,[t.params,t.args,t.body,m[e.index]].concat(S(e.gatherColumns,0),[y]))}}),T=t.capChunks,E=t.capChunks,D=s_,O=null,k=0;function A(){let t=Math.max(1,Math.min(E,Math.floor(D*l_)));t!==T&&(T=t,p.forEach(t=>e.queue.writeBuffer(t.params,16,new Uint32Array([T]))))}let j=e.limits.maxComputeWorkgroupsPerDimension,M=(e=>{let t=Math.max(1,Math.ceil(e/256));return t<=j?[t,1]:[j,Math.ceil(t/j)]})(t.n),N=(e,t,n,r,i)=>{e.setPipeline(o[t]),i?e.setBindGroup(0,n,i):e.setBindGroup(0,n),e.dispatchWorkgroups(r[0],r[1])},P=(e,t,n,r,i,a)=>{e.setPipeline(o[t]),a?e.setBindGroup(0,n,a):e.setBindGroup(0,n),e.dispatchWorkgroupsIndirect(r,i*4)},F=(e,t)=>e.gate===void 0||t[e.gate]!==0,I=e=>d_*(e+1);function L(e,n){if(!e.known&&i){let r=i_(i,t.n,t.D,n,t.size);e.known={chunks:Math.max(r.chunks,r.ranks)*a,radius:n}}if(!e.known)return 0;let r=e.known.chunks;return n>e.known.radius&&(r*=(n/e.known.radius)**t.D),r}function R(e){let t=e*o_;return t<=T?0:Math.min(64,Math.ceil(t/T))}function z(n,r,i,a,o,s,c){let l=r.sort.kernels,u=r.groups;n=o(),e.queue.writeBuffer(h,0,new Uint32Array([a,0,0,0])),N(n,l.BIN,u.BIN[c],M,s),N(n,l.SCAN_BLOCKS,u.SCAN_BLOCKS,[t.blocks,1]),N(n,l.SCAN_TOP,u.SCAN_TOP,[1,1]),N(n,l.PLACE_S,u.PLACE_S,M),N(n,l.ARGS_RANK_S,u.ARGS_RANK_S,[1,1],[0]);for(let e=0;e<a;e++)n=o(),N(n,l.RANK_OWNERS_S,u.RANK_OWNERS_S,M,[I(e)]),P(n,l.RANK_S,u.RANK_S,r.args,Z.SLICE_RANK+3*e,[I(e)]);n=o(),N(n,l.ORDER_S,u.ORDER_S[c],M,[0]),N(n,l.ARGS_S,u.ARGS_S,[1,1],[0]);for(let e=0;e<a;e++)i.forEach((t,i)=>{n=o(),i===0&&N(n,l.EVAL_OWNERS_S,u.EVAL_OWNERS_S,M,[I(e)]),P(n,t.stage.kernels.EVAL_S,t.EVAL_S,r.args,Z.SLICE_EVAL+3*e,[s[0],I(e)]),N(n,t.stage.kernels.GATHER_S,t.GATHER_S,M,[I(e)])});return o()}return{plan:t,status:{buffer:f,bytes:t.buffers.pairStatus},encode(e,{stepOffset:n=0,parity:r=0,values:i,stages:a=null,split:o=null}){let s=[n];for(let n of p){let c=w.filter(e=>e.sort===n&&F(e.stage,i)&&(!a||a.indexOf(e.stage.name)>=0)),l=i[n.sort.radius];if(!c.length||!(l>0))continue;let u=o?L(n,l):0,d=o?R(u):0;if(n.lastRadius=l,n.lastSlices=d,n.lastStages=c.length,d){e=z(e,n,c,d,o,s,r),O=e,k=0;continue}e!==O&&(O=e,k=0);let f=u*c.length;o&&k>0&&k+f>D*u_&&(e=o(),O=e,k=0),k+=f;let p=n.sort.kernels,m=n.groups;N(e,p.BIN,m.BIN[r],M,s),N(e,p.SCAN_BLOCKS,m.SCAN_BLOCKS,[t.blocks,1]),N(e,p.SCAN_TOP,m.SCAN_TOP,[1,1]),N(e,p.PLACE,m.PLACE,M),N(e,p.ARGS_RANK,m.ARGS_RANK,[1,1]),P(e,p.RANK,m.RANK,n.args,Z.RANK_X),N(e,p.ORDER,m.ORDER[r],M),N(e,p.ARGS,m.ARGS,[1,1]);for(let t of c)P(e,t.stage.kernels.EVAL,t.EVAL,n.args,Z.EVAL_X,s),N(e,t.stage.kernels.GATHER,t.GATHER,M)}return e},observe(e){p.forEach(t=>{let n=e[4+t.sort.index];n>0&&t.lastRadius>0&&(t.known={chunks:n*a,radius:t.lastRadius})})},observeTime(e){let n=0,r=0;p.forEach(e=>{e.known&&e.lastRadius>0&&(n+=e.known.chunks/a*(e.lastStages||1),r+=e.lastStages||1)}),!(!(n>0&&e>0)||n<c_*t.n*r)&&(D=Math.min(s_,n/e),A())},cappedMs(){return T/D},slices(){return p.map(e=>e.lastSlices)},setCap(e){E=Math.max(1,Math.min(t.capChunks,Math.floor(e/256))),A()},statusMessage(e){return Em(t,e)},lastChunks(e){return t.sorts.map(t=>e[4+t.index])},buffers:{status:f,sorts:p,partials:m},destroy(){u.forEach(e=>e.destroy())}}}var p_=1024,m_=100,h_=4;async function g_(e,t,{buffers:n={},step:r=null,slowdown:i=1}={}){if(t.refusal)throw Error(t.refusal);if(!r&&!t.own)throw Error("buildGrid: the plan reads the caller's step values; pass `step`");let a=r&&r.dynamic?`dynamic`:`uniform`,o=Object.keys(t.kernels),s=Object.fromEntries(await Promise.all(o.map(n=>{let r=t.kernels[n],i=r.bindings.map(e=>e.kind===`step`?a:e.kind===`uniform`?`uniform`:e.kind);return Cu(e,{code:r.code,label:n,bindings:i}).then(e=>[n,e])}))),c=GPUBufferUsage.STORAGE,l=GPUBufferUsage.COPY_DST,u=GPUBufferUsage.COPY_SRC,d=[];e.pushErrorScope(`validation`),e.pushErrorScope(`out-of-memory`);let f=(t,n)=>{let r=e.createBuffer({size:t,usage:n});return d.push(r),r},p=t.buffers,m={GU:f(32,GPUBufferUsage.UNIFORM|l),gridMeta:f(p.gridMeta,c|l|u|GPUBufferUsage.INDIRECT),gridCount:f(p.gridCount,c),gridStart:f(p.gridStart,c|u),gridKey:f(p.gridKey,c|u),gridSp:f(p.gridSp,c|u),gridChunk:f(p.gridChunk,c|u|GPUBufferUsage.INDIRECT),gridAcc:f(p.gridAcc,c|u),gridField:f(p.gridField,c|u),gridLo:p.gridLo?f(p.gridLo,c|u):null};m.V=t.own?f(t.own.floats*4,GPUBufferUsage.UNIFORM|l):null,e.queue.writeBuffer(m.GU,0,new Uint32Array([t.n,t.maxCells,t.capacity,t.tableSize,0,0,0,0]));let h=new Uint32Array(Y.IND);for(let e=0;e<t.D;e++)h[Y.MIN+e]=4294967295;e.queue.writeBuffer(m.gridMeta,0,h);let g=(await Promise.all([e.popErrorScope(),e.popErrorScope()])).find(Boolean);if(g)throw d.forEach(e=>e.destroy()),Error(`could not create the grid field's buffers: `+g.message);let _=(e,t,i)=>{if(e===`V`)return m.V?{buffer:m.V}:{buffer:r.buffer,size:r.size};if(i&&e===`gridField`)return{buffer:m.gridLo};let a=m[e]||n[e];if(!a)throw Error(`buildGrid: no buffer for `+e);return{buffer:Array.isArray(a)?a[t]:a}},v=o.map(r=>{let{bindings:i}=t.kernels[r],o=i.some(e=>Array.isArray(n[e.name])),c=(t,n)=>e.createBindGroup({layout:s[r].getBindGroupLayout(0),entries:i.map((e,r)=>({binding:r,resource:_(e.name,t,n)}))}),l=o?[c(0),c(1)]:[c(0)],u=/_SMOOTH\d$/.test(r)?c(0,!0):null;return{name:r,pipeline:s[r],groups:l,lowGroup:u,dynamic:a===`dynamic`&&i.some(e=>e.kind===`step`)}}),y=Object.fromEntries(v.map(e=>[e.name,e])),b=Math.max(1,i),x=[],S=b,C=0,w=Math.ceil(t.n/256),T=t.label,E=[[`${T}_MINMAX`,[Math.min(w,p_)]],[`${T}_PARAMS`,[1]],[`${T}_BIN`,[w]],[`${T}_SCAN_BLOCKS`,Ud],[`${T}_SCAN_TOP`,[1]],[`${T}_ORDER`,[w]],[`${T}_CROWD`,`chunks`],[`${T}_DEPOSIT`,Wd]];if(t.smooth){for(let e=0;e<t.D;e++)E.push([`${T}_SMOOTH${e}`,Gd+3*e]);E.push([`${T}_RESIDUAL`,Kd]);for(let e=0;e<t.D;e++)E.push([`${T}_SMOOTH${e}`,qd+3*e,`low`])}E.push([`${T}_GATHER`,[w]]);function D(e,t,n,{stepOffset:r=0,parity:i=0}={},a=null){let o=y[t];e.setPipeline(o.pipeline),e.setBindGroup(0,a?o.lowGroup:o.groups[o.groups.length>1?i:0],o.dynamic?[r]:[]),n===`chunks`?e.dispatchWorkgroupsIndirect(m.gridChunk,0):typeof n==`number`?e.dispatchWorkgroupsIndirect(m.gridMeta,n*4):e.dispatchWorkgroups(n[0])}return{buffers:m,status:{buffer:m.gridMeta,offset:Y.STATUS*4,size:32},observe(e){C=e[4]},observeTime(e,{sliced:n=!1}={}){e>0&&C>0&&!n&&(x.push(e/tp(t,C)),x.length>h_&&x.shift(),S=Math.min(m_,Math.max(b,...x)))},cappedMs(){return ep(t)*S},setValues(n){if(!m.V)throw Error(`the grid reads its numbers from the caller's step slot`);let r=new Float32Array(t.own.floats);t.own.names.forEach((e,t)=>{let i=n[e];if(i===void 0)throw Error(`setValues: no number for `+e);r[t]=i}),e.queue.writeBuffer(m.V,0,r)},encode(e,n){if(t.n!==0)for(let[t,r,i]of E)D(e,t,r,n,i)},phases:E.map(([e,t,n])=>({name:n?e+`_LOW`:e,encode:(r,i)=>D(r,e,t,i,n)})),destroy(){d.forEach(e=>e.destroy())}}}var __={gravity:`gravity`,timeStep:`timeStep`,dragCoefficient:`dragCoefficient`,springLength:`springLength`,springCoefficient:`springCoefficient`};function v_(e,t,n,r){let i=t.slot.floats,a=Object.create(null),o=Object.create(null),s=e=>o[e]||(o[e]={name:e,params:[],builtIns:[],grid:[],gate:void 0,radius:void 0,law:null,lawAt:0,dynamic:!1});t.slot.entries.forEach(e=>{if(e.kind===`setting`)a[e.stage]=e.index;else if(e.kind===`gate`){let t=s(e.stage);t.gate=e.index,t.dynamic=!0}else if(e.kind===`radius`)s(e.stage).radius=e.index;else if(e.kind===`param`)s(e.stage).params.push(e);else if(e.kind===`grid`)s(e.stage).grid.push(e);else if(e.kind===`builtIn`){let t=s(e.stage);t.builtIns.push(e),e.name===`step`&&(t.dynamic=!0)}}),t.sections.forEach(e=>{(e.kind===`pairs`||e.kind===`tree`?e.channels:[e]).forEach(e=>{let t=e.stage;if(!o[t.name]&&!e.law)return;let n=s(t.name);t.params.some(e=>e.kind===`host`)&&(n.dynamic=!0);let r=t.args&&t.args.radius;if(n.radius!==void 0&&r&&r.kind!==`number`&&(n.dynamic=!0),e.kind===`grid`&&(n.anchor=t.args.anchor,$f(t)&&(n.dynamic=!0)),e.law){n.law=e.law,n.lawAt=e.values;let t=e.law.describe();(t.params.some(e=>e.kind===`host`)||t.range&&t.range.kind===`host`||t.builtIns.indexOf(`step`)>=0)&&(n.dynamic=!0)}})});let c=Object.values(o),l=c.some(e=>e.dynamic),u=new Float32Array(i*64);return{perStep:l,fill(t,n){let r=l?t:1;u.length<r*i&&(u=new Float32Array(r*i));for(let t=0;t<r;t++){let r=n+t,a=e.stepContext(r),o=u.subarray(t*i,(t+1)*i);t===0?d(o,a):o.set(u.subarray(0,i));for(let e of c){if(t>0&&!e.dynamic)continue;let n=f(o,e,a);if(n)return{count:t,data:u,perStep:l,halt:{message:`${n} at step ${r}`,stages:[e.name]}}}}return{count:t,data:u,perStep:l}}};function d(e,n){let i=n.settings;Object.keys(__).forEach(t=>{a[t]!==void 0&&(e[a[t]]=i[__[t]])}),a.n!==void 0&&(e[a.n]=n.store.n);for(let n=0;n<t.D;n++)e[a[`origin_`+n]]=r[n];a.maxVelocity!==void 0&&(e[a.maxVelocity]=i.maxVelocity>0?i.maxVelocity:1)}function f(i,a,o){let s=e.stageValues(a.name,o);if(a.gate!==void 0&&(i[a.gate]=+!!s.when),a.radius!==void 0){let e=y_(s.radius);if(e)return`the radius of ${a.name} is ${e}`;i[a.radius]=s.radius}for(let e of a.params){let t=s.params[e.name],r=y_(t);if(r)return`the parameter ${e.name} of ${a.name} is ${r}`;(Uu(t)||t!==0&&Math.fround(t)===0)&&n(`the parameter ${e.name} of ${a.name} is ${t}, which a 32-bit float may hold as 0`),i[e.index]=t}for(let e of a.builtIns)i[e.index]=s.builtIns[e.name];if(a.grid.length){let e=Xf(s);if(e)return`the ${e.name} of ${a.name} is ${y_(e.value)}`;let n=Qf(s,r,t.D,a.anchor);for(let e of a.grid)i[e.index]=n[e.name]}if(a.law){let e=s.lawValues||s.law.values,t=td(a.law,e);if(t)return`the law's ${t.name} of ${a.name} is ${t.problem}`;nd(a.law,e).forEach(n),$u(a.law,i,a.lawAt,e)}return null}}function y_(e){return!Number.isFinite(e)||Math.abs(e)>34028234663852886e22?`${e}, which does not fit a 32-bit float`:null}var b_=16777216,x_=1024,S_=16,C_=`@group(0) @binding(0) var<uniform> count: vec4u;
+}`;async function qg(e,{simulator:t,plan:n,fireState:r,warn:i}){let a=t.store,o=n.law,s=o?Qu(o):0,c=o?new Float32Array(s):null,l=zm(t,!0),u=l.n,[d,f,p]=await Promise.all([Rd(e,{n:u,edges:l.edges,init:l.init,mass:l.mass,law:o,variants:n.perStep}),l.permuted?Cu(e,{code:Kg,label:`UNPERMUTE`}):null,Vg(e)]);e.queue.writeBuffer(d.vel,0,l.velocity),r&&d.setFire(r);let m=null,h=null,g=[];if(f){let t=e.createBuffer({size:16,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST}),n=e.createBuffer({size:u*4,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});m=e.createBuffer({size:u*8,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC}),e.queue.writeBuffer(t,0,new Uint32Array([u,0,0,0])),e.queue.writeBuffer(n,0,l.toInternal),h=e.createBindGroup({layout:f.getBindGroupLayout(0),entries:[t,d.pos,n,m].map((e,t)=>({binding:t,resource:{buffer:e}}))}),g.push(t,n,m)}let _={};S();let v=Hg(a,u,2,l.origin,Nm(a.pos,u,2,l.origin)),y=Float64Array.from(a.velocity.subarray(0,2*u)),b=Uint8Array.from(a.pinned.subarray(0,u),e=>+!!e),x=D();return{kind:`grid`,n:u,D:2,get fence(){return[d.pos]},positionBytes:u*8,kernelStages:Nd,prepare(t,n){S();let r=D();if(t){let t=Nm(a.pos,u,2,l.origin);v.reset(t),e.queue.writeBuffer(d.pos,0,O(t,2)),e.queue.writeBuffer(d.vel,0,Bm(a,l.toInternal,new Float32Array(4*u))),y=Float64Array.from(a.velocity.subarray(0,2*u)),b=Uint8Array.from(a.pinned.subarray(0,u),e=>+!!e)}else{if(r.pos!==x.pos){let e=v.written(),t=v.uploaded(e,n);p(d.pos,0,2,e.map(e=>l.toInternal[e]),t)}(r.velocity!==x.velocity||r.pinned!==x.pinned)&&A(k())}return r.mass!==x.mass&&e.queue.writeBuffer(d.mass,0,Vm(a,l.toInternal,new Float32Array(u))),x=r,`ok`},run(e,t,r){let i=null,a;if(o){let r=n.perStep?w(e,t):C(t);if(a=r.halt,e=Math.min(e,r.count),e===0)return{ran:0,halt:a};r.perStep&&(i=(e,t,n)=>t.set(r.numbers.subarray(e*s,(e+1)*s),n))}return d.run(e,Object.assign({},r,{lawSteps:i})),{ran:e,halt:a}},copyPositions(e,t,n,r=Ug){if(f&&r>=Ug){let r=e.beginComputePass();return r.setPipeline(f),r.setBindGroup(0,h),r.dispatchWorkgroups(Math.ceil(u/256)),r.end(),e.copyBufferToBuffer(m,0,t,n,u*8),!0}return e.copyBufferToBuffer(d.pos,0,t,n,u*8),!l.permuted},readPositions(e,n,r,i){return Rm(t,l.bodies)?r?Pm(t,l.bodies,e,2,l.origin,n):Im(t,l.bodies,e,l.toInternal,l.origin,n):v.readBack(i,a.versions.pos!==x.pos,()=>{if(!r)return Im(t,l.bodies,e,l.toInternal,l.origin,n,v.mirror);let i=Pm(t,l.bodies,e,2,l.origin,n);return v.mirror.set(e.subarray(0,2*u)),i})},async readDevice(){let n=e.createBuffer({size:u*24+16,usage:GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST}),r=e.createCommandEncoder();this.copyPositions(r,n,0,Ug),r.copyBufferToBuffer(d.vel,0,n,u*8,u*16),r.copyBufferToBuffer(d.fire,0,n,u*24,16),e.queue.submit([r.finish()]);try{await n.mapAsync(GPUMapMode.READ)}catch{return n.destroy(),null}let i=new Float32Array(n.getMappedRange(0,u*8)).slice(),o=new Float32Array(n.getMappedRange(u*8,u*16)).slice(),s=Array.from(new Float32Array(n.getMappedRange(u*24,16)));return n.unmap(),n.destroy(),{positions:i,fireState:s,apply(){if(Rm(t,l.bodies))return;let e=a.versions.velocity===x.velocity?[]:k(),n=e.map(e=>[a.velocity[2*e],a.velocity[2*e+1]]);for(let e=0;e<u;e++){let t=4*l.toInternal[e];a.velocity[2*e]=o[t],a.velocity[2*e+1]=o[t+1]}e.forEach((e,t)=>{a.velocity[2*e]=n[t][0],a.velocity[2*e+1]=n[t][1]}),y=Float64Array.from(a.velocity.subarray(0,2*u))}}},destroy(){d.destroy(),g.forEach(e=>e.destroy())}};function S(){let e=t.settings;if(Wg.every(t=>_[t]===e[t]))return;let n=_.integrator===void 0,r=_.integrator===`fire`;_={},Wg.forEach(t=>{_[t]=e[t]}),d.setParams(Object.assign({},e,{maxVelocity:e.maxVelocity>0?e.maxVelocity:1})),!n&&!r&&e.integrator===`fire`&&d.resetFire()}function C(e){let t=T(e),n=E(t,e);if(n)return{count:0,halt:n};let r=new Float32Array(s);return $u(o,r,0,t),Jg(r,c)||(c=r,d.setLawValues(c)),{count:1/0}}function w(e,t){let n=new Float32Array(e*s),r=!0;for(let i=0;i<e;i++){let e=t+i,a=T(e),l=E(a,e);if(l)return{count:i,numbers:n,perStep:!0,halt:l};$u(o,n,i*s,a),r&&!Jg(n.subarray(i*s,(i+1)*s),c)&&(r=!1)}return r?{count:e,perStep:!1}:(c=n.slice((e-1)*s,e*s),d.setLawValues(c),{count:e,numbers:n,perStep:!0})}function T(e){let n=t.stageValues(Gg,t.stepContext(e));return n.lawValues||Object.assign({},n.law.values)}function E(e,t){let n=td(o,e);return n?{message:`the law's ${n.name} is ${n.problem} at step ${t}`,stages:[Gg]}:(nd(o,e).forEach(i),null)}function D(){return{pos:a.versions.pos,velocity:a.versions.velocity,mass:a.versions.mass,pinned:a.versions.pinned}}function O(e,t){if(!l.permuted)return e;let n=new Float32Array(e.length);for(let r=0;r<u;r++)for(let i=0;i<t;i++)n[l.toInternal[r]*t+i]=e[r*t+i];return n}function k(){let e=a.velocity,t=a.pinned,n=[];for(let r=0;r<u;r++)(e[2*r]!==y[2*r]||e[2*r+1]!==y[2*r+1]||+!!t[r]!==b[r])&&n.push(r);return n}function A(e){let t=new Float32Array(4*e.length),n=a.velocity,r=a.pinned;e.forEach((e,i)=>{t[4*i]=y[2*e]=n[2*e],t[4*i+1]=y[2*e+1]=n[2*e+1],t[4*i+3]=b[e]=+!!r[e]}),p(d.vel,0,4,e.map(e=>l.toInternal[e]),t)}}function Jg(e,t){if(!t||e.length!==t.length)return!1;for(let n=0;n<e.length;n++)if(!Object.is(e[n],t[n]))return!1;return!0}var Yg=20,Xg=2e9,Zg=65e6,Qg=2e8,$g=30;async function e_(e,t,{buffers:n={},step:r=null,groupLimit:i=0,workCap:a=Xg,slowdown:o=1}={}){if(t.refusal)throw Error(t.refusal);let{D:s,sizes:c,kernels:l,columns:u}=t,d=[].concat(...Object.values(u)).filter(e=>!n[e]);if(d.length)throw Error(`buildPyramid: no buffer for `+d.join(`, `));let f=Object.keys(l).map(n=>{let i={code:l[n],label:n},a=r?[r.dynamic?`dynamic`:`uniform`]:[];return n===`TREE_LOCAL`&&r&&(i.bindings=[`uniform`,`storage`,t.hubs?`storage`:`read`,`storage`,`read`].concat(a)),n===`TREE_HEAVY`&&r&&(i.bindings=[`uniform`,`read`,`read`,`storage`,`read`].concat(a)),Cu(e,i).then(e=>[n,e])}),p=Object.fromEntries(await Promise.all(f)),m=GPUBufferUsage.STORAGE,h=GPUBufferUsage.COPY_DST,g=GPUBufferUsage.COPY_SRC,_=GPUBufferUsage.UNIFORM,v=[];e.pushErrorScope(`validation`),e.pushErrorScope(`out-of-memory`);let y=(t,n=m)=>{let r=e.createBuffer({size:t,usage:n});return v.push(r),r},b=t.buffers,x=y(b.treeBox,m|h|g),S=y(b.treeCount,m|h),C=y(b.treeBlocks),w=y(b.treeWork),T=y(b.treeMeta,m|g),E=y(b.treeSp,m|g),D=y(b.treeCells,m|h|g),O=y(b.treeLists,m|g),k=(Yg+t.lawWords)*4,A=y(Math.max(64,Math.ceil(k/16)*16),_|h),j=y(16,_|h);e.queue.writeBuffer(j,0,new Uint32Array([c.nCells/1024,0,0,0]));let M=Sp(s),N=new Uint32Array(M.size);for(let e=0;e<s;e++)N[M.BB_MIN+e]=4294967295;e.queue.writeBuffer(x,0,N),t_(e,D,t);let P=new ArrayBuffer(Math.max(64,Math.ceil(k/16)*16)),F=new Uint32Array(P),I=new Float32Array(P);F[0]=c.n,F[1]=c.G,F[2]=c.levels,F[3]=c.nCells,F[4]=c.locOff,F[5]=c.metaTag,F[6]=c.metaRow,F[7]=c.metaCount,F[8]=Rp,F[9]=Math.max(1,Math.floor(c.n/1e3)),I[10]=-1,F[11]=c.pyrSize-1;let L=t.heads?c.n+c.localCells-c.nCells:c.localCells,R=Math.ceil(L/256);F[12]=R,F[13]=c.crowdOff,I[14]=a,F[15]=c.crowdList,F[16]=c.occList,F[17]=c.hubOff,F[18]=c.hubList;let z=(t,n,r=p[t])=>e.createBindGroup({layout:r.getBindGroupLayout(0),entries:n.map((e,t)=>({binding:t,resource:e.buffer?e:{buffer:e}}))}),ee=(e,t)=>u[e].map(e=>Array.isArray(n[e])?n[e][t]:n[e]),B=e=>u[e].some(e=>Array.isArray(n[e])),te=(e,t)=>B(e)?[0,1].map(n=>z(e,t(n))):z(e,t(0)),ne=r?[{buffer:r.buffer,size:r.size}]:[],re={TREE_HIST:te(`TREE_HIST`,e=>[A].concat(ee(`TREE_HIST`,e),[x])),TREE_BOX:z(`TREE_BOX`,[A,x,O]),TREE_BIN:te(`TREE_BIN`,e=>[A].concat(ee(`TREE_BIN`,e),[x,S,w])),TREE_SCAN_BLOCKS:z(`TREE_SCAN_BLOCKS`,[S,T,C,A,O]),TREE_SCAN_TOP:z(`TREE_SCAN_TOP`,[C,j]),TREE_SCAN_ADD:z(`TREE_SCAN_ADD`,[A,T,C]),TREE_PLACE:z(`TREE_PLACE`,[A,T,w]),TREE_ORDER:te(`TREE_ORDER`,e=>[A].concat(ee(`TREE_ORDER`,e),[w,T,E,O])),TREE_AGG0:z(`TREE_AGG0`,[A,E,T,D,O].concat(t.hubs?[x]:[])),TREE_LOCAL:z(`TREE_LOCAL`,[A,D,T,O,E].concat(ne))};t.heavyCells&&(re.TREE_HEAVY=z(`TREE_HEAVY`,[A,E,T,D,O].concat(ne)));let ie=Hp(c.levels,t.blockSteps).map(({from:n,steps:r})=>{let i=y(16,_|h),a=t.blockSteps?(c.G>>n)**s:(c.G>>n+1)**s;return e.queue.writeBuffer(i,0,new Uint32Array(t.blockSteps?[a,c.levelOff[n],r,c.metaCount]:[a,c.levelOff[n],c.levelOff[n+1],c.metaCount])),{count:a,group:z(`TREE_PYR`,[i,D].concat(t.layout.CNT<0?[T]:[],t.hubs?[x]:[]))}}),ae=(await Promise.all([e.popErrorScope(),e.popErrorScope()])).find(Boolean);if(ae)throw v.forEach(e=>e.destroy()),Error(`could not create the tree buffers: `+ae.message);let V=a,oe=Zg/Math.max(1,o),se=0;function ce(){let t=Math.min(a,Math.max(oe*$g,1.5*se));t!==V&&(V=t,I[14]=V,e.queue.writeBuffer(A,56,new Float32Array([V])))}let H=i||e.limits.maxComputeWorkgroupsPerDimension;function U(e){let t=Math.max(1,Math.ceil(e/256));if(t<=H)return[t,1];let n=H;return[n,Math.ceil(t/n)]}let le=U(c.n),ue=U(c.nCells),W=U((R+128+(t.hubs?32:0))*256),de=Math.min(le[0]*le[1],128),fe=0;function pe(e,t,n){e.setPipeline(p[t]),e.setBindGroup(0,Array.isArray(re[t])?re[t][fe]:re[t]),e.dispatchWorkgroups(n[0],n[1])}return{plan:t,buffers:{treeSp:E,treeMeta:T,treeCells:D,TP:A},nodeGrid:le,setValues(n,r){I[10]=n.gravity,r&&t.lawWords&&t.groups.forEach(e=>{e.law&&$u(r[e.first]||e.law,I,Yg+e.base)}),e.queue.writeBuffer(A,0,P)},encode(e,{stepOffset:n,parity:i=0}={}){fe=i,pe(e,`TREE_HIST`,[de,1]),pe(e,`TREE_BOX`,[1,1]),pe(e,`TREE_BIN`,le),pe(e,`TREE_SCAN_BLOCKS`,[c.nCells/1024,1]),pe(e,`TREE_SCAN_TOP`,[1,1]),pe(e,`TREE_SCAN_ADD`,ue),pe(e,`TREE_PLACE`,le),pe(e,`TREE_ORDER`,le),pe(e,`TREE_AGG0`,ue),e.setPipeline(p.TREE_PYR);for(let{count:t,group:n}of ie){e.setBindGroup(0,n);let r=U(t);e.dispatchWorkgroups(r[0],r[1])}let a=r&&r.dynamic?[n||0]:[];e.setPipeline(p.TREE_LOCAL),e.setBindGroup(0,re.TREE_LOCAL,a),e.dispatchWorkgroups(W[0],W[1]),t.heavyCells&&(e.setPipeline(p.TREE_HEAVY),e.setBindGroup(0,re.TREE_HEAVY,a),e.dispatchWorkgroups(t.heavyGroups))},boxBuffer:x,status:{buffer:O,offset:0,size:32},statusMessage:e=>n_(e,V,t.K),observe(e){se=e[7]*1e6},observeTime(e){!(e>0)||se<Qg||(oe=Math.min(Zg,se/e),ce())},cappedMs:()=>V/oe,destroy(){for(let e of v)e.destroy()}}}function t_(e,t,n){let r=n.layout.TAB4*4;if(!r)return;let i=new Float32Array(r);n.groups.forEach(e=>{(e.tables||[]).forEach(e=>{i.set(e.values,e.base)})}),e.queue.writeBuffer(t,0,i)}function n_(e,t=Xg,n=1){let r=e[2];if(!r)return null;let i=e=>e>=10?e.toFixed(0):e>=1?e.toFixed(1):e.toFixed(2),a=e[3]/1e3,o=hp(n);return`the tree pass: a grid cell holds ${r.toLocaleString(`en-US`)} bodies, and the crowded cells need about ${i(a)} billion pair evaluations a step`+(n>1?` with ${n} charges (the work of ${i(a*o)} billion with one)`:``)+`, more than the GPU takes (${i(t/1e9)} billion); the layout is piled too densely in one place for the grid`}var r_=1073741823;function i_(e,t,n,r,i){let a=i-1,o=1/(r*em),s=new Int32Array(t*n),c=new Uint32Array(i);for(let r=0;r<t;r++){for(let t=0;t<n;t++)s[r*n+t]=Math.max(-1073741823,Math.min(r_,Math.floor(e[r*n+t]*o)));c[a_(s,r*n,n,null)&a]+=1}let l=3**n,u=new Int32Array(n),d=0;for(let e=0;e<t;e++){let t=0;for(let r=0;r<l;r++){let i=r;for(let e=0;e<n;e++)u[e]=i%3-1,i=i/3|0;t+=c[a_(s,e*n,n,u)&a]}d+=Math.ceil(t/256)}let f=0;for(let e=0;e<i;e++)c[e]>1024&&(f+=c[e]*Math.ceil(c[e]/256));return{chunks:d,ranks:f}}function a_(e,t,n,r){let i=374761393;for(let a=0;a<n;a++)i=Math.imul(i^e[t+a]+(r?r[a]:0),668265261),i^=i>>>15;return i>>>0}var o_=1.5,s_=43e6/256,c_=2,l_=25,u_=100,d_=256;async function f_(e,t,{buffers:n,step:r,positions:i=null,estimateScale:a=1}){if(t.refusal)throw Error(t.refusal);let o=Object.fromEntries(await Promise.all(Object.keys(t.kernels).map(n=>Cu(e,{code:t.kernels[n],label:n,bindings:t.bindings[n]}).then(e=>[n,e])))),s=GPUBufferUsage.STORAGE,c=GPUBufferUsage.COPY_DST,l=GPUBufferUsage.COPY_SRC,u=[];e.pushErrorScope(`validation`),e.pushErrorScope(`out-of-memory`);let d=(n,r=s)=>{let i=e.createBuffer({size:t.buffers[n],usage:r,label:n});return u.push(i),i},f=d(`pairStatus`,s|l|c),p=t.sorts.map(n=>{let r=n.index,i=e.createBuffer({size:32,usage:GPUBufferUsage.UNIFORM|c,label:`PP`+r});return u.push(i),e.queue.writeBuffer(i,0,new Uint32Array([t.n,t.size-1,t.size,t.blocks,t.capChunks,r,t.n+t.capChunks,t.n+2*t.capChunks])),{sort:n,params:i,count:d(`pairCount`+r),start:d(`pairStart`+r),body:d(`pairBody`+r),list:d(`pairList`+r),args:d(`pairArgs`+r,s|GPUBufferUsage.INDIRECT|l),snap:d(`pairSnap`+r)}}),m=t.stages.map(e=>d(`pairPartial`+e.index)),h=e.createBuffer({size:d_*65,usage:GPUBufferUsage.UNIFORM|c,label:`pairSlices`});u.push(h);let g=new Uint32Array(d_/4*65);for(let e=0;e<64;e++)g[d_/4*(e+1)+1]=e;e.queue.writeBuffer(h,0,g);let _=(await Promise.all([e.popErrorScope(),e.popErrorScope()])).find(Boolean);if(_)throw u.forEach(e=>e.destroy()),Error(`could not create the pair buffers: `+_.message);let v={buffer:r.buffer,size:r.size},y={buffer:h,size:16},b=e=>e.buffer?e:{buffer:e},x=(t,n)=>e.createBindGroup({layout:o[t].getBindGroupLayout(0),entries:n.map((e,t)=>({binding:t,resource:b(e)}))}),S=(e,t)=>e.map(e=>Array.isArray(n[e])?n[e][t]:n[e]),C=e=>Array.isArray(n.X)?n.X[e]:n.X;p.forEach(e=>{let t=e.sort.kernels;e.groups={BIN:[0,1].map(n=>x(t.BIN,[e.params,v,C(n),e.count,e.body])),SCAN_BLOCKS:x(t.SCAN_BLOCKS,[e.params,e.count,e.start]),SCAN_TOP:x(t.SCAN_TOP,[e.params,e.start]),PLACE:x(t.PLACE,[e.params,e.start,e.body,e.list,e.args]),ARGS_RANK:x(t.ARGS_RANK,[e.params,e.args,f]),RANK:x(t.RANK,[e.params,e.args,e.start,e.body,e.list]),ARGS:x(t.ARGS,[e.params,e.args,f]),ORDER:[0,1].map(n=>x(t.ORDER,[e.params,e.args,e.start,e.body,e.list,e.snap,C(n)].concat(S(e.sort.columns,n)))),PLACE_S:x(t.PLACE_S,[e.params,e.start,e.body,e.list,e.args]),ARGS_RANK_S:x(t.ARGS_RANK_S,[e.params,e.args,f,y]),RANK_OWNERS_S:x(t.RANK_OWNERS_S,[e.params,e.args,e.start,e.body,e.list,y]),RANK_S:x(t.RANK_S,[e.params,e.args,e.start,e.body,e.list,y]),ORDER_S:[0,1].map(n=>x(t.ORDER_S,[e.params,e.args,e.start,e.body,e.list,e.snap,C(n)].concat(S(e.sort.columns,n),[y]))),ARGS_S:x(t.ARGS_S,[e.params,e.args,f,y]),EVAL_OWNERS_S:x(t.EVAL_OWNERS_S,[e.params,e.args,e.body,e.list,y])},e.known=null,e.lastRadius=0,e.lastSlices=0,e.lastStages=0});let w=t.stages.map(e=>{let t=p[e.sort];return{stage:e,sort:t,EVAL:x(e.kernels.EVAL,[t.params,v,t.args,t.start,t.list,t.snap,m[e.index]].concat(e.sumBuffer?S([e.sumBuffer],0):[])),GATHER:x(e.kernels.GATHER,[t.params,t.args,t.body,m[e.index]].concat(S(e.gatherColumns,0))),EVAL_S:x(e.kernels.EVAL_S,[t.params,v,t.args,t.start,t.list,t.snap,m[e.index]].concat(e.sumBuffer?S([e.sumBuffer],0):[],[y])),GATHER_S:x(e.kernels.GATHER_S,[t.params,t.args,t.body,m[e.index]].concat(S(e.gatherColumns,0),[y]))}}),T=t.capChunks,E=t.capChunks,D=s_,O=null,k=0;function A(){let t=Math.max(1,Math.min(E,Math.floor(D*l_)));t!==T&&(T=t,p.forEach(t=>e.queue.writeBuffer(t.params,16,new Uint32Array([T]))))}let j=e.limits.maxComputeWorkgroupsPerDimension,M=(e=>{let t=Math.max(1,Math.ceil(e/256));return t<=j?[t,1]:[j,Math.ceil(t/j)]})(t.n),N=(e,t,n,r,i)=>{e.setPipeline(o[t]),i?e.setBindGroup(0,n,i):e.setBindGroup(0,n),e.dispatchWorkgroups(r[0],r[1])},P=(e,t,n,r,i,a)=>{e.setPipeline(o[t]),a?e.setBindGroup(0,n,a):e.setBindGroup(0,n),e.dispatchWorkgroupsIndirect(r,i*4)},F=(e,t)=>e.gate===void 0||t[e.gate]!==0,I=e=>d_*(e+1);function L(e,n){if(!e.known&&i){let r=i_(i,t.n,t.D,n,t.size);e.known={chunks:Math.max(r.chunks,r.ranks)*a,radius:n}}if(!e.known)return 0;let r=e.known.chunks;return n>e.known.radius&&(r*=(n/e.known.radius)**t.D),r}function R(e){let t=e*o_;return t<=T?0:Math.min(64,Math.ceil(t/T))}function z(n,r,i,a,o,s,c){let l=r.sort.kernels,u=r.groups;n=o(),e.queue.writeBuffer(h,0,new Uint32Array([a,0,0,0])),N(n,l.BIN,u.BIN[c],M,s),N(n,l.SCAN_BLOCKS,u.SCAN_BLOCKS,[t.blocks,1]),N(n,l.SCAN_TOP,u.SCAN_TOP,[1,1]),N(n,l.PLACE_S,u.PLACE_S,M),N(n,l.ARGS_RANK_S,u.ARGS_RANK_S,[1,1],[0]);for(let e=0;e<a;e++)n=o(),N(n,l.RANK_OWNERS_S,u.RANK_OWNERS_S,M,[I(e)]),P(n,l.RANK_S,u.RANK_S,r.args,Z.SLICE_RANK+3*e,[I(e)]);n=o(),N(n,l.ORDER_S,u.ORDER_S[c],M,[0]),N(n,l.ARGS_S,u.ARGS_S,[1,1],[0]);for(let e=0;e<a;e++)i.forEach((t,i)=>{n=o(),i===0&&N(n,l.EVAL_OWNERS_S,u.EVAL_OWNERS_S,M,[I(e)]),P(n,t.stage.kernels.EVAL_S,t.EVAL_S,r.args,Z.SLICE_EVAL+3*e,[s[0],I(e)]),N(n,t.stage.kernels.GATHER_S,t.GATHER_S,M,[I(e)])});return o()}return{plan:t,status:{buffer:f,bytes:t.buffers.pairStatus},encode(e,{stepOffset:n=0,parity:r=0,values:i,stages:a=null,split:o=null}){let s=[n];for(let n of p){let c=w.filter(e=>e.sort===n&&F(e.stage,i)&&(!a||a.indexOf(e.stage.name)>=0)),l=i[n.sort.radius];if(!c.length||!(l>0))continue;let u=o?L(n,l):0,d=o?R(u):0;if(n.lastRadius=l,n.lastSlices=d,n.lastStages=c.length,d){e=z(e,n,c,d,o,s,r),O=e,k=0;continue}e!==O&&(O=e,k=0);let f=u*c.length;o&&k>0&&k+f>D*u_&&(e=o(),O=e,k=0),k+=f;let p=n.sort.kernels,m=n.groups;N(e,p.BIN,m.BIN[r],M,s),N(e,p.SCAN_BLOCKS,m.SCAN_BLOCKS,[t.blocks,1]),N(e,p.SCAN_TOP,m.SCAN_TOP,[1,1]),N(e,p.PLACE,m.PLACE,M),N(e,p.ARGS_RANK,m.ARGS_RANK,[1,1]),P(e,p.RANK,m.RANK,n.args,Z.RANK_X),N(e,p.ORDER,m.ORDER[r],M),N(e,p.ARGS,m.ARGS,[1,1]);for(let t of c)P(e,t.stage.kernels.EVAL,t.EVAL,n.args,Z.EVAL_X,s),N(e,t.stage.kernels.GATHER,t.GATHER,M)}return e},observe(e){p.forEach(t=>{let n=e[4+t.sort.index];n>0&&t.lastRadius>0&&(t.known={chunks:n*a,radius:t.lastRadius})})},observeTime(e){let n=0,r=0;p.forEach(e=>{e.known&&e.lastRadius>0&&(n+=e.known.chunks/a*(e.lastStages||1),r+=e.lastStages||1)}),!(!(n>0&&e>0)||n<c_*t.n*r)&&(D=Math.min(s_,n/e),A())},cappedMs(){return T/D},slices(){return p.map(e=>e.lastSlices)},setCap(e){E=Math.max(1,Math.min(t.capChunks,Math.floor(e/256))),A()},statusMessage(e){return Em(t,e)},lastChunks(e){return t.sorts.map(t=>e[4+t.index])},buffers:{status:f,sorts:p,partials:m},destroy(){u.forEach(e=>e.destroy())}}}var p_=1024,m_=100,h_=4;async function g_(e,t,{buffers:n={},step:r=null,slowdown:i=1}={}){if(t.refusal)throw Error(t.refusal);if(!r&&!t.own)throw Error("buildGrid: the plan reads the caller's step values; pass `step`");let a=r&&r.dynamic?`dynamic`:`uniform`,o=Object.keys(t.kernels),s=Object.fromEntries(await Promise.all(o.map(n=>{let r=t.kernels[n],i=r.bindings.map(e=>e.kind===`step`?a:e.kind===`uniform`?`uniform`:e.kind);return Cu(e,{code:r.code,label:n,bindings:i}).then(e=>[n,e])}))),c=GPUBufferUsage.STORAGE,l=GPUBufferUsage.COPY_DST,u=GPUBufferUsage.COPY_SRC,d=[];e.pushErrorScope(`validation`),e.pushErrorScope(`out-of-memory`);let f=(t,n)=>{let r=e.createBuffer({size:t,usage:n});return d.push(r),r},p=t.buffers,m={GU:f(32,GPUBufferUsage.UNIFORM|l),gridMeta:f(p.gridMeta,c|l|u|GPUBufferUsage.INDIRECT),gridCount:f(p.gridCount,c),gridStart:f(p.gridStart,c|u),gridKey:f(p.gridKey,c|u),gridSp:f(p.gridSp,c|u),gridChunk:f(p.gridChunk,c|u|GPUBufferUsage.INDIRECT),gridAcc:f(p.gridAcc,c|u),gridField:f(p.gridField,c|u),gridLo:p.gridLo?f(p.gridLo,c|u):null};m.V=t.own?f(t.own.floats*4,GPUBufferUsage.UNIFORM|l):null,e.queue.writeBuffer(m.GU,0,new Uint32Array([t.n,t.maxCells,t.capacity,t.tableSize,0,0,0,0]));let h=new Uint32Array(Y.IND);for(let e=0;e<t.D;e++)h[Y.MIN+e]=4294967295;e.queue.writeBuffer(m.gridMeta,0,h);let g=(await Promise.all([e.popErrorScope(),e.popErrorScope()])).find(Boolean);if(g)throw d.forEach(e=>e.destroy()),Error(`could not create the grid field's buffers: `+g.message);let _=(e,t,i)=>{if(e===`V`)return m.V?{buffer:m.V}:{buffer:r.buffer,size:r.size};if(i&&e===`gridField`)return{buffer:m.gridLo};let a=m[e]||n[e];if(!a)throw Error(`buildGrid: no buffer for `+e);return{buffer:Array.isArray(a)?a[t]:a}},v=o.map(r=>{let{bindings:i}=t.kernels[r],o=i.some(e=>Array.isArray(n[e.name])),c=(t,n)=>e.createBindGroup({layout:s[r].getBindGroupLayout(0),entries:i.map((e,r)=>({binding:r,resource:_(e.name,t,n)}))}),l=o?[c(0),c(1)]:[c(0)],u=/_SMOOTH\d$/.test(r)?c(0,!0):null;return{name:r,pipeline:s[r],groups:l,lowGroup:u,dynamic:a===`dynamic`&&i.some(e=>e.kind===`step`)}}),y=Object.fromEntries(v.map(e=>[e.name,e])),b=Math.max(1,i),x=[],S=b,C=0,w=Math.ceil(t.n/256),T=t.label,E=[[`${T}_MINMAX`,[Math.min(w,p_)]],[`${T}_PARAMS`,[1]],[`${T}_BIN`,[w]],[`${T}_SCAN_BLOCKS`,Ud],[`${T}_SCAN_TOP`,[1]],[`${T}_ORDER`,[w]],[`${T}_CROWD`,`chunks`],[`${T}_DEPOSIT`,Wd]];if(t.smooth){for(let e=0;e<t.D;e++)E.push([`${T}_SMOOTH${e}`,Gd+3*e]);E.push([`${T}_RESIDUAL`,Kd]);for(let e=0;e<t.D;e++)E.push([`${T}_SMOOTH${e}`,qd+3*e,`low`])}E.push([`${T}_GATHER`,[w]]);function D(e,t,n,{stepOffset:r=0,parity:i=0}={},a=null){let o=y[t];e.setPipeline(o.pipeline),e.setBindGroup(0,a?o.lowGroup:o.groups[o.groups.length>1?i:0],o.dynamic?[r]:[]),n===`chunks`?e.dispatchWorkgroupsIndirect(m.gridChunk,0):typeof n==`number`?e.dispatchWorkgroupsIndirect(m.gridMeta,n*4):e.dispatchWorkgroups(n[0])}return{buffers:m,status:{buffer:m.gridMeta,offset:Y.STATUS*4,size:32},observe(e){C=e[4]},observeTime(e,{sliced:n=!1}={}){e>0&&C>0&&!n&&(x.push(e/tp(t,C)),x.length>h_&&x.shift(),S=Math.min(m_,Math.max(b,...x)))},cappedMs(){return ep(t)*S},setValues(n){if(!m.V)throw Error(`the grid reads its numbers from the caller's step slot`);let r=new Float32Array(t.own.floats);t.own.names.forEach((e,t)=>{let i=n[e];if(i===void 0)throw Error(`setValues: no number for `+e);r[t]=i}),e.queue.writeBuffer(m.V,0,r)},encode(e,n){if(t.n!==0)for(let[t,r,i]of E)D(e,t,r,n,i)},phases:E.map(([e,t,n])=>({name:n?e+`_LOW`:e,encode:(r,i)=>D(r,e,t,i,n)})),destroy(){d.forEach(e=>e.destroy())}}}var __={gravity:`gravity`,timeStep:`timeStep`,dragCoefficient:`dragCoefficient`,springLength:`springLength`,springCoefficient:`springCoefficient`};function v_(e,t,n,r){let i=t.slot.floats,a=Object.create(null),o=Object.create(null),s=e=>o[e]||(o[e]={name:e,params:[],builtIns:[],grid:[],gate:void 0,radius:void 0,law:null,lawAt:0,dynamic:!1});t.slot.entries.forEach(e=>{if(e.kind===`setting`)a[e.stage]=e.index;else if(e.kind===`gate`){let t=s(e.stage);t.gate=e.index,t.dynamic=!0}else if(e.kind===`radius`)s(e.stage).radius=e.index;else if(e.kind===`param`)s(e.stage).params.push(e);else if(e.kind===`grid`)s(e.stage).grid.push(e);else if(e.kind===`builtIn`){let t=s(e.stage);t.builtIns.push(e),e.name===`step`&&(t.dynamic=!0)}}),t.sections.forEach(e=>{(e.kind===`pairs`||e.kind===`tree`?e.channels:[e]).forEach(e=>{let t=e.stage;if(!o[t.name]&&!e.law)return;let n=s(t.name);t.params.some(e=>e.kind===`host`)&&(n.dynamic=!0);let r=t.args&&t.args.radius;if(n.radius!==void 0&&r&&r.kind!==`number`&&(n.dynamic=!0),e.kind===`grid`&&(n.anchor=t.args.anchor,$f(t)&&(n.dynamic=!0)),e.law){n.law=e.law,n.lawAt=e.values;let t=e.law.describe();(t.params.some(e=>e.kind===`host`)||t.range&&t.range.kind===`host`||t.builtIns.indexOf(`step`)>=0)&&(n.dynamic=!0)}})});let c=Object.values(o),l=c.some(e=>e.dynamic),u=new Float32Array(i*64);return{perStep:l,fill(t,n){let r=l?t:1;u.length<r*i&&(u=new Float32Array(r*i));for(let t=0;t<r;t++){let r=n+t,a=e.stepContext(r),o=u.subarray(t*i,(t+1)*i);t===0?d(o,a):o.set(u.subarray(0,i));for(let e of c){if(t>0&&!e.dynamic)continue;let n=f(o,e,a);if(n)return{count:t,data:u,perStep:l,halt:{message:`${n} at step ${r}`,stages:[e.name]}}}}return{count:t,data:u,perStep:l}}};function d(e,n){let i=n.settings;Object.keys(__).forEach(t=>{a[t]!==void 0&&(e[a[t]]=i[__[t]])}),a.n!==void 0&&(e[a.n]=n.store.n);for(let n=0;n<t.D;n++)e[a[`origin_`+n]]=r[n];a.maxVelocity!==void 0&&(e[a.maxVelocity]=i.maxVelocity>0?i.maxVelocity:1)}function f(i,a,o){let s=e.stageValues(a.name,o);if(a.gate!==void 0&&(i[a.gate]=+!!s.when),a.radius!==void 0){let e=y_(s.radius);if(e)return`the radius of ${a.name} is ${e}`;i[a.radius]=s.radius}for(let e of a.params){let t=s.params[e.name],r=y_(t);if(r)return`the parameter ${e.name} of ${a.name} is ${r}`;(Uu(t)||t!==0&&Math.fround(t)===0)&&n(`the parameter ${e.name} of ${a.name} is ${t}, which a 32-bit float may hold as 0`),i[e.index]=t}for(let e of a.builtIns)i[e.index]=s.builtIns[e.name];if(a.grid.length){let e=Xf(s);if(e)return`the ${e.name} of ${a.name} is ${y_(e.value)}`;let n=Qf(s,r,t.D,a.anchor);for(let e of a.grid)i[e.index]=n[e.name]}if(a.law){let e=s.lawValues||s.law.values,t=td(a.law,e);if(t)return`the law's ${t.name} of ${a.name} is ${t.problem}`;nd(a.law,e).forEach(n),$u(a.law,i,a.lawAt,e)}return null}}function y_(e){return!Number.isFinite(e)||Math.abs(e)>34028234663852886e22?`${e}, which does not fit a 32-bit float`:null}var b_=16777216,x_=1024,S_=16,C_=`@group(0) @binding(0) var<uniform> count: vec4u;
 @group(0) @binding(1) var<storage, read> pos: array<f32>;
 @group(0) @binding(2) var<storage, read> toDevice: array<u32>;
 @group(0) @binding(3) var<storage, read_write> out: array<f32>;
