@@ -24,14 +24,18 @@ const AX = 'xyzw';
 
 /**
  * Cells per axis for n bodies in D dimensions. 2D: today's grid (templates/grid.js), G^2 >= n / 2
- * from 32 to 1,024. 3D: the smallest G with G^3 >= max(1,024, 2n), at most 2^20 cells. (Round 3
- * had G^3 >= n / 2: on hub graphs that put most bodies of megaStars in 30 crowded cells.)
+ * from 32 to 1,024, twice as fine up to 8,192 bodies: real graphs pile their leaves around hubs
+ * and in clusters, and at today's grid their near cells held 30 to 150 bodies (megaStars took 1.27
+ * times today's template, npmMix4 1.48, yeast 1.12; twice as fine, 0.69 to 0.83). Above that the
+ * cells' own work grows past what it saves on a uniform layout (100k: 1.17 times). 3D: the smallest
+ * G with G^3 >= max(1,024, 2n), at most 2^20 cells. (Round 3 had G^3 >= n / 2: on hub graphs that
+ * put most bodies of megaStars in 30 crowded cells.)
  */
 export function chooseGrid(n, D) {
   if (D === 2) {
     let G = 32;
     while (G * G * 2 < n && G < 1024) G *= 2;
-    return G;
+    return G <= 64 ? 2 * G : G;
   }
   let G = 2;
   while ((G ** D < 1024 || G ** D < 2 * n) && (2 * G) ** D <= (1 << 20)) G *= 2;
