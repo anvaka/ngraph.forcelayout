@@ -106,11 +106,11 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     TREE_HIST: both('TREE_HIST', p => [TP].concat(cols('TREE_HIST', p), [treeBox])),
     TREE_BOX: bind('TREE_BOX', [TP, treeBox, treeLists]),
     TREE_BIN: both('TREE_BIN', p => [TP].concat(cols('TREE_BIN', p), [treeBox, treeCount, treeWork])),
-    TREE_SCAN_BLOCKS: bind('TREE_SCAN_BLOCKS', [treeCount, treeMeta, treeBlocks]),
+    TREE_SCAN_BLOCKS: bind('TREE_SCAN_BLOCKS', [treeCount, treeMeta, treeBlocks, TP, treeLists]),
     TREE_SCAN_TOP: bind('TREE_SCAN_TOP', [treeBlocks, nbU]),
     TREE_SCAN_ADD: bind('TREE_SCAN_ADD', [TP, treeMeta, treeBlocks]),
     TREE_PLACE: bind('TREE_PLACE', [TP, treeMeta, treeWork]),
-    TREE_ORDER: both('TREE_ORDER', p => [TP].concat(cols('TREE_ORDER', p), [treeWork, treeMeta, treeSp])),
+    TREE_ORDER: both('TREE_ORDER', p => [TP].concat(cols('TREE_ORDER', p), [treeWork, treeMeta, treeSp, treeLists])),
     TREE_AGG0: bind('TREE_AGG0', [TP, treeSp, treeMeta, treeCells, treeLists].concat(plan.hubs ? [treeBox] : [])),
     TREE_LOCAL: bind('TREE_LOCAL', [TP, treeCells, treeMeta, treeLists, treeSp].concat(stepEntry)),
   };
