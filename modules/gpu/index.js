@@ -25,9 +25,9 @@ export { gpuCapabilities, SPEC_LIMITS } from './check.js';
 export async function createWebGPUBackend(options = {}) {
   const device = options.device || await requestDevice(LIMIT_NAMES);
   if (!device) return null;
-  watchDevice(device);
+  const state = watchDevice(device);
   const limits = {};
   for (const name of LIMIT_NAMES) limits[name] = device.limits[name];
   // `generic: true` runs the stock step with the generic engine too (tests compare the two)
-  return Object.assign(createCapabilities(limits, { generic: !!options.generic }), { device });
+  return Object.assign(createCapabilities(limits, { generic: !!options.generic, lost: () => !!state.lost }), { device });
 }

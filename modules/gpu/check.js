@@ -41,6 +41,9 @@ export const SPEC_LIMITS = Object.freeze({
   maxDynamicUniformBuffersPerPipelineLayout: 8,
 });
 
+// What plan() says once the backend's device is gone (a lost device never comes back)
+export const DEVICE_LOST = 'the WebGPU device was lost; create a new backend';
+
 // Kernels run 256 threads per workgroup, one body per thread
 const THREADS = 256;
 const PHYSICS_SETTINGS = ['timeStep', 'springLength', 'springCoefficient', 'dragCoefficient', 'gravity', 'maxVelocity'];
@@ -56,7 +59,8 @@ export function gpuCapabilities(limits, options) {
 }
 
 /**
- * The backend object for `limits`: {name, limits, check, checkProgram, lower}.
+ * The backend object for `limits`: {name, limits, check, checkProgram, lower}. `options.lost()`
+ * tells when the device of the backend is lost: nothing runs on it then.
  */
 export function createCapabilities(limits, options = {}) {
   // plan() asks checkProgram() and then check() for every stage of the same program object
@@ -66,6 +70,9 @@ export function createCapabilities(limits, options = {}) {
     if (!lowering) {
       lowering = lower(program, simulator, limits, options);
       lowered.set(program, lowering);
+    }
+    if (options.lost && options.lost()) {
+      return Object.assign({}, lowering, { runs: false, reasons: [DEVICE_LOST].concat(lowering.reasons), plan: null });
     }
     return lowering;
   };

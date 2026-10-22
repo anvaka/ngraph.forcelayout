@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { gpuCapabilities, SPEC_LIMITS } from '../index.js';
-import { lower } from '../check.js';
+import { lower, createCapabilities, DEVICE_LOST } from '../check.js';
 import { GUARD } from '../program.js';
 
 const require = createRequire(import.meta.url);
@@ -190,4 +190,16 @@ test('plan() and the runner use the same lowering', () => {
   const refused = backend.lower(layout.simulator.program(), layout.simulator);
   assert.equal(refused.plan, null);
   assert.equal(refused.runs, false);
+});
+
+test('a backend whose device was lost runs nothing, and says so', () => {
+  let lost = false;
+  const backend = createCapabilities(SPEC_LIMITS, { lost: () => lost });
+  const layout = layoutOf(300);
+  assert.ok(layout.simulator.plan(backend).runs);
+  lost = true;
+  const plan = layout.simulator.plan(backend);
+  assert.equal(plan.runs, false);
+  assert.deepEqual(plan.reasons, [DEVICE_LOST]);
+  assert.equal(backend.lower(layout.simulator.program(), layout.simulator).plan, null);
 });

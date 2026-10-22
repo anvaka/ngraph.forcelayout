@@ -50,6 +50,8 @@ export function isStockStep(program, laws) {
   if (program.dims !== 2) return false;
   const stages = physicsStages(program);
   if (stages.map(stage => stage.builtIn).join() !== STOCK_STAGES.join()) return false;
+  // the template has no gates
+  if (stages.some(stage => stage.when)) return false;
   const repulsion = stages[1].args.channels[0];
   if (repulsion.charge !== 'mass' || repulsion.sensitivity !== 'mass') return false;
   if (stages[4].args.inertia !== 'mass') return false;
