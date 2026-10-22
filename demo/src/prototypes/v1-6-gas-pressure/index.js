@@ -26,7 +26,7 @@
 //
 // Cost per step: 9 weighted deposits and 9 reads per body, O(n) whatever the crowding, plus a
 // pass over the grid's cells.
-import addGridField from 'ngraph.forcelayout.gridfield';
+import addGridField from '../../../../modules/gridfield/index.js';
 
 export default {
   id: 'v1-6-gas-pressure',

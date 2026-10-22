@@ -8,7 +8,7 @@
 //
 // The grid, the deposit, the smoothing and the slope at each node are a grid field (see
 // modules/gridfield); the push is a formula that reads the slope.
-import addGridField from 'ngraph.forcelayout.gridfield';
+import addGridField from '../../../../modules/gridfield/index.js';
 
 // Values tuned in the lab with springLength 10 and springCoefficient 0.8 (the demo's defaults).
 // The pressure strength is rescaled for other spring settings, so the look stays similar.
