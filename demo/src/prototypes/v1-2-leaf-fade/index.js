@@ -1,8 +1,8 @@
-import createLeafFadeTree from './createLeafFadeTree.js';
+import addLeafFade from './leafFade.js';
 
-// Replaces the layout's repulsion stage with one where pushes that involve a leaf fade with
-// distance. Springs, drag and the integrator stay as they are; the Repulsion (nbody) setting
-// is ignored, since this uses its own quad tree.
+// Makes the pushes that involve a leaf fade with distance (see leafFade.js). Springs, drag and the
+// integrator stay as they are; the pushes always walk one quad tree, whichever Repulsion (nbody)
+// setting is picked.
 export default {
   id: 'v1-2-leaf-fade',
   title: 'Only leaf pushes fade',
@@ -20,9 +20,9 @@ main branches (paTree3k); grid20 has no leaves and looks the same.</p>
 closer and overlap. On EVA, a piece of two linked nodes counts as two leaves, so it loses all
 long-range push and mixes into the main part, which is much of why EVA fills the screen
 better.</p>
-<p>2D only (it does nothing in 3D), and it ignores the Repulsion setting, since it uses its own
-quad tree. A step takes about 1.2 to 1.7 times as long as the stock quad tree, and 9 to 14 times
-as long as the dual tree.</p>`,
+<p>2D only (it does nothing in 3D). Its pushes always walk one quad tree, whichever Repulsion
+setting is picked: a step takes about 1.35 to 1.55 times as long as the stock quad tree, and about 8
+times as long as the dual tree.</p>`,
   tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: EVA', 'Benchmark: paTree3k', 'Benchmark: grid20'],
   params: [
     {
@@ -40,38 +40,10 @@ as long as the dual tree.</p>`,
     const simulator = layout.simulator;
     if (!simulator.getStage('repulsion')) return null;
 
-    const tree = createLeafFadeTree();
-    const random = simulator.random;
-    const out = new Float64Array(2);
     const fadeLength = numberOr(params.fade, 3, 0);         // 0: leaves don't push at all
     const leafLinks = numberOr(params.leafLinks, 1, 0);     // 0: nothing fades
-    let isLeaf = new Uint8Array(0);
-
-    // Swap the repulsion in place: the drag stage and springs still run after it
-    simulator.replaceStage('repulsion', leafFadeRepulsion);
-    return {};
-
-    function leafFadeRepulsion(store) {
-      const n = store.n;
-      if (n === 0) return;
-      const s = simulator.settings;
-      // A body is a leaf when it has 1..leafLinks springs
-      if (isLeaf.length < n) isLeaf = new Uint8Array(store.capacity);
-      const degree = store.degree;
-      for (let i = 0; i < n; ++i) isLeaf[i] = degree[i] >= 1 && degree[i] <= leafLinks ? 1 : 0;
-      tree.build(store, isLeaf);
-      // A spring length of 0 or less (e.g. while typing in the panel) gives no reach at all
-      const fade = s.springLength > 0 ? fadeLength * s.springLength : 0;
-      const cutoff = 6 * fade; // exp(-6) is 0.25%: farther faded pushes are dropped
-      const force = store.force, pinned = store.pinned;
-      for (let i = 0; i < n; ++i) {
-        if (pinned[i]) continue;
-        out[0] = 0; out[1] = 0;
-        tree.force(i, s.gravity, s.theta, fade, cutoff, random, out);
-        force[2 * i] += out[0];
-        force[2 * i + 1] += out[1];
-      }
-    }
+    const remove = addLeafFade(layout, { fadeLength, leafLinks });
+    return { dispose: remove };
   },
 };
 
