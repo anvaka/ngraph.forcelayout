@@ -1,17 +1,111 @@
-// Numbers between the simulator's store (f64, by row) and the device (f32, in the module's own
-// order). Positions go up relative to an f64 origin near the middle of the drawing, so f32 keeps
-// its precision wherever the layout sits; large graphs are renumbered along a Hilbert curve, so
-// bodies close in space are close in memory. Both stay inside the module: the store keeps its
-// rows and f64 positions.
+// Numbers between the simulator's store (f64, by row) and the device (f32). Positions go up
+// relative to an f64 origin, so f32 keeps its precision wherever the layout sits: the origin is
+// 0 on an axis where the drawing sits around 0 (then readbacks are a plain copy), else the
+// drawing's middle. The stock grid template also renumbers large graphs along a Hilbert curve,
+// so bodies close in space are close in memory; readbacks undo that on the GPU, so positions
+// always come back in the store's order.
 
-// Graphs at least this large are renumbered along a Hilbert curve
+// Graphs at least this large are renumbered along a Hilbert curve (stock template)
 const HILBERT_MIN_NODES = 4096;
+// Movement is measured on about this many bodies of a large graph
+const MOVEMENT_SAMPLE = 65536;
 
 /**
- * The stock templates' data from the store of `simulator` (2D): {n, edges, init, mass, velocity,
- * toInternal, bodies, origin}. `velocity` holds (vx, vy, 0, pinned) per body, as the templates
- * keep it. `bodies` is the simulator's bodies at this moment, by row, so that readbacks still find
- * them after rows move. With `hilbert`, rows are renumbered along a Hilbert curve.
+ * The origin of positions on the device: per axis 0 when the drawing's middle is no farther from
+ * 0 than its spread (f32 then loses at most a bit), else the middle.
+ */
+export function chooseOrigin(pos, n, D) {
+  const origin = new Float64Array(D);
+  if (!n) return origin;
+  const stride = Math.max(1, Math.floor(n / 4096));
+  for (let k = 0; k < D; k++) {
+    const sample = [];
+    for (let i = 0; i < n; i += stride) sample.push(pos[i * D + k]);
+    sample.sort((a, b) => a - b);
+    const q = t => sample[Math.min(sample.length - 1, Math.max(0, Math.round(t * (sample.length - 1))))];
+    const middle = q(0.5), spread = q(0.999) - q(0.001);
+    origin[k] = Math.abs(middle) <= Math.max(spread, 1e-3) ? 0 : middle;
+  }
+  return origin;
+}
+
+/**
+ * Positions of the first n rows of the store, relative to `origin`, as f32.
+ */
+export function relativePositions(pos, n, D, origin) {
+  const out = new Float32Array(n * D);
+  for (let i = 0, at = 0; i < n; i++) for (let k = 0; k < D; k++, at++) out[at] = pos[at] - origin[k];
+  return out;
+}
+
+/**
+ * Positions read from the device (f32, relative to `origin`, in the store's order) into the store
+ * as f64. Returns the CPU integrator's measure of movement per step (the squared sum over axes of
+ * the summed |dx|, over the bodies), measured on a sample of a large graph. When graph edits
+ * moved rows since `bodies` (the simulator's bodies when the data was read), bodies get their
+ * positions wherever they are now, and bodies that left are skipped.
+ */
+export function writePositionsBack(simulator, bodies, data, D, origin, steps) {
+  const store = simulator.store, n = bodies.length;
+  if (!n) return 0;
+  if (rowsMoved(simulator, bodies)) {
+    for (let i = 0; i < n; i++) {
+      const body = bodies[i];
+      if (body.store !== store) continue;
+      for (let k = 0; k < D; k++) store.pos[body.index * D + k] = origin[k] + data[i * D + k];
+    }
+    return 0;
+  }
+  const pos = store.pos;
+  const stride = Math.max(1, Math.floor(n / MOVEMENT_SAMPLE));
+  const sums = new Float64Array(D);
+  for (let i = 0; i < n; i += stride) {
+    for (let k = 0; k < D; k++) sums[k] += Math.abs(origin[k] + data[i * D + k] - pos[i * D + k]);
+  }
+  if (origin.every(x => x === 0)) pos.set(data.subarray(0, n * D));
+  else for (let i = 0, at = 0; i < n; i++) for (let k = 0; k < D; k++, at++) pos[at] = origin[k] + data[at];
+  let total = 0;
+  for (let k = 0; k < D; k++) { const t = sums[k] * stride / steps; total += t * t; }
+  return total / n;
+}
+
+/**
+ * The same for positions in another order: row i's are at toInternal[i] of `data`.
+ */
+export function writePermutedBack(simulator, bodies, data, toInternal, origin, steps) {
+  const store = simulator.store, n = bodies.length;
+  if (!n) return 0;
+  const moved = rowsMoved(simulator, bodies);
+  const pos = store.pos, ox = origin[0], oy = origin[1];
+  let tx = 0, ty = 0;
+  for (let i = 0; i < n; i++) {
+    const k = 2 * toInternal[i];
+    const x = ox + data[k], y = oy + data[k + 1];
+    if (moved) {
+      const body = bodies[i];
+      if (body.store === store) { pos[2 * body.index] = x; pos[2 * body.index + 1] = y; }
+      continue;
+    }
+    tx += Math.abs(x - pos[2 * i]); ty += Math.abs(y - pos[2 * i + 1]);
+    pos[2 * i] = x; pos[2 * i + 1] = y;
+  }
+  tx /= steps; ty /= steps;
+  return moved ? 0 : (tx * tx + ty * ty) / n;
+}
+
+/**
+ * True when graph edits moved the rows of `bodies` (rows of removed bodies were dropped since).
+ */
+export function rowsMoved(simulator, bodies) {
+  const store = simulator.store, n = bodies.length, last = bodies[n - 1];
+  return !(n === 0 || (store.n >= n && last.store === store && last.index === n - 1));
+}
+
+/**
+ * The stock template's data from the store of `simulator` (2D): {n, edges, init, mass, velocity,
+ * toInternal, bodies, origin}. `velocity` holds (vx, vy, 0, pinned) per body, as the template keeps
+ * it, in its order; `init` the positions relative to `origin`, in its order. With `hilbert`, rows
+ * are renumbered along a Hilbert curve.
  */
 export function readLayout(simulator, hilbert) {
   const store = simulator.store, springs = simulator.springStore;
@@ -21,13 +115,13 @@ export function readLayout(simulator, hilbert) {
   // Bodies on exactly the same spot would stay in one grid cell: repeats move onto a small spiral
   separateCoincident(xs, ys);
   const robust = robustCenter(xs, ys);
-  const origin = { x: robust.x, y: robust.y };
+  const origin = chooseOrigin(pos, n, 2);
   const toInternal = hilbert && n >= HILBERT_MIN_NODES ? hilbertOrder(xs, ys, robust) : identity(n);
 
   const init = new Float32Array(2 * n), mass = new Float32Array(n), velocity = new Float32Array(4 * n);
   for (let i = 0; i < n; i++) {
     const k = toInternal[i];
-    init[2 * k] = xs[i] - origin.x; init[2 * k + 1] = ys[i] - origin.y;
+    init[2 * k] = xs[i] - origin[0]; init[2 * k + 1] = ys[i] - origin[1];
     mass[k] = store.mass[i];
   }
   writeVelocities(store, toInternal, velocity);
@@ -38,11 +132,11 @@ export function readLayout(simulator, hilbert) {
   for (let s = 0; s < springs.n; s++) {
     if (from[s] !== to[s]) list.push(toInternal[from[s]], toInternal[to[s]]);
   }
-  return { n, edges: Uint32Array.from(list), init, mass, velocity, toInternal, bodies: simulator.bodies.slice(), origin };
+  return { n, edges: Uint32Array.from(list), init, mass, velocity, toInternal, permuted: n >= HILBERT_MIN_NODES && hilbert, bodies: simulator.bodies.slice(), origin };
 }
 
 /**
- * (vx, vy, 0, pinned) per body, in internal order, from the store.
+ * (vx, vy, 0, pinned) per body, in the template's order, from the store.
  */
 export function writeVelocities(store, toInternal, out) {
   const v = store.velocity, pinned = store.pinned;
@@ -54,81 +148,12 @@ export function writeVelocities(store, toInternal, out) {
 }
 
 /**
- * Positions of the store, relative to the origin, in internal order.
+ * Masses of the store in the template's order.
  */
-export function writePositions(store, layout, out) {
-  const pos = store.pos, { toInternal, origin } = layout;
-  for (let i = 0, n = toInternal.length; i < n; i++) {
-    const k = 2 * toInternal[i];
-    out[k] = pos[2 * i] - origin.x; out[k + 1] = pos[2 * i + 1] - origin.y;
-  }
-  return out;
-}
-
-/**
- * Masses of the store in internal order.
- */
-export function writeMasses(store, layout, out) {
-  const mass = store.mass, toInternal = layout.toInternal;
+export function writeMasses(store, toInternal, out) {
+  const mass = store.mass;
   for (let i = 0, n = toInternal.length; i < n; i++) out[toInternal[i]] = mass[i];
   return out;
-}
-
-/**
- * Copies positions read from the device (internal order, relative to the origin) into the store
- * as f64, and returns the CPU's measure of movement over those steps (see the library's
- * integrator: the squared sum of |dx| per axis, over the bodies), per step. When rows moved since
- * the data was read (a graph edit), the bodies of that moment get their positions wherever they
- * are now, and bodies that left the simulator are skipped.
- */
-export function readPositions(simulator, layout, data, steps) {
-  const store = simulator.store, { toInternal, origin, bodies } = layout;
-  const n = toInternal.length;
-  if (n === 0) return 0;
-  const ox = origin.x, oy = origin.y;
-  let tx = 0, ty = 0;
-  if (!rowsMoved(simulator, layout)) {
-    // rows are where they were: the usual case
-    const pos = store.pos;
-    for (let i = 0; i < n; i++) {
-      const k = 2 * toInternal[i];
-      const x = ox + data[k], y = oy + data[k + 1];
-      tx += Math.abs(x - pos[2 * i]); ty += Math.abs(y - pos[2 * i + 1]);
-      pos[2 * i] = x; pos[2 * i + 1] = y;
-    }
-  } else {
-    for (let i = 0; i < n; i++) {
-      const body = bodies[i];
-      if (body.store !== store) continue;
-      const k = 2 * toInternal[i], row = 2 * body.index;
-      store.pos[row] = ox + data[k]; store.pos[row + 1] = oy + data[k + 1];
-    }
-  }
-  tx /= steps; ty /= steps;
-  return (tx * tx + ty * ty) / n;
-}
-
-/**
- * True when graph edits moved the rows of the bodies `layout` was read from (rows of removed
- * bodies were dropped since).
- */
-export function rowsMoved(simulator, layout) {
-  const store = simulator.store, n = layout.toInternal.length, last = layout.bodies[n - 1];
-  return !(n === 0 || (store.n >= n && last.store === store && last.index === n - 1));
-}
-
-/**
- * Copies velocities read from the device ((vx, vy, 0, pinned) per body, internal order) into the
- * store, by body as readPositions() does.
- */
-export function readVelocities(simulator, layout, data) {
-  const store = simulator.store, { toInternal, bodies } = layout;
-  for (let i = 0, n = toInternal.length; i < n; i++) {
-    const body = bodies[i];
-    if (body.store !== store) continue;
-    const k = 4 * toInternal[i], row = 2 * body.index;
-    store.velocity[row] = data[k]; store.velocity[row + 1] = data[k + 1];
-  }
 }
 
 function identity(n) {

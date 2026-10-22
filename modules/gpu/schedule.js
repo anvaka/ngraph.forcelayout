@@ -1,56 +1,75 @@
 // From a step that check.js accepts to what the runner builds: which kernels run, in which order,
-// and which stages each one computes. Today that is one of two stock templates for the exact stock
-// step: the small engine (one workgroup) for graphs it fits, else the grid engine. The generic
-// emitter adds its plans here (design sections 6 and 7): node kernels in CPU stage order, the
-// one-kernel small-graph step, sums and the generic pyramid.
-import { gridBuffers, shaderCode as gridCode, KERNEL_STAGES as GRID_STAGES } from './templates/grid.js';
-import { smallEngineFits, shaderCode as smallCode, KERNEL_STAGES as SMALL_STAGES } from './templates/small.js';
+// and which stages each one computes.
+//
+//  - The exact stock step (clear, repulsion, drag, springs, integrate, with the mass as charge,
+//    sensitivity and inertia) in 2D above the small-graph size N* runs today's grid engine, the
+//    stock template, byte for byte (templates/grid.js).
+//  - Everything else is a generic plan (generic/plan.js): node kernels in CPU stage order, with
+//    every tree pass as exact pairs over tiles. Up to N* the whole step is one kernel.
+import { gridBuffers, shaderCode as gridCode, KERNEL_STAGES as GRID_STAGES, LAW_VALUES } from './templates/grid.js';
+import { genericPlan } from './generic/plan.js';
+import { kernelCode } from './generic/emit.js';
+import { GUARD, STOCK_STAGES, isGuard, physicsStages } from './program.js';
+import { lawValueCount } from './wgsl/print.js';
 
-// The stage runOnGpu() adds so that layout.step() throws while the GPU runs the layout
-export const GUARD = 'runsOnGpu';
-// The stock step, in the order the CPU runs it
-export const STOCK_STAGES = ['clear', 'repulsion', 'drag', 'springs', 'integrate'];
+export { GUARD, STOCK_STAGES, isGuard, physicsStages };
 
-/**
- * The stages of `program` that compute physics: all but the guard.
- */
-export function physicsStages(program) {
-  return program.stages.filter(stage => !isGuard(stage));
-}
-
-export function isGuard(stage) {
-  return stage.name === GUARD && stage.shape === 'guard';
-}
+// Up to this many bodies the whole step is one kernel (design section 6.1; it measured about 2k
+// on an M4 Max, so this default is conservative)
+export const SMALL_GRAPH = 1024;
 
 /**
- * The plan for the stock step of `program`. `law` is the compiled repulsion law, or null for
- * 1/r^2; `limits` a device's or a capability profile's. Returns {template, law, perStep, nodes,
- * links, buffers, kernels(), kernelStages, how}:
- *  - perStep: the law's numbers must be read for every queued step (a parameter or range given
- *    by a function, or the law reads `step`), so the runner builds the law-variant pipelines;
+ * The plan for `program`, or {refusal}. `laws` maps every tree stage to its compiled law (null for
+ * 1/r^2); `limits` a device's or a capability profile's; `options.generic` keeps the stock step
+ * off its template (for tests that compare the two). A plan has {template, nodes, buffers,
+ * kernels(), kernelStages, how, reads}:
  *  - buffers: bytes per buffer; kernels(): the WGSL of every kernel by name;
- *  - kernelStages: the stages each kernel computes; how: per stage, for plan().
+ *  - kernelStages: the stages each kernel computes; how: per stage, for plan();
+ *  - reads: the body columns the GPU reads, which a 'step' listener must not change.
  */
-export function schedule(program, law, limits) {
-  const nodes = program.spaces.nodes, links = program.spaces.links;
-  const small = nodes > 0 && smallEngineFits(limits, nodes);
+export function schedule(program, laws, limits, options = {}) {
+  const nodes = program.spaces.nodes;
+  if (!options.generic && nodes > SMALL_GRAPH && isStockStep(program, laws)) return stockPlan(program, laws.repulsion || null);
+  const plan = genericPlan(program, laws);
+  if (plan.refusal) return plan;
+  plan.buffers = {
+    S: plan.S.size * 4, H: plan.H.size * 4, X: plan.cap * plan.D * 4, Y: plan.cap * plan.D * 4,
+    L: (nodes + 1 + 2 * program.spaces.links) * 4, V: plan.slot.bytes,
+  };
+  plan.kernels = printer => kernelCode(plan, printer);
+  plan.how = genericHow(plan);
+  plan.reads = Object.keys(plan.columns);
+  return plan;
+}
+
+/**
+ * True for the exact stock step: the built in stages in their order and nothing else, the mass
+ * as charge, sensitivity and inertia, a law that fits the template's 16 numbers, in 2D.
+ */
+export function isStockStep(program, laws) {
+  if (program.dims !== 2) return false;
+  const stages = physicsStages(program);
+  if (stages.map(stage => stage.builtIn).join() !== STOCK_STAGES.join()) return false;
+  const repulsion = stages[1].args.channels[0];
+  if (repulsion.charge !== 'mass' || repulsion.sensitivity !== 'mass') return false;
+  if (stages[4].args.inertia !== 'mass') return false;
+  const law = laws.repulsion;
+  return !law || lawValueCount(law) <= LAW_VALUES;
+}
+
+function stockPlan(program, law) {
   const fire = program.settings.integrator === 'fire';
   return {
-    template: small ? 'small' : 'grid',
+    template: 'grid',
     law,
     perStep: !!law && readsPerStep(law.describe()),
-    nodes,
-    links,
-    buffers: small ? smallBuffers(nodes, links) : gridBuffers(nodes, links),
-    kernels: () => (small ? { small: smallCode(law) } : gridCode(law)),
-    kernelStages: small ? SMALL_STAGES : GRID_STAGES,
-    how: small ? {
-      clear: 'part of the step kernel (one workgroup)',
-      repulsion: 'exact pairs in one workgroup',
-      drag: fire ? 'skipped under FIRE' : 'part of the step kernel',
-      springs: 'part of the step kernel',
-      integrate: (fire ? 'FIRE' : 'Euler') + ', part of the step kernel',
-    } : {
+    nodes: program.spaces.nodes,
+    links: program.spaces.links,
+    buffers: gridBuffers(program.spaces.nodes, program.spaces.links),
+    kernels: () => gridCode(law),
+    kernelStages: GRID_STAGES,
+    reads: ['pos', 'velocity', 'mass', 'pinned'],
+    how: {
       clear: 'part of FORCE',
       repulsion: 'grid pyramid with exact pairs in the 3x3 near cells (theta and nbody do not apply)',
       drag: fire ? 'skipped under FIRE' : 'part of FORCE',
@@ -60,14 +79,32 @@ export function schedule(program, law, limits) {
   };
 }
 
+// How each stage runs in a generic plan, for plan()
+function genericHow(plan) {
+  const how = Object.create(null);
+  plan.skipped.forEach(name => { how[name] = 'skipped under FIRE'; });
+  const nodeKernels = plan.kernelList.filter(k => k.kind === 'node').length;
+  plan.kernelList.forEach((kernel, index) => {
+    if (kernel.kind !== 'node') return;
+    const where = nodeKernels === 1 && plan.kernelList.length === 1 ? 'the step kernel (one dispatch)' : kernel.name;
+    const reduce = plan.kernelList.slice(index + 1).find(k => k.kind === 'reduce');
+    kernel.sections.forEach(section => {
+      if (section.kind === 'pairs') {
+        section.channels.forEach(c => { how[c.stage.name] = `exact pairs over tiles of 256 bodies, in ${where}`; });
+        return;
+      }
+      const name = section.stage.name;
+      if (section.kind === 'sum') how[name] = kernel.hoisted ? 'added up at the start of the step (SUMS, SUMS_REDUCE)' : `per body in ${where}, added up in ${reduce ? reduce.name : 'a reduction'}`;
+      else if (section.kind === 'fire') how[name] = `FIRE: FIRE_REDUCE, FIRE_STATE, then ${where}`;
+      else how[name] = (section.kind === 'formula' ? 'in ' : 'part of ') + where;
+    });
+  });
+  return how;
+}
+
 // A law described as data (law.describe()) whose numbers can change from one step to the next
 function readsPerStep(described) {
   return described.params.some(param => param.kind === 'host') ||
     !!(described.range && described.range.kind === 'host') ||
     described.builtIns.indexOf('step') >= 0;
-}
-
-function smallBuffers(n, edges) {
-  const size = bytes => Math.max(16, Math.ceil(bytes / 16) * 16);
-  return { pos: size(n * 8), vel: size(n * 16), mass: size(n * 4), csr: size((n + 1 + 2 * edges) * 4), fire: 16 };
 }
