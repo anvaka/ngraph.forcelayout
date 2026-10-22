@@ -4,6 +4,7 @@
 // within a call (number params, no `when`, no `step`, no function) is read once per call; when no
 // stage can change, one slot serves every step of the call.
 import { F32_MAX, f32Tiny, writeLawValues, lawValueProblem, lawValueWarnings } from '../wgsl/print.js';
+import { gridSlotValues, gridIsDynamic } from '../grid/plan.js';
 
 const SETTINGS = { gravity: 'gravity', timeStep: 'timeStep', dragCoefficient: 'dragCoefficient', springLength: 'springLength', springCoefficient: 'springCoefficient' };
 
@@ -16,12 +17,13 @@ export function slotFiller(simulator, plan, warn, origin) {
   const floats = plan.slot.floats;
   const settingAt = Object.create(null);
   const stages = Object.create(null);
-  const stageOf = name => stages[name] || (stages[name] = { name, params: [], builtIns: [], gate: undefined, radius: undefined, law: null, lawAt: 0, dynamic: false });
+  const stageOf = name => stages[name] || (stages[name] = { name, params: [], builtIns: [], grid: [], gate: undefined, radius: undefined, law: null, lawAt: 0, dynamic: false });
   plan.slot.entries.forEach(entry => {
     if (entry.kind === 'setting') settingAt[entry.stage] = entry.index;
     else if (entry.kind === 'gate') { const s = stageOf(entry.stage); s.gate = entry.index; s.dynamic = true; }
     else if (entry.kind === 'radius') stageOf(entry.stage).radius = entry.index;
     else if (entry.kind === 'param') stageOf(entry.stage).params.push(entry);
+    else if (entry.kind === 'grid') stageOf(entry.stage).grid.push(entry);
     else if (entry.kind === 'builtIn') {
       const s = stageOf(entry.stage);
       s.builtIns.push(entry);
@@ -38,6 +40,10 @@ export function slotFiller(simulator, plan, warn, origin) {
       // a pair stage's radius: a function of the step context, or an expression of its params
       const radius = stage.args && stage.args.radius;
       if (s.radius !== undefined && radius && radius.kind !== 'number') s.dynamic = true;
+      if (part.kind === 'grid') {
+        s.anchor = stage.args.anchor;
+        if (gridIsDynamic(stage)) s.dynamic = true;
+      }
       if (part.law) {
         s.law = part.law;
         s.lawAt = part.values;
@@ -103,6 +109,12 @@ export function slotFiller(simulator, plan, warn, origin) {
       slot[entry.index] = value;
     }
     for (const entry of stage.builtIns) slot[entry.index] = values.builtIns[entry.name];
+    // a grid field's numbers; one that does not fit f32 gives no grid on the device (its field is
+    // 0), as a cell of 0 does on the CPU
+    if (stage.grid.length) {
+      const numbers = gridSlotValues(values, origin, plan.D, stage.anchor);
+      for (const entry of stage.grid) slot[entry.index] = numbers[entry.name];
+    }
     if (stage.law) {
       const numbers = values.lawValues || values.law.values;
       const problem = lawValueProblem(stage.law, numbers);
