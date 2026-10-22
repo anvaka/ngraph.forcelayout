@@ -32,6 +32,8 @@ const FIRST_PAIR_BATCH = 8;
 const MAX_BATCH = 1024;
 // A submit holds at most this much GPU work, far below the 2-second watchdog
 const MAX_SUBMIT_MS = 100;
+// ... and, should every step reach its structures' work caps, at most this much (engine.cappedMs)
+const CAPPED_SUBMIT_MS = 1000;
 // A readback followed this soon by a newer one (calls in one burst, as a frame that steps several
 // times) is not written into the store: the newer one is a batch away and replaces it. Writing a
 // large graph's positions costs milliseconds of the main thread.
@@ -85,6 +87,9 @@ function createRunner(layout, backend) {
   let pending = 0;         // steps asked for while the runner was busy
   let busy = null;         // a build or a sync point in progress
   let halted = null, stopped = false, released = false;
+  // after a structure's status (a work cap passed): the device's numbers hold steps computed
+  // without that work, and the store keeps the last readback from before
+  let untrusted = false;
   let hostOwns = false;    // after sync(): the store is the truth until the next step()
   let topologyChanged = false, settingsChanged = false;
   let structure = null;    // the stages the plan was made from, to notice changes cheaply
@@ -111,6 +116,8 @@ function createRunner(layout, backend) {
   };
   const onDeviceError = error => {
     if (released) return;
+    // a submit that failed did not run: later readbacks would bring stale numbers
+    untrusted = true;
     if (error.lost) halt({ lost: true, message: error.message, kernel: null, stages: [] });
     else halt(attribute(error.message));
   };
@@ -309,14 +316,16 @@ function createRunner(layout, backend) {
   }
 
   // Steps per submit: as many as fit in MAX_SUBMIT_MS of GPU time, and enough that the submit's
-  // own cost stays under 10% of the work
+  // own cost stays under 10% of the work. Steps timed fast can still reach their structures' work
+  // caps within a submit (a gate opens, a radius grows), so no more than fit CAPPED_SUBMIT_MS then.
   function stepsPerSubmit() {
     const ms = gpuMsPerStep();
     // before a step is timed: pair formulas near their work cap could make 64 steps long
     if (!(ms > 0)) return engine && engine.pairs ? FIRST_PAIR_BATCH : DEFAULT_BATCH;
+    const capped = engine && engine.cappedMs ? Math.floor(CAPPED_SUBMIT_MS / engine.cappedMs) : MAX_BATCH;
     const most = Math.floor(MAX_SUBMIT_MS / ms);
     const least = Math.ceil(submitMs / (0.1 * ms));
-    return Math.max(1, Math.min(MAX_BATCH, Math.max(most, least)));
+    return Math.max(1, Math.min(MAX_BATCH, capped, Math.max(most, least)));
   }
 
   function readBack(rb, count, withTs) {
@@ -331,10 +340,12 @@ function createRunner(layout, backend) {
       const next = issuedAt.get(rb.serial + 1);
       const replaced = next !== undefined && next - issuedAt.get(rb.serial) < BURST_MS;
       issuedAt.delete(rb.serial);
-      if (rb.serial > appliedSerial && from === engine && !replaced) {
+      // the status first: with one, these positions hold steps computed without a structure's work
+      const status = from === engine && engine.statusBytes ? engine.statusMessage(new Uint32Array(rb.buffer.getMappedRange(timestampsAt(bytes) + 16, engine.statusBytes))) : null;
+      if (status) untrusted = true;
+      if (rb.serial > appliedSerial && from === engine && !replaced && !untrusted) {
         apply(rb.serial, rb.steps, new Float32Array(rb.buffer.getMappedRange(0, bytes)), rb.ordered);
       }
-      const status = from === engine && engine.statusBytes ? engine.statusMessage(new Uint32Array(rb.buffer.getMappedRange(timestampsAt(bytes) + 16, engine.statusBytes))) : null;
       if (withTs) {
         const t = new BigUint64Array(rb.buffer.getMappedRange(timestampsAt(bytes), 16));
         const ns = Number(t[1] - t[0]);
@@ -347,7 +358,7 @@ function createRunner(layout, backend) {
       rb.buffer.unmap();
       if (rb.engine === engine) free.push(rb); else rb.buffer.destroy();
       if (status) {
-        halt({ message: status.message, kernel: null, stages: status.stages || [] });
+        halt({ message: `${status.message} (by step ${firstStep + rb.steps})`, kernel: null, stages: status.stages || [], status: true });
         return;
       }
       afterReadback();
@@ -418,7 +429,7 @@ function createRunner(layout, backend) {
       step(count);
       while (busy) await busy;
     }
-    if (released || !engine || (halted && halted.lost)) { hostOwns = true; return; }
+    if (released || !engine || untrusted) { hostOwns = true; return; }
     await readDevice();
     hostOwns = true;
     afterReadback();
@@ -431,7 +442,12 @@ function createRunner(layout, backend) {
     issuedAt.set(serial, performance.now());
     const state = await engine.readDevice();
     issuedAt.delete(serial);
-    if (!state || released || from !== engine) return;
+    if (!state || released || from !== engine || untrusted) return;
+    if (state.status) {
+      untrusted = true;
+      halt({ message: `${state.status.message} (by step ${firstStep + steps})`, kernel: null, stages: state.status.stages || [], status: true });
+      return;
+    }
     if (serial > appliedSerial) apply(serial, steps, state.positions, true);
     state.apply();
     fireState = state.fireState;
@@ -441,7 +457,7 @@ function createRunner(layout, backend) {
   // again from the store
   function syncPoint() {
     busy = (async () => {
-      if (engine && !(halted && halted.lost)) await readDevice();
+      if (engine && !untrusted) await readDevice();
       dropEngine();
       await build();
     })().then(() => {

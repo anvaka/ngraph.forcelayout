@@ -11,6 +11,12 @@ import { slotFiller } from './values.js';
 import { chooseOrigin, relativePositions as relative, writePositionsBack, rowsMoved } from '../buffers.js';
 import { createRowWriter, trackHostPositions } from '../rows.js';
 
+// GPU time of one step at a structure's work cap, measured on an M4 Max: a pair stage at the pair
+// cap (3.6-6.3 ms whatever the formula, gpu-critic-2's pairs review) and the pyramid's crowded cells
+// at theirs (about 20 ms). The runner bounds steps per submit by them (see cappedMs).
+const PAIR_STAGE_CAPPED_MS = 6.5;
+const PYRAMID_CAPPED_MS = 20;
+
 // Integers above this are not exact in f32
 const F32_INTEGER = 16777216;
 // Slots of the ring when numbers change from step to step: a submit holds at most this many steps
@@ -125,6 +131,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   if (tree && tree.status) {
     statuses.push(Object.assign({ message: pyramidStatus, stages: plan.pyramid.channels.map(c => c.stage) }, tree.status));
   }
+  const statusBytes = statuses.reduce((total, status) => total + status.size, 0);
   // Bind groups per layout and parity
   const bindGroups = kernel => [0, 1].map(p => device.createBindGroup({
     layout: pipelineOf[kernel.name].getBindGroupLayout(0),
@@ -218,20 +225,9 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
 
     // The status words of the structures that have them, for every readback: copyStatus() puts
     // them at `offset` of a readback, statusMessage() says why to halt, or null
-    statusBytes: statuses.reduce((total, status) => total + status.size, 0),
-    copyStatus(enc, dst, offset) {
-      let at = offset;
-      statuses.forEach(status => { enc.copyBufferToBuffer(status.buffer, status.offset, dst, at, status.size); at += status.size; });
-    },
-    statusMessage(words) {
-      let at = 0;
-      for (const status of statuses) {
-        const message = status.message(words.subarray(at, at + status.size / 4));
-        if (message) return { message, stages: status.stages };
-        at += status.size / 4;
-      }
-      return null;
-    },
+    statusBytes,
+    copyStatus,
+    statusMessage,
 
     /**
      * Encodes `count` steps from simulator step `firstStep`. Returns {ran, halt?}: fewer steps
@@ -316,17 +312,19 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
 
     /**
      * Reads the device's state after every submitted step: positions, velocities, the columns
-     * stages write, the sums and FIRE's state. Resolves to {positions, apply()}: apply() writes
-     * all but the positions into the store and the sums.
+     * stages write, the sums and FIRE's state. Resolves to {positions, status, apply()}: apply()
+     * writes all but the positions into the store and the sums; status is statusMessage()'s.
      */
     async readDevice() {
       const stageColumns = Object.values(plan.columns).filter(c => c.buffer === 'S');
       // getMappedRange() takes offsets that are multiples of 8
       const posBytes = n * D * 4, sAt = Math.ceil(posBytes / 8) * 8;
-      const read = device.createBuffer({ size: Math.max(16, sAt + plan.S.size * 4), usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+      const statusAt = Math.ceil((sAt + plan.S.size * 4) / 8) * 8;
+      const read = device.createBuffer({ size: Math.max(16, statusAt + statusBytes), usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
       const enc = device.createCommandEncoder();
       enc.copyBufferToBuffer(positions[parity], 0, read, 0, posBytes);
       enc.copyBufferToBuffer(S, 0, read, sAt, plan.S.size * 4);
+      if (statusBytes) copyStatus(enc, read, statusAt);
       device.queue.submit([enc.finish()]);
       try {
         await read.mapAsync(GPUMapMode.READ);
@@ -336,10 +334,13 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
       }
       const positionsRead = new Float32Array(read.getMappedRange(0, posBytes)).slice();
       const s = new Float32Array(read.getMappedRange(sAt, plan.S.size * 4)).slice();
+      const status = statusBytes ? statusMessage(new Uint32Array(read.getMappedRange(statusAt, statusBytes))) : null;
       read.unmap();
       read.destroy();
       return {
         positions: positionsRead,
+        // a structure's status: these numbers include steps computed without its work
+        status,
         fireState: Array.from(s.subarray(plan.S.fire, plan.S.fire + 4)),
         apply() {
           const keep = store.versions.velocity !== uploaded.velocity ? velocityRows() : [];
@@ -374,6 +375,10 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
 
     // a pair formula's work cap is near: the first submits are short
     pairs: !!pairs,
+    // GPU time of a step whose structures all work at their caps: a step can get there within a
+    // submit (a gate opens, a radius grows, the layout piles up), so the runner keeps submits
+    // below the watchdog with it rather than with the steps it timed
+    cappedMs: (pairs ? plan.pairs.stages.length * PAIR_STAGE_CAPPED_MS : 0) + (tree ? PYRAMID_CAPPED_MS : 0),
 
     destroy() {
       owned.forEach(b => b.destroy());
@@ -381,6 +386,21 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
       if (pairs) pairs.destroy();
     },
   };
+
+  function copyStatus(enc, dst, offset) {
+    let at = offset;
+    statuses.forEach(status => { enc.copyBufferToBuffer(status.buffer, status.offset, dst, at, status.size); at += status.size; });
+  }
+
+  function statusMessage(words) {
+    let at = 0;
+    for (const status of statuses) {
+      const message = status.message(words.subarray(at, at + status.size / 4));
+      if (message) return { message, stages: status.stages };
+      at += status.size / 4;
+    }
+    return null;
+  }
 
   function versions() {
     const out = { pos: store.versions.pos, velocity: store.versions.velocity, columns: Object.create(null), links: Object.create(null), groups: Object.create(null) };
