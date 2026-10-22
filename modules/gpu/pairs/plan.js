@@ -183,8 +183,11 @@ export function statusMessage(plan, words) {
   const names = sort ? sort.stages.map(entry => entry.stage.name).join(', ') : 'a pair stage';
   const cap = words[3] * CHUNK;
   const needs = words[2] === 0xffffffff ? `more than ${count(cap)}` : `about ${count(words[2] * CHUNK)}`;
-  return `the pair formula ${names} needed ${needs} pair tests in one step; the GPU stops at ${count(cap)}, ` +
-    'so that a step stays far from the GPU watchdog (bodies crowd into a few cells, or the radius is large for the layout)';
+  const what = words[0] === 2 ? 'tests to order its crowded cells' : 'pair tests';
+  return `the pair formula ${names} needed ${needs} ${what} in one step; the GPU stops at ${count(cap)}, so that ` +
+    'a step stays far from the GPU watchdog. Bodies crowd into a few cells, or the radius is large for the layout. ' +
+    'A layout that starts with its bodies piled up clears in 20 to 40 steps at 100k bodies: start the stage later ' +
+    "(when: 'step > 40') or lower its radius";
 }
 
 // The node kernel's part of a stage: at the stage's place, `x += v` columns start from their value
