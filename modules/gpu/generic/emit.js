@@ -9,7 +9,7 @@
 import formula from '../../../lib/formula.js';
 import WGSL, { emitLaw, lawPrologue } from '../wgsl/print.js';
 import { THREADS, readsOf, writesOf, slotValue } from './plan.js';
-import { header, BINDINGS, bindingsOf, u32, columnRef, local, locals, settingsLines, scopeOf, NUDGE, AXES } from './common.js';
+import { header, BINDINGS, bindingsOf, u32, columnRef, local, locals, settingsLines, scopeOf, NUDGE, AXES, withTables } from './common.js';
 import { gatherCode, chunkKernel, linkKernel, groupValueCode, groupRunsKernel, groupSumKernel } from './links.js';
 
 export { BINDINGS, bindingsOf };
@@ -260,7 +260,7 @@ function channelTerms(plan, section, charges, charge, r2, printer, into) {
     let line;
     if (!c.law) line = add('inverseCube');
     else {
-      const code = renameLaw(emitLaw(c.law, D, 'r', 'k' + ch, undefined, printer), ch);
+      const code = withTables(renameLaw(emitLaw(c.law, D, 'r', 'k' + ch, undefined, printer), ch), c.tables);
       line = c.law.hasRange ? `if (rr <= law${ch}Range2) { ${code} ${add('k' + ch)} }` : `{ ${code} ${add('k' + ch)} }`;
     }
     // a gated pass adds nothing on the steps where its `when` does not hold

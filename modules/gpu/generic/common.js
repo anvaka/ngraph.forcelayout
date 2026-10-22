@@ -16,7 +16,51 @@ export function header(plan) {
 @group(0) @binding(4) var<storage, read> L: array<u32>;
 @group(0) @binding(5) var<storage, read> X: array<f32>;
 @group(0) @binding(6) var<storage, read_write> Y: array<f32>;
+${(plan.tables || []).map(tableFunctions).join('')}`;
+}
+
+// A lookup table of samples at even steps from `from` to `to` (formula.createTable): linear
+// between samples, the end values outside; its slope is the segment's (0 outside)
+function tableFunctions(table) {
+  const last = table.values.length - 1;
+  const scale = last / (table.to - table.from);
+  const at = k => `H[${u32(table.offset)} + ${k}]`;
+  const q = `let q = (x - ${f32Literal(table.from)}) * ${f32Literal(scale)};`;
+  return `fn table_${table.id}(x: f32) -> f32 {
+  ${q}
+  if (!(q > 0.0)) { return ${at('0u')}; }
+  if (q >= ${f32Literal(last)}) { return ${at(u32(last))}; }
+  let k = u32(q);
+  let a = ${at('k')};
+  return a + (${at('k + 1u')} - a) * (q - f32(k));
+}
+fn slope_${table.id}(x: f32) -> f32 {
+  ${q}
+  if (!(q > 0.0) || q >= ${f32Literal(last)}) { return 0.0; }
+  let k = u32(q);
+  return (${at('k + 1u')} - ${at('k')}) * ${f32Literal(scale)};
+}
 `;
+}
+
+// A number the generator knows, as an f32 literal
+function f32Literal(value) {
+  let text = String(Math.fround(value));
+  if (/^-?\d+$/.test(text)) text += '.0';
+  else if (/e/.test(text) && !/\./.test(text)) text = text.replace('e', '.0e');
+  return value < 0 ? '(' + text + ')' : text;
+}
+
+/**
+ * A law's code with its table calls (the law compiler prints lawFunctions.T.value(x) and the
+ * slope's guard) turned into table_<id>() and slope_<id>(): `tables` maps names to ids
+ */
+export function withTables(code, tables) {
+  if (!tables) return code;
+  const arg = '(\\(?[^()]*\\)?)';
+  return code
+    .replace(new RegExp(`\\(lawFunctions\\.(\\w+)\\.derivative \\? lawFunctions\\.\\w+\\.derivative\\(${arg}\\) : 0\\)`, 'g'), (all, name, x) => `slope_${tables[name]}(${x})`)
+    .replace(new RegExp(`lawFunctions\\.(\\w+)\\.value\\(${arg}\\)`, 'g'), (all, name, x) => `table_${tables[name]}(${x})`);
 }
 
 export const BINDINGS = ['uniform', 'dynamic', 'storage', 'read', 'read', 'read', 'storage'];
@@ -126,6 +170,7 @@ export function scopeOf(plan, section, where = { space: 'node' }) {
         return column.width === 1 ? { type: 'num', code: names[0], write } : { type: 'vec', codes: names, write };
       }
       if (section.params && section.params[key] !== undefined) return { type: 'num', code: slotValue(section.params[key]) };
+      if (section.tables && section.tables[key] !== undefined) return { call: args => `table_${section.tables[key]}(${args[0]})` };
       const sum = plan.sums[key];
       if (sum && sum.grouped) {
         return { index: code => vector(Array.from({ length: sum.width }, (_, k) => groupRead(sum, code, k))) };

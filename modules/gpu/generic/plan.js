@@ -29,8 +29,9 @@
 //   S  storage read_write: velocity, force, node columns that stages write, link columns that
 //      stages write (link order), sum results, per-row values of sums per group, FIRE state,
 //      partial sums
-//   H  storage read: node columns only the host writes (mass, pinned, ...), and link columns only
-//      the host writes, in CSR order (each link at both of its ends)
+//   H  storage read: node columns only the host writes (mass, pinned, ...), link columns only the
+//      host writes, in CSR order (each link at both of its ends), and lookup tables (formulas' and
+//      laws'), read through table_<id>() functions
 //   L  storage read (u32): [first entry of each row (n + 1) | other body of each entry (2m) | link
 //      and role of each entry (2m) | entry of each link at its from end (m) | from (m) | to (m) |
 //      where the blocks below start (1 + group columns) | the chunks of links | a block per group
@@ -234,6 +235,27 @@ export function genericPlan(program, laws, options = {}) {
   });
   // what the stock springs read: the settings while every link has the defaults
   sections.forEach(section => { if (section.kind === 'springs') section.own = !!(linkColumns.length || linkColumns.coefficient); });
+
+  // lookup tables of formulas and of laws in tile loops (the pyramid keeps its own), in H
+  const tables = [];
+  const addTable = spec => {
+    tables.push({ id: tables.length, name: spec.name, from: spec.from, to: spec.to, values: spec.values, offset: hSize });
+    hSize += spec.values.length;
+    return tables.length - 1;
+  };
+  sections.forEach(section => {
+    if (section.kind === 'pairs') {
+      section.channels.forEach(channel => {
+        if (!channel.law) return;
+        channel.tables = Object.create(null);
+        channel.law.describe().tables.forEach(spec => { channel.tables[spec.name] = addTable(spec); });
+      });
+      return;
+    }
+    if (!section.stage || !section.stage.tables || !section.stage.tables.length) return;
+    section.tables = Object.create(null);
+    section.stage.tables.forEach(spec => { section.tables[spec.name] = addTable(spec); });
+  });
 
   // chunked gathers: per chunk, the force it adds and what it adds into each column
   const maxChunks = Math.ceil(2 * m / LINK_CHUNK) + n;
@@ -449,6 +471,7 @@ export function genericPlan(program, laws, options = {}) {
     linkColumns,
     groupColumns,
     chunked,
+    tables,
     sums,
     sumWidth,
     S: { size: sSize, fire, firePartials, partials },

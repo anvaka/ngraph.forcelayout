@@ -114,7 +114,6 @@ test('what does not run yet is named', () => {
     perGroup: 'WebGPU runs sums per group only with group ids set by the host',
     overLinks: 'WebGPU does not run sums over links yet',
     largest: 'WebGPU does not run max over bodies yet',
-    table: 'WebGPU does not run lookup tables in formulas yet',
     writesGroup: 'WebGPU does not run formulas that write the i32 column group yet',
     look: 'WebGPU does not run host steps yet',
     js: 'JavaScript stages run on the CPU only (formula stages and host steps run on other engines too)',
@@ -126,7 +125,10 @@ test('laws: tables and JS functions, f32 literals and values; the template takes
   const sim = layoutOf(50).simulator;
   const verdict = () => sim.plan(gpuCapabilities()).stages.find(s => s.stage === 'repulsion');
   sim.repulsionLaw({ force: 'T(r) / r^2', tables: { T: { from: 0, to: 4, values: [1, 0.5, 0] } } });
-  assert.equal(verdict().reason, 'WebGPU does not run laws with lookup tables yet');
+  assert.ok(verdict().runs);
+  assert.match(planOf({ simulator: sim }).kernels().STEP0, /fn table_0\(x: f32\)/);
+  sim.repulsionLaw({ force: 'T(r) / r^2', tables: { T: { from: 0, to: 4, values: [1, 1e39, 0] } } });
+  assert.equal(verdict().reason, "the law's table T: the number 1e+39 does not fit a 32-bit float");
   sim.repulsionLaw({ force: 'K(r) / r', functions: { K: { value: Math.cos } } });
   assert.equal(verdict().reason, 'laws with JavaScript functions run on the CPU only');
   sim.repulsionLaw('1e300 / r^2');

@@ -72,6 +72,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     if (problem) integerProblem = column.name;
   });
   if (integerProblem) throw new Error(`the column ${integerProblem} holds integers above 2^24, which 32-bit floats cannot hold exactly`);
+  plan.tables.forEach(table => hData.set(table.values, table.offset));
   const results = simulator.sums();
   Object.values(plan.sums).forEach(sum => {
     const result = results[sum.name];
