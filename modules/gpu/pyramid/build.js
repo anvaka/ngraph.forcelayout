@@ -1,0 +1,183 @@
+// The generic pyramid on a device: its buffers, pipelines and the structure dispatches of a step.
+// The node kernel that adds the push is the caller's (plan.section), so this encodes everything
+// up to it.
+//
+//   const tree = await buildPyramid(device, plan, { buffers: { S: positions, H: columns } });
+//   tree.setValues({ gravity }, laws);   // laws: one compiled law per channel (or null)
+//   tree.encode(pass);                   // HIST ... LOCAL, into the caller's compute pass
+//   // then the caller's node kernel, with tree.buffers bound as plan.section.bindings says
+import { getPipeline } from '../device.js';
+import { writeLawValues } from '../wgsl/print.js';
+import { boxLayout, WG } from './wgsl.js';
+import { NEAR_CAP } from './plan.js';
+
+const PARAM_WORDS = 12;
+
+/**
+ * Buffers, pipelines and bind groups for `plan` (planPyramid()). `buffers` are the caller's, by
+ * the names its colRefs use; a pair [a, b] is a buffer that alternates between steps (positions
+ * that ping-pong), a at even steps and b at odd ones (encode()'s `parity`). `step`, when the
+ * caller's step values hold the law numbers:
+ * {buffer, size, dynamic} (dynamic: bound at an offset per step, see encode()).
+ * Resolves once the pipelines are compiled; rejects naming the kernel when one fails, or when the
+ * buffers cannot be created.
+ */
+export async function buildPyramid(device, plan, { buffers: external = {}, step = null, nearCap = NEAR_CAP } = {}) {
+  if (plan.refusal) throw new Error(plan.refusal);
+  const { D, sizes, kernels, columns } = plan;
+  const missing = [].concat(...Object.values(columns)).filter(name => !external[name]);
+  if (missing.length) throw new Error('buildPyramid: no buffer for ' + missing.join(', '));
+
+  const jobs = Object.keys(kernels).map(name => {
+    const options = { code: kernels[name], label: name };
+    if (name === 'TREE_LOCAL' && step) options.bindings = ['uniform', 'storage'].concat(plan.layout.CNT < 0 ? ['read'] : [], [step.dynamic ? 'dynamic' : 'uniform']);
+    return getPipeline(device, options).then(pipeline => [name, pipeline]);
+  });
+  const pipes = Object.fromEntries(await Promise.all(jobs));
+
+  const S = GPUBufferUsage.STORAGE, CD = GPUBufferUsage.COPY_DST, CS = GPUBufferUsage.COPY_SRC, U = GPUBufferUsage.UNIFORM;
+  const owned = [];
+  device.pushErrorScope('validation');
+  device.pushErrorScope('out-of-memory');
+  const buf = (size, usage = S) => {
+    const b = device.createBuffer({ size, usage });
+    owned.push(b);
+    return b;
+  };
+  const sizesOf = plan.buffers;
+  const treeBox = buf(sizesOf.treeBox, S | CD | CS);
+  const treeCount = buf(sizesOf.treeCount, S | CD);
+  const treeBlocks = buf(sizesOf.treeBlocks);
+  const treeWork = buf(sizesOf.treeWork);
+  const treeMeta = buf(sizesOf.treeMeta, S | CS);
+  const treeSp = buf(sizesOf.treeSp, S | CS);
+  const treeCells = buf(sizesOf.treeCells, S | CD | CS);
+  const paramBytes = (PARAM_WORDS + plan.lawWords) * 4;
+  const TP = buf(Math.max(64, Math.ceil(paramBytes / 16) * 16), U | CD);
+  const nbU = buf(16, U | CD);
+  device.queue.writeBuffer(nbU, 0, new Uint32Array([sizes.nCells / 1024, 0, 0, 0]));
+
+  // Box state: an empty bounding box, histogram centre at the origin; the first step's HIST and
+  // BOX find the box before anything is binned
+  const BL = boxLayout(D);
+  const boxInit = new Uint32Array(BL.size);
+  for (let k = 0; k < D; k++) boxInit[BL.BB_MIN + k] = 0xffffffff;
+  device.queue.writeBuffer(treeBox, 0, boxInit);
+  writeTables(device, treeCells, plan);
+
+  const params = new ArrayBuffer(Math.max(64, Math.ceil(paramBytes / 16) * 16));
+  const pu = new Uint32Array(params), pf = new Float32Array(params);
+  pu[0] = sizes.n; pu[1] = sizes.G; pu[2] = sizes.levels; pu[3] = sizes.nCells;
+  pu[4] = sizes.locOff; pu[5] = sizes.metaTag; pu[6] = sizes.metaRow; pu[7] = sizes.metaCount;
+  pu[8] = nearCap; pu[9] = Math.max(1, Math.floor(sizes.n / 1000)); pf[10] = -1;
+
+  const bind = (name, list, pipeline = pipes[name]) => device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: list.map((resource, binding) => ({ binding, resource: resource.buffer ? resource : { buffer: resource } })),
+  });
+  // The caller's buffers of kernel `name` at step parity p
+  const cols = (name, p) => columns[name].map(column => (Array.isArray(external[column]) ? external[column][p] : external[column]));
+  const alternates = name => columns[name].some(column => Array.isArray(external[column]));
+  // A kernel that reads alternating buffers gets a bind group per parity
+  const both = (name, list) => (alternates(name) ? [0, 1].map(p => bind(name, list(p))) : bind(name, list(0)));
+  const groups = {
+    TREE_HIST: both('TREE_HIST', p => [TP].concat(cols('TREE_HIST', p), [treeBox])),
+    TREE_BOX: bind('TREE_BOX', [TP, treeBox]),
+    TREE_BIN: both('TREE_BIN', p => [TP].concat(cols('TREE_BIN', p), [treeBox, treeCount, treeWork])),
+    TREE_SCAN_BLOCKS: bind('TREE_SCAN_BLOCKS', [treeCount, treeMeta, treeBlocks]),
+    TREE_SCAN_TOP: bind('TREE_SCAN_TOP', [treeBlocks, nbU]),
+    TREE_SCAN_ADD: bind('TREE_SCAN_ADD', [TP, treeMeta, treeBlocks]),
+    TREE_PLACE: bind('TREE_PLACE', [TP, treeMeta, treeWork]),
+    TREE_ORDER: both('TREE_ORDER', p => [TP].concat(cols('TREE_ORDER', p), [treeWork, treeMeta, treeSp])),
+    TREE_AGG0: bind('TREE_AGG0', [TP, treeSp, treeMeta, treeCells]),
+    TREE_LOCAL: bind('TREE_LOCAL', [TP, treeCells].concat(plan.layout.CNT < 0 ? [treeMeta] : [], step ? [{ buffer: step.buffer, size: step.size }] : [])),
+  };
+  const levels = [];
+  for (let l = 0; l < sizes.levels; l++) {
+    const count = (sizes.G >> (l + 1)) ** D;
+    const u = buf(16, U | CD);
+    device.queue.writeBuffer(u, 0, new Uint32Array([count, sizes.levelOff[l], sizes.levelOff[l + 1], sizes.metaCount]));
+    levels.push({ count, group: bind('TREE_PYR', [u, treeCells].concat(plan.layout.CNT < 0 ? [treeMeta] : [])) });
+  }
+  const errors = await Promise.all([device.popErrorScope(), device.popErrorScope()]);
+  const setupError = errors.find(Boolean);
+  if (setupError) {
+    owned.forEach(b => b.destroy());
+    throw new Error('could not create the tree buffers: ' + setupError.message);
+  }
+
+  const limit = device.limits.maxComputeWorkgroupsPerDimension;
+  // Workgroups for `threads`, as a 2D grid past the per-dimension limit (kernels read the linear id)
+  function grid(threads) {
+    const w = Math.max(1, Math.ceil(threads / WG));
+    if (w <= limit) return [w, 1];
+    const x = limit;
+    return [x, Math.ceil(w / x)];
+  }
+  const nodes = grid(sizes.n), cells = grid(sizes.nCells), locals = grid(sizes.localCells);
+  const histGroups = Math.min(nodes[0] * nodes[1], 128);
+  let parity = 0;
+  function dispatch(pass, name, size) {
+    pass.setPipeline(pipes[name]);
+    pass.setBindGroup(0, Array.isArray(groups[name]) ? groups[name][parity] : groups[name]);
+    pass.dispatchWorkgroups(size[0], size[1]);
+  }
+
+  return {
+    plan,
+    buffers: { treeSp, treeMeta, treeCells, TP },
+    // For the caller's node kernel: dispatch size over the bodies, in the tree's cell order
+    nodeGrid: nodes,
+    // Settings and the law numbers of every channel (compiled laws, after update(); null for
+    // 1/r^2). The law numbers are skipped when the caller's step values hold them.
+    setValues(settings, laws) {
+      pf[10] = settings.gravity;
+      if (laws && plan.lawWords) {
+        plan.groups.forEach(group => {
+          if (group.law) writeLawValues(laws[group.first] || group.law, pf, PARAM_WORDS + group.base);
+        });
+      }
+      device.queue.writeBuffer(TP, 0, params);
+    },
+    // The structure dispatches of one step. `stepOffset`: the dynamic offset of the caller's
+    // step values for this step; `parity`: which buffer of an alternating pair holds this step's
+    // positions (0 or 1).
+    encode(pass, { stepOffset, parity: p = 0 } = {}) {
+      parity = p;
+      dispatch(pass, 'TREE_HIST', [histGroups, 1]);
+      dispatch(pass, 'TREE_BOX', [1, 1]);
+      dispatch(pass, 'TREE_BIN', nodes);
+      dispatch(pass, 'TREE_SCAN_BLOCKS', [sizes.nCells / 1024, 1]);
+      dispatch(pass, 'TREE_SCAN_TOP', [1, 1]);
+      dispatch(pass, 'TREE_SCAN_ADD', cells);
+      dispatch(pass, 'TREE_PLACE', nodes);
+      dispatch(pass, 'TREE_ORDER', nodes);
+      dispatch(pass, 'TREE_AGG0', cells);
+      pass.setPipeline(pipes.TREE_PYR);
+      for (const { count, group } of levels) {
+        pass.setBindGroup(0, group);
+        const size = grid(count);
+        pass.dispatchWorkgroups(size[0], size[1]);
+      }
+      pass.setPipeline(pipes.TREE_LOCAL);
+      if (step && step.dynamic) pass.setBindGroup(0, groups.TREE_LOCAL, [stepOffset || 0]);
+      else pass.setBindGroup(0, groups.TREE_LOCAL);
+      pass.dispatchWorkgroups(locals[0], locals[1]);
+    },
+    boxBuffer: treeBox,
+    destroy() {
+      for (const b of owned) b.destroy();
+    },
+  };
+}
+
+// The laws' lookup tables, as f32 at the start of treeCells
+function writeTables(device, treeCells, plan) {
+  const words = plan.layout.TAB4 * 4;
+  if (!words) return;
+  const data = new Float32Array(words);
+  plan.groups.forEach(group => {
+    (group.tables || []).forEach(table => { data.set(table.values, table.base); });
+  });
+  device.queue.writeBuffer(treeCells, 0, data);
+}

@@ -2,9 +2,13 @@
 // order, cut into kernels by the fusion rules (design section 7), plus where every column lives
 // and what each step's slot of numbers holds. emit.js prints the kernels, engine.js runs them.
 //
-// Regime 'pairs' (this file's only one so far): every tree pass is exact all-pairs inside a node
-// kernel, over tiles of 256 bodies in workgroup memory. Up to the small-graph size the whole step
-// is then one kernel; sums and FIRE add their own small kernels.
+// Regime 'pairs': every tree pass is exact all-pairs inside a node kernel, over tiles of 256
+// bodies in workgroup memory. Up to the small-graph size N* the whole step is then one kernel;
+// sums and FIRE add their own small kernels. In 4 or more dimensions it runs up to 16,384 bodies.
+// Regime 'pyramid' (2D and 3D above N*): the first group of tree passes is the generic grid
+// pyramid (../pyramid): its structure dispatches run right before the node kernel that holds its
+// section, and that kernel runs its threads in the pyramid's cell order (thread t works on row
+// tree_row(t)), so bodies near each other in space run together. Further groups stay exact pairs.
 //
 // Buffers (one binding each per kernel, the same layout for every kernel):
 //   P  uniform: n and counts (written when the data is built)
@@ -18,10 +22,15 @@
 // Every column is a block of `cap` rows (`cap * D` numbers for vectors, row by row), at an
 // offset that is a constant of the WGSL; `cap` leaves room for the graph to grow.
 import { physicsStages } from '../program.js';
+import { planPyramid } from '../pyramid/plan.js';
 
 export const THREADS = 256;
-// Up to this many bodies the exact all-pairs loop runs; larger layouts need a tree (pyramid)
+// Up to this many bodies the whole step is one kernel and repulsion is exact over all pairs
+// (design section 6.1; it measured about 2k on an M4 Max, so this default is conservative)
+export const SMALL_GRAPH = 1024;
+// Up to this many bodies the exact all-pairs loop runs where the pyramid does not (4D and up)
 export const MAX_PAIRS = 16384;
+const AXES = 'xyzw';
 // Floats per slot of the step ring: a multiple of the 256-byte uniform offset alignment
 const SLOT_FLOATS = 64;
 
@@ -29,13 +38,21 @@ const SLOT_FLOATS = 64;
 const SETTING_VALUES = ['n', 'gravity', 'timeStep', 'dragCoefficient', 'springLength', 'springCoefficient', 'maxVelocity'];
 
 /**
- * The generic plan of `program`, or {refusal} when the pairs regime cannot take it (the stages
- * themselves are checked by check.js before). `laws` maps a tree stage's name to its compiled law
- * (null for 1/r^2).
+ * The number at place `index` of the step's slot, in WGSL
  */
-export function genericPlan(program, laws) {
+export function slotValue(index) {
+  return `V[${index >> 2}].${AXES[index & 3]}`;
+}
+
+/**
+ * The generic plan of `program`, or {refusal} when it cannot take it (the stages themselves are
+ * checked by check.js before). `laws` maps a tree stage's name to its compiled law (null for
+ * 1/r^2); `options.limits` the device's (for the pyramid's buffers), `options.warn` takes the
+ * printer's warnings, `options.smallGraph` overrides N* (for measurements).
+ */
+export function genericPlan(program, laws, options = {}) {
   const D = program.dims, n = program.spaces.nodes;
-  if (n > MAX_PAIRS) return { refusal: `WebGPU runs exact repulsion for up to ${MAX_PAIRS.toLocaleString('en-US')} bodies; this layout has ${n.toLocaleString('en-US')}` };
+  const smallGraph = options.smallGraph || SMALL_GRAPH;
   const stages = physicsStages(program);
   const columnInfo = Object.create(null);
   program.columns.nodes.forEach(column => { columnInfo[column.name] = column; });
@@ -71,6 +88,30 @@ export function genericPlan(program, laws) {
   }
   if (sections.filter(s => s.kind === 'euler' || s.kind === 'fire').length !== 1) {
     return { refusal: 'WebGPU needs exactly one integrate stage' };
+  }
+  // A tree pass joins the walk before it when the stages between only add to the force and
+  // don't read it (drag, springs, addRepulsion's default place before integrate): the order of
+  // additions is all that changes
+  for (let k = 0; k < sections.length; k++) {
+    if (sections[k].kind !== 'pairs') continue;
+    let p = k - 1;
+    while (p >= 0 && sections[p].kind !== 'pairs' && onlyAddsForce(sections[p])) p--;
+    if (p >= 0 && sections[p].kind === 'pairs') {
+      sections[p].channels.push(...sections[k].channels);
+      sections.splice(k, 1);
+      k--;
+    }
+  }
+  // Above N* in 2D and 3D, the first group of tree passes walks the pyramid
+  const walks = sections.filter(s => s.kind === 'pairs');
+  const pyramidWalk = n > smallGraph && D <= 3 && walks.length ? walks[0] : null;
+  if (pyramidWalk) pyramidWalk.kind = 'tree';
+  if (n > MAX_PAIRS && sections.some(s => s.kind === 'pairs')) {
+    return {
+      refusal: D > 3
+        ? `WebGPU runs repulsion in ${D}D as exact pairs, for up to ${MAX_PAIRS.toLocaleString('en-US')} bodies (its grid pyramid is 2D and 3D); this layout has ${n.toLocaleString('en-US')}`
+        : `WebGPU's grid pyramid takes one group of tree passes per step above ${MAX_PAIRS.toLocaleString('en-US')} bodies; this step has ${walks.length} (passes next to each other walk together)`,
+    };
   }
 
   // Sums that read nothing an earlier stage of the step writes go first, in one pass
@@ -130,7 +171,7 @@ export function genericPlan(program, laws) {
   // the f64 origin of positions on the device: formulas that read pos itself add it back
   for (let k = 0; k < D; k++) slot.add('setting', 'origin_' + k);
   sections.forEach(section => {
-    if (section.kind === 'pairs') {
+    if (section.kind === 'pairs' || section.kind === 'tree') {
       section.channels.forEach(channel => {
         if (channel.stage.when) channel.gate = slot.add('gate', channel.stage.name);
         if (channel.law) channel.values = slot.addLaw(channel.stage.name, channel.law);
@@ -171,13 +212,15 @@ export function genericPlan(program, laws) {
       continue;
     }
     if (!current) open();
-    // a tile loop reads other rows' charges: a node section earlier in this kernel must not
-    // have written them (rule 2)
-    if (section.kind === 'pairs') {
+    // a tile loop reads other rows' charges, and the pyramid is built from them before its node
+    // kernel: a node section earlier in this kernel must not have written them (rule 2); the
+    // pyramid also orders the threads of its kernel, so a kernel holds at most one
+    if (section.kind === 'pairs' || section.kind === 'tree') {
       const kernelWrites = new Set();
       current.sections.forEach(s => writesOf(s).forEach(column => kernelWrites.add(column)));
       if (section.channels.some(c => kernelWrites.has(c.charge))) { close(); open(); }
     }
+    if (section.kind === 'tree') current.tree = section;
     current.sections.push(section);
     if (section.kind === 'euler') afterIntegrate = true;
     if (section.kind === 'sum') {
@@ -206,13 +249,37 @@ export function genericPlan(program, laws) {
   kernels.forEach(kernel => {
     const names = [];
     (kernel.sections || []).forEach(section => {
-      if (section.kind === 'pairs') section.channels.forEach(c => names.push(c.stage.name));
+      if (section.kind === 'pairs' || section.kind === 'tree') section.channels.forEach(c => names.push(c.stage.name));
       else names.push(section.stage.name);
     });
     if (kernel.kind === 'reduce') kernel.sums.forEach(sum => names.push(sum.name));
     if (kernel.kind === 'fireReduce' || kernel.kind === 'fireState') names.push(integrateName(sections));
     kernelStages[kernel.name] = names;
   });
+  const done = slot.done();
+
+  // The pyramid reads positions and charges from this plan's buffers, and the law numbers and
+  // gravity from the step's slot
+  let pyramid = null;
+  if (pyramidWalk) {
+    const colRef = name => {
+      const column = columns[name];
+      return { buffer: column.buffer, at: row => `${column.buffer}[${column.offset}u + ${row}]` };
+    };
+    pyramid = planPyramid({
+      D, n, limits: options.limits, warn: options.warn,
+      channels: pyramidWalk.channels.map(c => ({ stage: c.stage.name, law: c.law, centroid: 'own', charge: colRef(c.charge) })),
+      pos: { buffer: 'X', at: (row, k) => `X[${row} * ${D}u + ${k}u]` },
+      values: {
+        decl: binding => `@group(0) @binding(${binding}) var<uniform> V: array<vec4f, ${done.floats / 4}>;`,
+        law: (c, k) => slotValue(pyramidWalk.channels[c].values + k),
+        gravity: slotValue(slot.add('setting', 'gravity')),
+      },
+    });
+    if (pyramid.refusal) return { refusal: pyramid.refusal };
+    pyramidWalk.pyramid = pyramid;
+    Object.keys(pyramid.kernels).forEach(name => { kernelStages[name] = pyramidWalk.channels.map(c => c.stage.name); });
+  }
 
   // charges and positions of a tile: D + one per distinct charge column
   let tile = 0;
@@ -222,7 +289,8 @@ export function genericPlan(program, laws) {
 
   return {
     template: 'generic',
-    regime: 'pairs',
+    regime: pyramidWalk ? 'pyramid' : 'pairs',
+    pyramid,
     D,
     nodes: n,
     links: program.spaces.links,
@@ -233,7 +301,7 @@ export function genericPlan(program, laws) {
     sumWidth,
     S: { size: sSize, fire, firePartials, partials },
     H: { size: hSize },
-    slot: slot.done(),
+    slot: done,
     sections,
     skipped,
     kernelList: kernels,
@@ -266,7 +334,7 @@ function integrateArgs(sections) {
 // Body columns a section reads (own or other rows)
 export function readsOf(section) {
   const out = new Set();
-  if (section.kind === 'pairs') {
+  if (section.kind === 'pairs' || section.kind === 'tree') {
     section.channels.forEach(c => { out.add(c.charge); out.add(c.sensitivity); });
     out.add('pos'); out.add('pinned');
     return out;
@@ -279,9 +347,17 @@ export function readsOf(section) {
 // Body columns a section writes
 export function writesOf(section) {
   const out = new Set();
-  if (section.kind === 'pairs') { out.add('force'); return out; }
+  if (section.kind === 'pairs' || section.kind === 'tree') { out.add('force'); return out; }
   section.stage.writes.forEach(write => { if (write.space === 'nodes') out.add(write.column); });
   return out;
+}
+
+// True for a section that writes nothing but additions to the force, and does not read it
+function onlyAddsForce(section) {
+  if (section.kind === 'sum' || section.kind === 'euler' || section.kind === 'fire' || !section.stage) return false;
+  const stage = section.stage;
+  return stage.writes.every(write => write.space !== 'nodes' || (write.column === 'force' && write.mode === 'add')) &&
+    !stage.reads.some(read => read.space === 'nodes' && read.column === 'force');
 }
 
 function readsAny(stage, columns) {

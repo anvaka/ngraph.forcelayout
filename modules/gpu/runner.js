@@ -15,10 +15,11 @@
 // Errors halt the runner and fire 'error'; nothing falls back to the CPU on its own.
 //
 // The runner drives an engine (the stock grid template, templates/stock.js, or a generic plan,
-// generic/engine.js) through one interface: prepare(hostOwns) uploads, run(count, firstStep, …)
-// encodes steps, copyPositions()/readPositions() read back, readDevice() syncs.
+// generic/engine.js) through one interface: prepare(hostOwns, steps) uploads, run(count,
+// firstStep, …) encodes steps, copyPositions()/readPositions() read back, readDevice() syncs.
 import { watchDevice, submitCost } from './device.js';
 import { GUARD } from './program.js';
+import { DEVICE_LOST } from './check.js';
 import { createStockEngine } from './templates/stock.js';
 import { createGenericEngine } from './generic/engine.js';
 
@@ -43,6 +44,7 @@ export async function runOnGpu(layout, backend) {
   if (!backend || !backend.device) throw new Error('runOnGpu() needs a backend from createWebGPUBackend()');
   const simulator = layout.simulator;
   if (simulator.getStage(GUARD)) throw new Error('this layout already runs on the GPU');
+  if (watchDevice(backend.device).lost) throw refusal([DEVICE_LOST]);
   const plan = simulator.plan(backend);
   if (!plan.runs) throw refusal(plan.reasons);
   const runner = createRunner(layout, backend);
@@ -211,7 +213,7 @@ function createRunner(layout, backend) {
       }
       linkVersions = LINK_COLUMNS.map(name => springStore.versions[name]);
     }
-    const prepared = engine.prepare(hostOwns);
+    const prepared = engine.prepare(hostOwns, queued);
     hostOwns = false;
     if (prepared === 'sync') { syncPoint(); return false; }
     if (prepared && prepared.halt) { halt({ message: prepared.halt, kernel: null, stages: [] }); return false; }
@@ -274,15 +276,21 @@ function createRunner(layout, backend) {
       rb.buffer.unmap();
       if (rb.engine === engine) free.push(rb); else rb.buffer.destroy();
       afterReadback();
-    }).catch(() => { /* destroyed, or the device was lost */ });
+    }, () => { /* destroyed, or the device was lost */ }).catch(error => {
+      // a bug here, or a listener that threw: say so, rather than stop reading back in silence
+      if (rb.buffer.mapState === 'mapped') rb.buffer.unmap();
+      if (rb.engine === engine && free.indexOf(rb) < 0) free.push(rb);
+      halt({ message: 'reading positions back failed: ' + error.message, kernel: null, stages: [] });
+    });
   }
 
-  // Positions after `steps` into the store
+  // Positions after `steps` into the store. The movement is unknown (null) across graph edits:
+  // lastMove then stays as it was, rather than read as a layout at rest
   function apply(serial, steps, positions, inStoreOrder) {
     appliedSerial = serial;
     const done = steps - appliedSteps;
-    const move = engine.readPositions(positions, Math.max(1, done), inStoreOrder);
-    if (done > 0) lastMove = move;
+    const move = engine.readPositions(positions, Math.max(1, done), inStoreOrder, steps);
+    if (done > 0 && move !== null) lastMove = move;
     appliedSteps = steps;
     simulator.iteration(firstStep + steps);
   }
@@ -315,7 +323,11 @@ function createRunner(layout, backend) {
       wasStable = isStable;
       layout.fire('stable', isStable);
     }
-    emit('readback', { steps: firstStep + appliedSteps, lastMove });
+    try {
+      emit('readback', { steps: firstStep + appliedSteps, lastMove });
+    } catch (e) {
+      halt({ message: "a 'readback' listener failed: " + e.message, kernel: null, stages: [] });
+    }
   }
 
   /**

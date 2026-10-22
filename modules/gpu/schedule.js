@@ -4,24 +4,22 @@
 //  - The exact stock step (clear, repulsion, drag, springs, integrate, with the mass as charge,
 //    sensitivity and inertia) in 2D above the small-graph size N* runs today's grid engine, the
 //    stock template, byte for byte (templates/grid.js).
-//  - Everything else is a generic plan (generic/plan.js): node kernels in CPU stage order, with
-//    every tree pass as exact pairs over tiles. Up to N* the whole step is one kernel.
+//  - Everything else is a generic plan (generic/plan.js): node kernels in CPU stage order. Up to
+//    N* the whole step is one kernel with exact pairs; above it, in 2D and 3D, tree passes walk
+//    the generic grid pyramid (pyramid/).
 import { gridBuffers, shaderCode as gridCode, KERNEL_STAGES as GRID_STAGES, LAW_VALUES } from './templates/grid.js';
-import { genericPlan } from './generic/plan.js';
+import { genericPlan, SMALL_GRAPH } from './generic/plan.js';
 import { kernelCode } from './generic/emit.js';
 import { GUARD, STOCK_STAGES, isGuard, physicsStages } from './program.js';
 import { lawValueCount } from './wgsl/print.js';
 
-export { GUARD, STOCK_STAGES, isGuard, physicsStages };
-
-// Up to this many bodies the whole step is one kernel (design section 6.1; it measured about 2k
-// on an M4 Max, so this default is conservative)
-export const SMALL_GRAPH = 1024;
+export { GUARD, STOCK_STAGES, isGuard, physicsStages, SMALL_GRAPH };
 
 /**
  * The plan for `program`, or {refusal}. `laws` maps every tree stage to its compiled law (null for
  * 1/r^2); `limits` a device's or a capability profile's; `options.generic` keeps the stock step
- * off its template (for tests that compare the two). A plan has {template, nodes, buffers,
+ * off its template (for tests that compare the two), `options.smallGraph` overrides N* (for
+ * measurements). A plan has {template, nodes, buffers,
  * kernels(), kernelStages, how, reads}:
  *  - buffers: bytes per buffer; kernels(): the WGSL of every kernel by name;
  *  - kernelStages: the stages each kernel computes; how: per stage, for plan();
@@ -29,14 +27,15 @@ export const SMALL_GRAPH = 1024;
  */
 export function schedule(program, laws, limits, options = {}) {
   const nodes = program.spaces.nodes;
-  if (!options.generic && nodes > SMALL_GRAPH && isStockStep(program, laws)) return stockPlan(program, laws.repulsion || null);
-  const plan = genericPlan(program, laws);
+  const smallGraph = options.smallGraph || SMALL_GRAPH;
+  if (!options.generic && nodes > smallGraph && isStockStep(program, laws)) return stockPlan(program, laws.repulsion || null);
+  const plan = genericPlan(program, laws, { limits, warn: options.warn, smallGraph });
   if (plan.refusal) return plan;
-  plan.buffers = {
+  plan.buffers = Object.assign({
     S: plan.S.size * 4, H: plan.H.size * 4, X: plan.cap * plan.D * 4, Y: plan.cap * plan.D * 4,
     L: (nodes + 1 + 2 * program.spaces.links) * 4, V: plan.slot.bytes,
-  };
-  plan.kernels = printer => kernelCode(plan, printer);
+  }, plan.pyramid ? plan.pyramid.buffers : {});
+  plan.kernels = printer => Object.assign(kernelCode(plan, printer), plan.pyramid ? plan.pyramid.kernels : {});
   plan.how = genericHow(plan);
   plan.reads = Object.keys(plan.columns);
   return plan;
@@ -50,6 +49,8 @@ export function isStockStep(program, laws) {
   if (program.dims !== 2) return false;
   const stages = physicsStages(program);
   if (stages.map(stage => stage.builtIn).join() !== STOCK_STAGES.join()) return false;
+  // the template has no gates
+  if (stages.some(stage => stage.when)) return false;
   const repulsion = stages[1].args.channels[0];
   if (repulsion.charge !== 'mass' || repulsion.sensitivity !== 'mass') return false;
   if (stages[4].args.inertia !== 'mass') return false;
@@ -91,6 +92,12 @@ function genericHow(plan) {
     kernel.sections.forEach(section => {
       if (section.kind === 'pairs') {
         section.channels.forEach(c => { how[c.stage.name] = `exact pairs over tiles of 256 bodies, in ${where}`; });
+        return;
+      }
+      if (section.kind === 'tree') {
+        const count = section.channels.length;
+        const walk = count > 1 ? ` (${count} charges in one walk)` : '';
+        section.channels.forEach(c => { how[c.stage.name] = `grid pyramid${walk}: ${section.pyramid.dispatches} structure dispatches, then exact pairs in the near cells and the far field in ${where}`; });
         return;
       }
       const name = section.stage.name;
