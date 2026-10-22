@@ -13,8 +13,7 @@ export default defineConfig({
     // Add-ons that live next to the library in this repository, imported by their package names
     alias: {
       'ngraph.forcelayout.pivot': path.join(libraryRoot, 'modules/pivot/index.js'),
-      'ngraph.forcelayout.gpu': path.join(libraryRoot, 'modules/gpu/index.js'),
-      'ngraph.forcelayout.gridfield': path.join(libraryRoot, 'modules/gridfield/index.js')
+      'ngraph.forcelayout.gpu': path.join(libraryRoot, 'modules/gpu/index.js')
     }
   },
   // The dev server may serve files from the whole repository, not only demo/
