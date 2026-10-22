@@ -184,6 +184,8 @@ function createLayout(graph, physicsSettings) {
   };
 
   eventify(api);
+  // program() lists the layout's 'step' listeners too: other engines call them less often
+  if (physicsSimulator.watchListeners) physicsSimulator.watchListeners(api);
 
   return api;
 
