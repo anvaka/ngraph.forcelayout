@@ -1,6 +1,6 @@
-import createLeafFadeForce from './leafFadeForce.js';
+import addLeafFade from './leafFade.js';
 
-// Leaves push only nearby nodes. See leafFadeForce.js for the force itself.
+// Leaves push only nearby nodes. See leafFade.js for the force itself.
 export default {
   id: 'ru-1-leaf-fade',
   title: 'Leaf pushes fade (short reach)',
@@ -22,8 +22,7 @@ within a few nodes.</p>
 overlap in leafy trees (paTree3k: 0.07 → 0.30 crossings per link), graphs with many pieces (CSphd)
 draw their main piece smaller, and each step costs about 1.6–2× stock. <i>Fade every push</i> = 1
 packs the stars tighter, but trees and sheets stop unfolding (paTree3k: 0.85 crossings per link).
-It works in 2D only and ignores the Repulsion setting: with dual tree it still computes the pushes
-its own way, about 8–10× slower than none.</p>`,
+It works in 2D only. Its pushes always walk one quad tree, whichever Repulsion method is picked.</p>`,
   tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: grid20'],
   params: [
     {
@@ -46,10 +45,8 @@ its own way, about 8–10× slower than none.</p>`,
     const fadeAll = Number(params.fadeAll) > 0;
     // Without leaves there is nothing to fade: keep the stock force, so the layout is identical
     if (!fadeAll && !hasLeaves(graph)) return null;
-    // Our push replaces the library's repulsion, whichever Repulsion setting is picked
-    const force = createLeafFadeForce(layout.simulator, { reach, fadeAll });
-    layout.simulator.replaceStage('repulsion', force.update);
-    return {};
+    const remove = addLeafFade(layout, { reach, fadeAll });
+    return { dispose: remove };
   },
 };
 

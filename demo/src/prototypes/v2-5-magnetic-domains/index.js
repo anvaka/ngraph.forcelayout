@@ -1,12 +1,12 @@
 // Magnetic domains decide who repels whom (reader v2-5, Feynman Lectures Vol. 2, Ch. 35-36).
 // 1. Once per layout: every node gets a small arrow; arrows turn toward their neighbors' average
 //    until they settle into domains (domains.js).
-// 2. Every step: nodes whose arrows disagree push each other harder (domainRepulsion.js).
+// 2. Every step: nodes whose arrows disagree push each other harder (domainPasses.js).
 // A gate leaves graphs without dense groups alone: grids, meshes and trees (no sharp walls
 // between domains), random graphs (domains no better than chance) and tree-like graphs. It also
 // stays off when the temperature is too high for domains to form.
 import { computeDomains, describeDomains, arrowGroups } from './domains.js';
-import createDomainRepulsion from './domainRepulsion.js';
+import addDomainPasses from './domainPasses.js';
 
 // Node colors by domain, largest domain first, then cycling
 const PALETTE = [0xf28e2bff, 0xe15759ff, 0xedc948ff, 0x59a14fff, 0xff9da7ff, 0xb07aa1ff, 0x76b7b2ff, 0xffffffff, 0x9c755fff, 0xbab0acff];
@@ -102,14 +102,7 @@ nothing, and the browser console says why.</p>`,
     }
     console.info(`[magnetic domains] on: ${summary}`);
 
-    const simulator = layout.simulator;
-    const repulsion = createDomainRepulsion(bodies, spins, {
-      boost,
-      getTheta: () => simulator.theta(),
-      getGravity: () => simulator.gravity()
-    });
-    const forceName = 'v2-5-domain-repulsion';
-    simulator.addStage(forceName, repulsion.apply);
+    const remove = addDomainPasses(layout, spins, bodies, boost);
 
     // The domains are final from the start (computed above), so colors don't change while it runs
     const size = new Map();
@@ -124,9 +117,7 @@ nothing, and the browser console says why.</p>`,
       nodeColor(nodeId) {
         return colorOfNode.get(nodeId) || 0;
       },
-      dispose() {
-        simulator.removeStage(forceName);
-      }
+      dispose: remove
     };
   }
 };

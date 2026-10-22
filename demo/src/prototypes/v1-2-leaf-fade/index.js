@@ -1,8 +1,8 @@
-import createLeafFadeTree from './createLeafFadeTree.js';
+import addLeafFade from './leafFade.js';
 
-// Replaces the layout's repulsion stage with one where pushes that involve a leaf fade with
-// distance. Springs, drag and the integrator stay as they are; the Repulsion (nbody) setting
-// is ignored, since this uses its own quad tree.
+// Makes the pushes that involve a leaf fade with distance (see leafFade.js). Springs, drag and the
+// integrator stay as they are; the pushes always walk one quad tree, whichever Repulsion (nbody)
+// setting is picked.
 export default {
   id: 'v1-2-leaf-fade',
   title: 'Only leaf pushes fade',
@@ -40,38 +40,10 @@ as long as the dual tree.</p>`,
     const simulator = layout.simulator;
     if (!simulator.getStage('repulsion')) return null;
 
-    const tree = createLeafFadeTree();
-    const random = simulator.random;
-    const out = new Float64Array(2);
     const fadeLength = numberOr(params.fade, 3, 0);         // 0: leaves don't push at all
     const leafLinks = numberOr(params.leafLinks, 1, 0);     // 0: nothing fades
-    let isLeaf = new Uint8Array(0);
-
-    // Swap the repulsion in place: the drag stage and springs still run after it
-    simulator.replaceStage('repulsion', leafFadeRepulsion);
-    return {};
-
-    function leafFadeRepulsion(store) {
-      const n = store.n;
-      if (n === 0) return;
-      const s = simulator.settings;
-      // A body is a leaf when it has 1..leafLinks springs
-      if (isLeaf.length < n) isLeaf = new Uint8Array(store.capacity);
-      const degree = store.degree;
-      for (let i = 0; i < n; ++i) isLeaf[i] = degree[i] >= 1 && degree[i] <= leafLinks ? 1 : 0;
-      tree.build(store, isLeaf);
-      // A spring length of 0 or less (e.g. while typing in the panel) gives no reach at all
-      const fade = s.springLength > 0 ? fadeLength * s.springLength : 0;
-      const cutoff = 6 * fade; // exp(-6) is 0.25%: farther faded pushes are dropped
-      const force = store.force, pinned = store.pinned;
-      for (let i = 0; i < n; ++i) {
-        if (pinned[i]) continue;
-        out[0] = 0; out[1] = 0;
-        tree.force(i, s.gravity, s.theta, fade, cutoff, random, out);
-        force[2 * i] += out[0];
-        force[2 * i + 1] += out[1];
-      }
-    }
+    const remove = addLeafFade(layout, { fadeLength, leafLinks });
+    return { dispose: remove };
   },
 };
 
