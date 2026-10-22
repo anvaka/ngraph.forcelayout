@@ -229,12 +229,12 @@ Text only, with plain node (no device):
 ```
 node modules/gpu/test/check.js    # plan() verdicts, refusals and budgets
 node modules/gpu/test/print.js    # the printer: numbers agree with JS, literals, names, every builtin
-node modules/gpu/test/laws.js     # laws through the printer
 node modules/gpu/test/t3.js       # law WGSL against what the library printed (48 pairs)
 node modules/gpu/test/t4.js       # today's grid kernels, byte for byte (16 laws)
 node modules/gpu/test/pyramid.js  # the pyramid's plans, refusals and WGSL
 node modules/gpu/test/pairs.js    # the pair lowering's plans and WGSL
 node modules/gpu/test/grid.js     # the grid field's plans and WGSL
+node modules/gpu/test/order.js    # the device's row order for large layouts
 node modules/gpu/test/t8.js <demo root>   # every idea of the demo: active and running, 2D and 3D
 ```
 
