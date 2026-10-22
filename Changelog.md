@@ -35,7 +35,8 @@ the README):
   middle of a step, at its place among the stages.
 * `inertia` setting and `simulator.inertia(name)` - forces are divided by this column (the mass
   by default) when bodies move.
-* `startAtZero` for link and pair formulas, and `axis(k)` in formulas.
+* `startAtZero` for link and pair formulas, and `axis(k)` in formulas. Link formulas can set
+  their link's `coefficient` and `length`, and run as fast as the stock springs.
 * A `'settings'` event from the setters, and column versions (`store.versions`,
   `store.changed(name)`) for engines that keep their own copy of the numbers. Setters of bodies
   and springs mark their column, positions set with `setNodePosition()` included.
