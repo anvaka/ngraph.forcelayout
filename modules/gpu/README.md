@@ -64,9 +64,10 @@ if (plan.runs) {
 ```
 
 - **`createWebGPUBackend({device})`** uses your device, or requests one with the adapter's limits
-  and timestamp queries. Once per device it also checks that the compiler keeps the grid field's
-  exact arithmetic (about 50 ms). `gpuCapabilities(limits)` is a backend without a device, for
-  `plan()` in tests or on a server.
+  and timestamp queries. It also starts a check, once per device and in the background, that the
+  compiler keeps the grid field's exact arithmetic: until it is done, `plan()` says a grid stage
+  is pending it, and `runOnGpu()` waits for it on layouts with a grid field. `gpuCapabilities(limits)`
+  is a backend without a device, for `plan()` in tests or on a server.
 - **`simulator.plan(backend)`** gives `{runs, reasons, warnings, stages}`; `stages[name]` is
   `{runs, how}` or `{runs: false, reason}`.
 - **`gpu.step(n)`** queues `n` steps and submits their work. The layout's `'step'` event fires once
