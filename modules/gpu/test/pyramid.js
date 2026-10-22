@@ -32,8 +32,8 @@ function storageBindings(code) {
   return (code.match(/var<storage\b/g) || []).length;
 }
 
-test('grids: 2D as the stock template, 3D with about two cells per body', () => {
-  assert.deepEqual([1000, 10000, 100000, 1000000].map(n => chooseGrid(n, 2)), [32, 128, 256, 1024]);
+test('grids: 2D as the stock template (twice as fine up to 8,192 bodies), 3D with about two cells per body', () => {
+  assert.deepEqual([1000, 7237, 8192, 10000, 100000, 1000000].map(n => chooseGrid(n, 2)), [64, 128, 128, 128, 256, 1024]);
   assert.deepEqual([1000, 7237, 100000, 1000000].map(n => chooseGrid(n, 3)), [16, 32, 64, 64]);
   const p = plan(3, 100000, stock);
   assert.equal(p.refusal, null);
