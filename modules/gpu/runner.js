@@ -13,12 +13,14 @@
 // edit, or a change of the step's structure, is a sync point: the device's numbers come back,
 // the data is rebuilt from the store and the pipelines are fetched again (cached by their text).
 // Errors halt the runner and fire 'error'; nothing falls back to the CPU on its own.
+//
+// The runner drives an engine (the stock grid template, templates/stock.js, or a generic plan,
+// generic/engine.js) through one interface: prepare(hostOwns) uploads, run(count, firstStep, …)
+// encodes steps, copyPositions()/readPositions() read back, readDevice() syncs.
 import { watchDevice, submitCost } from './device.js';
-import { GUARD } from './schedule.js';
-import { createGridEngine } from './templates/grid.js';
-import { createSmallEngine } from './templates/small.js';
-import { lawValueCount, writeLawValues, lawValueProblem, lawValueWarnings } from './wgsl/print.js';
-import { readLayout, writePositions, writeVelocities, writeMasses, readPositions, readVelocities, rowsMoved } from './buffers.js';
+import { GUARD } from './program.js';
+import { createStockEngine } from './templates/stock.js';
+import { createGenericEngine } from './generic/engine.js';
 
 const READBACK_BUFFERS = 3;
 const STATS_WINDOW = 30;
@@ -27,14 +29,8 @@ const DEFAULT_BATCH = 64;
 const MAX_BATCH = 1024;
 // A submit holds at most this much GPU work, far below the 2-second watchdog
 const MAX_SUBMIT_MS = 100;
-// Settings the stock templates read from their uniforms
-const SETTINGS = ['gravity', 'springLength', 'springCoefficient', 'dragCoefficient', 'timeStep', 'maxVelocity', 'integrator'];
-// More rows written by the host than this go up whole (see uploadRows())
-const MAX_ROW_WRITES = 4096;
-// The stock step's repulsion stage, whose law the templates compile
-const REPULSION = 'repulsion';
-// Columns the stock templates read: a 'step' listener that changes one changes the physics
-const NODE_COLUMNS = ['pos', 'velocity', 'mass', 'pinned'];
+// Settings that change the physics: a 'step' listener must not change them
+const PHYSICS_SETTINGS = ['gravity', 'springLength', 'springCoefficient', 'dragCoefficient', 'timeStep', 'maxVelocity', 'integrator', 'theta'];
 const LINK_COLUMNS = ['from', 'to', 'length', 'coefficient'];
 
 /**
@@ -75,8 +71,7 @@ function createRunner(layout, backend) {
   const listeners = { readback: [], error: [] };
 
   let lowering = null;     // check.js lower(): the plan the engine runs
-  let engine = null, data = null;
-  let law = null, lawValues = null, lawCount = 0;
+  let engine = null;
   let firstStep = simulator.iteration(); // the simulator's step count when the GPU took over
   let queued = 0;          // steps submitted to the device
   let pending = 0;         // steps asked for while the runner was busy
@@ -85,10 +80,10 @@ function createRunner(layout, backend) {
   let hostOwns = false;    // after sync(): the store is the truth until the next step()
   let topologyChanged = false, settingsChanged = false;
   let structure = null;    // the stages the plan was made from, to notice changes cheaply
-  let uploaded = {};       // column versions on the device
-  let written = {};        // settings in the uniforms
+  let linkVersions = null; // link columns as built
   let fireState = null;    // FIRE's (alpha, steps downhill, ...) from the last sync
   let submitMs = 0;
+  let marks = null;        // what a 'step' listener must not change
 
   // Readbacks: positions after a batch, and (with timestamp queries) its GPU time
   const free = [], all = [];
@@ -128,7 +123,7 @@ function createRunner(layout, backend) {
     get lastMove() { return lastMove; },
     get halted() { return halted; },
     // For the test harness: the buffers the last kernel of every step writes
-    _debug: { get fence() { return engine ? [engine.pos] : []; } },
+    _debug: { get fence() { return engine ? engine.fence : []; } },
   };
 
   return { start, api };
@@ -169,24 +164,12 @@ function createRunner(layout, backend) {
     if (!lowering.runs) throw refusal(reasonsOf(lowering));
     const plan = lowering.plan;
     structure = stageSnapshot(program.version);
-    law = plan.law;
-    lawCount = law ? lawValueCount(law) : 0;
-    lawValues = law ? new Float32Array(lawCount) : null;
-    data = readLayout(simulator, plan.template === 'grid');
-    keepCopies(data.init.slice());
-    const create = plan.template === 'small' ? createSmallEngine : createGridEngine;
-    const next = data.n > 0 ? await create(device, {
-      n: data.n, edges: data.edges, init: data.init, mass: data.mass, law, variants: plan.perStep,
-    }) : null;
+    linkVersions = LINK_COLUMNS.map(name => springStore.versions[name]);
+    marks = markList(plan);
+    const create = plan.template === 'grid' ? createStockEngine : createGenericEngine;
+    const next = store.n > 0 ? await create(device, { simulator, plan, fireState, warn: warnOnce }) : null;
     if (released) { if (next) next.destroy(); return; }
     engine = next;
-    written = {};
-    writeSettings();
-    if (engine) {
-      device.queue.writeBuffer(engine.vel, 0, data.velocity);
-      if (fireState) engine.setFire(fireState);
-    }
-    uploaded = versions();
     hostOwns = false;
     settingsChanged = false;
     lastReadSteps = queued;
@@ -213,199 +196,49 @@ function createRunner(layout, backend) {
       syncPoint();
       return false;
     }
-    if (settingsChanged || settingsDiffer()) writeSettings();
+    settingsChanged = false;
     if (!engine) return true;
-    const now = versions();
-    if (now.from !== uploaded.from || now.to !== uploaded.to) {
+    if (springStore.versions.from !== linkVersions[0] || springStore.versions.to !== linkVersions[1]) {
       syncPoint();
       return false;
     }
-    if (now.length !== uploaded.length || now.coefficient !== uploaded.coefficient) {
+    if (springStore.versions.length !== linkVersions[2] || springStore.versions.coefficient !== linkVersions[3]) {
       // a change mark re-plans: links may now have their own lengths
       const verdict = backend.lower(simulator.program(), simulator);
       if (!verdict.runs) {
         halt({ message: refusal(reasonsOf(verdict)).message, kernel: null, stages: ['springs'] });
         return false;
       }
+      linkVersions = LINK_COLUMNS.map(name => springStore.versions[name]);
     }
-    if (hostOwns) {
-      // the store is the truth: what sync() read and what the host wrote since
-      const positions = writePositions(store, data, new Float32Array(2 * data.n));
-      device.queue.writeBuffer(engine.pos, 0, positions);
-      device.queue.writeBuffer(engine.vel, 0, writeVelocities(store, data.toInternal, new Float32Array(4 * data.n)));
-      keepCopies(positions);
-    } else {
-      // between syncs the device is ahead of the store: only rows the host wrote go up
-      if (now.pos !== uploaded.pos) uploadRows(positionRows(), 'pos');
-      if (now.velocity !== uploaded.velocity || now.pinned !== uploaded.pinned) uploadRows(velocityRows(), 'vel');
-    }
-    if (now.mass !== uploaded.mass) device.queue.writeBuffer(engine.mass, 0, writeMasses(store, data, new Float32Array(data.n)));
-    uploaded = now;
+    const prepared = engine.prepare(hostOwns);
     hostOwns = false;
+    if (prepared === 'sync') { syncPoint(); return false; }
+    if (prepared && prepared.halt) { halt({ message: prepared.halt, kernel: null, stages: [] }); return false; }
     return true;
-  }
-
-  // What the module last put into the store or on the device, to find the rows the host wrote
-  // between syncs (their column versions say that something changed, not where): positions as
-  // the device has them (f32, relative to the origin), velocities and pinned flags as uploaded
-  function keepCopies(positions) {
-    const n = data.n;
-    data.positions = positions;
-    data.velocities = Float64Array.from(store.velocity.subarray(0, 2 * n));
-    data.pinned = Uint8Array.from(store.pinned.subarray(0, n), value => (value ? 1 : 0));
-  }
-
-  function positionRows() {
-    const pos = store.pos, copy = data.positions, { toInternal, origin } = data, rows = [];
-    for (let i = 0; i < data.n; i++) {
-      const k = 2 * toInternal[i];
-      if (Math.fround(pos[2 * i] - origin.x) !== copy[k] || Math.fround(pos[2 * i + 1] - origin.y) !== copy[k + 1]) rows.push(i);
-    }
-    return rows;
-  }
-
-  function velocityRows() {
-    const v = store.velocity, pinned = store.pinned, rows = [];
-    for (let i = 0; i < data.n; i++) {
-      if (v[2 * i] !== data.velocities[2 * i] || v[2 * i + 1] !== data.velocities[2 * i + 1] || (pinned[i] ? 1 : 0) !== data.pinned[i]) rows.push(i);
-    }
-    return rows;
-  }
-
-  // Rows the host wrote since the last upload keep the host's numbers when the device's come back
-  // (the next step() uploads them), unless graph edits moved the rows
-  function keepingHostWrites(read) {
-    const marked = uploaded.pos !== undefined && !rowsMoved(simulator, data);
-    const posRows = marked && store.versions.pos !== uploaded.pos ? positionRows() : [];
-    const velRows = marked && store.versions.velocity !== uploaded.velocity ? velocityRows() : [];
-    const pos = posRows.map(i => [store.pos[2 * i], store.pos[2 * i + 1]]);
-    const vel = velRows.map(i => [store.velocity[2 * i], store.velocity[2 * i + 1]]);
-    read();
-    posRows.forEach((i, j) => { store.pos[2 * i] = pos[j][0]; store.pos[2 * i + 1] = pos[j][1]; });
-    velRows.forEach((i, j) => { store.velocity[2 * i] = vel[j][0]; store.velocity[2 * i + 1] = vel[j][1]; });
-  }
-
-  // Writes the store's rows `rows` of positions or velocities (with the pinned flag) to the
-  // device, one by one; when the host wrote many, the whole column goes up
-  function uploadRows(rows, column) {
-    const n = data.n, toInternal = data.toInternal;
-    if (column === 'pos') {
-      if (rows.length > MAX_ROW_WRITES) {
-        device.queue.writeBuffer(engine.pos, 0, writePositions(store, data, data.positions));
-        return;
-      }
-      const one = new Float32Array(2), pos = store.pos;
-      for (const i of rows) {
-        const k = toInternal[i];
-        one[0] = data.positions[2 * k] = pos[2 * i] - data.origin.x;
-        one[1] = data.positions[2 * k + 1] = pos[2 * i + 1] - data.origin.y;
-        device.queue.writeBuffer(engine.pos, k * 8, one);
-      }
-      return;
-    }
-    if (rows.length > MAX_ROW_WRITES) {
-      device.queue.writeBuffer(engine.vel, 0, writeVelocities(store, toInternal, new Float32Array(4 * n)));
-    } else {
-      const one = new Float32Array(4), v = store.velocity, pinned = store.pinned;
-      for (const i of rows) {
-        one[0] = v[2 * i]; one[1] = v[2 * i + 1]; one[3] = pinned[i] ? 1 : 0;
-        device.queue.writeBuffer(engine.vel, toInternal[i] * 16, one);
-      }
-    }
-    data.velocities = Float64Array.from(store.velocity.subarray(0, 2 * n));
-    data.pinned = Uint8Array.from(store.pinned.subarray(0, n), value => (value ? 1 : 0));
   }
 
   // Encodes `count` steps in as few submits as the batching allows, and reads positions back
   function run(count) {
     if (!engine) { queued += count; return; }
-    let lawSteps = null;
-    if (law) {
-      const perStep = lowering.plan.perStep ? stepValues(count) : null;
-      if (perStep === false) return; // halted on a value
-      if (perStep && perStep.count < count) {
-        // the values went bad at a step: run the steps before it
-        count = perStep.count;
-        if (count === 0) return;
-      }
-      if (perStep && !perStep.same) lawSteps = (s, out, offset) => out.set(perStep.values.subarray(s * lawCount, (s + 1) * lawCount), offset);
-      else if (!perStep && !updateStaticLaw()) return;
-    }
     const rb = free.pop();
     const withTs = !!rb && timestamps;
-    const n = data.n;
-    engine.run(count, {
+    const at = timestampsAt(engine.positionBytes);
+    const result = engine.run(count, firstStep + queued, {
       timestampWrites: withTs ? { querySet } : null,
       perSubmit: stepsPerSubmit(),
-      lawSteps,
       beforeFinish: rb ? enc => {
-        enc.copyBufferToBuffer(engine.pos, 0, rb.buffer, 0, n * 8);
+        rb.ordered = engine.copyPositions(enc, rb.buffer, 0, count);
         if (withTs) {
           enc.resolveQuerySet(querySet, 0, 2, resolveBuffer, 0);
-          enc.copyBufferToBuffer(resolveBuffer, 0, rb.buffer, n * 8, 16);
+          enc.copyBufferToBuffer(resolveBuffer, 0, rb.buffer, at, 16);
         }
       } : null,
     });
-    queued += count;
-    if (rb) readBack(rb, count, withTs);
-  }
-
-  // The law's numbers when they cannot change within a batch: once per call, written when they
-  // changed. False when a number does not fit f32 (the runner halts).
-  function updateStaticLaw() {
-    const at = firstStep + queued;
-    const values = lawValuesAt(at);
-    if (!checkValues(values, at)) return false;
-    const fresh = new Float32Array(lawCount);
-    writeLawValues(law, fresh, 0, values);
-    if (!sameValues(fresh, lawValues)) {
-      lawValues = fresh;
-      engine.setLawValues(lawValues);
-    }
-    return true;
-  }
-
-  // The law's numbers for each of the next `count` steps, evaluated with that step's context:
-  // {values, count, same}. `same`: every step has the numbers in the uniforms, so the batch runs
-  // as usual. `count` is smaller than asked when a number went bad at that step (the runner then
-  // halts after the steps before it); false when that is the first step.
-  function stepValues(count) {
-    const values = new Float32Array(count * lawCount);
-    let same = true;
-    for (let s = 0; s < count; s++) {
-      const at = firstStep + queued + s;
-      const numbers = lawValuesAt(at);
-      if (!checkValues(numbers, at)) {
-        if (s === 0) return false;
-        return { values, count: s, same: false };
-      }
-      writeLawValues(law, values, s * lawCount, numbers);
-      if (same && !sameValues(values.subarray(s * lawCount, (s + 1) * lawCount), lawValues)) same = false;
-    }
-    if (same) return { values, count, same };
-    // the uniforms get the last step's numbers, so a batch that follows with the same numbers
-    // runs the usual pipelines
-    lawValues = values.slice((count - 1) * lawCount, count * lawCount);
-    engine.setLawValues(lawValues);
-    return { values, count, same };
-  }
-
-  // The law's numbers of step `at` (a copy of their own), from the simulator
-  function lawValuesAt(at) {
-    const out = simulator.stageValues(REPULSION, simulator.stepContext(at));
-    return out.lawValues || Object.assign({}, out.law.values);
-  }
-
-  // The law's numbers of step `at` must fit f32: a bad one halts the runner, naming the number
-  // and the step; one that underflows warns once
-  function checkValues(values, at) {
-    const problem = lawValueProblem(law, values);
-    if (problem) {
-      halt({ message: `the law's ${problem.name} is ${problem.problem} at step ${at}`, kernel: null, stages: [REPULSION] });
-      return false;
-    }
-    lawValueWarnings(law, values).forEach(warnOnce);
-    return true;
+    queued += result.ran;
+    if (result.ran && rb) readBack(rb, result.ran, withTs);
+    else if (rb) free.push(rb);
+    if (result.halt) halt({ message: result.halt.message, kernel: null, stages: result.halt.stages || [] });
   }
 
   // Steps per submit: as many as fit in MAX_SUBMIT_MS of GPU time, and enough that the submit's
@@ -422,14 +255,15 @@ function createRunner(layout, backend) {
     rb.serial = ++readSerial;
     rb.steps = queued;
     rb.count = count;
+    const from = engine;
     rb.buffer.mapAsync(GPUMapMode.READ).then(() => {
       if (released) { rb.buffer.destroy(); return; }
-      const n = data.n;
-      if (rb.serial > appliedSerial && rb.data === data) {
-        apply(rb.serial, rb.steps, new Float32Array(rb.buffer.getMappedRange(0, n * 8)));
+      const bytes = rb.engine.positionBytes;
+      if (rb.serial > appliedSerial && from === engine) {
+        apply(rb.serial, rb.steps, new Float32Array(rb.buffer.getMappedRange(0, bytes)), rb.ordered);
       }
       if (withTs) {
-        const t = new BigUint64Array(rb.buffer.getMappedRange(n * 8, 16));
+        const t = new BigUint64Array(rb.buffer.getMappedRange(timestampsAt(bytes), 16));
         const ns = Number(t[1] - t[0]);
         if (t[1] > t[0] && ns < 60e9) addSample(ns / 1e6, count);
       } else {
@@ -438,18 +272,16 @@ function createRunner(layout, backend) {
         lastResolve = { time: now, steps: rb.steps };
       }
       rb.buffer.unmap();
-      if (rb.data === data) free.push(rb); else rb.buffer.destroy();
+      if (rb.engine === engine) free.push(rb); else rb.buffer.destroy();
       afterReadback();
     }).catch(() => { /* destroyed, or the device was lost */ });
   }
 
   // Positions after `steps` into the store
-  function apply(serial, steps, positions) {
+  function apply(serial, steps, positions, inStoreOrder) {
     appliedSerial = serial;
     const done = steps - appliedSteps;
-    let move = 0;
-    keepingHostWrites(() => { move = readPositions(simulator, data, positions, Math.max(1, done)); });
-    data.positions.set(positions);
+    const move = engine.readPositions(positions, Math.max(1, done), inStoreOrder);
     if (done > 0) lastMove = move;
     appliedSteps = steps;
     simulator.iteration(firstStep + steps);
@@ -461,7 +293,7 @@ function createRunner(layout, backend) {
   function afterReadback() {
     if (appliedSteps === lastReadSteps || halted || released) return;
     lastReadSteps = appliedSteps;
-    const before = physicsMarks();
+    const before = marks.map(mark => mark.read());
     layout.lastMove = lastMove;
     try {
       layout.fire('step');
@@ -469,11 +301,10 @@ function createRunner(layout, backend) {
       halt({ message: "a 'step' listener failed: " + e.message, kernel: null, stages: [] });
       return;
     }
-    const after = physicsMarks();
-    const changed = after.findIndex((mark, i) => mark !== before[i]);
+    const changed = marks.findIndex((mark, i) => mark.read() !== before[i]);
     if (changed >= 0) {
       halt({
-        message: `a 'step' listener changed ${markNames()[changed]}. On the GPU, 'step' fires once per readback, not after ` +
+        message: `a 'step' listener changed ${marks[changed].name}. On the GPU, 'step' fires once per readback, not after ` +
           'every step, so listeners must not change the physics: use a formula, a sum, a host step, or a \'settings\' listener',
         kernel: null, stages: [],
       });
@@ -506,29 +337,15 @@ function createRunner(layout, backend) {
     afterReadback();
   }
 
-  // Positions, velocities and FIRE's state after every submitted step, into the store
+  // Positions, velocities, device columns, sums and FIRE's state after every submitted step,
+  // into the store
   async function readDevice() {
-    const n = data.n;
-    const buffer = device.createBuffer({ size: n * 24 + 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-    const enc = device.createCommandEncoder();
-    enc.copyBufferToBuffer(engine.pos, 0, buffer, 0, n * 8);
-    enc.copyBufferToBuffer(engine.vel, 0, buffer, n * 8, n * 16);
-    enc.copyBufferToBuffer(engine.fire, 0, buffer, n * 24, 16);
-    device.queue.submit([enc.finish()]);
-    const serial = ++readSerial, steps = queued, from = data;
-    try {
-      await buffer.mapAsync(GPUMapMode.READ);
-    } catch (e) {
-      buffer.destroy();
-      return;
-    }
-    if (!released && from === data) {
-      if (serial > appliedSerial) apply(serial, steps, new Float32Array(buffer.getMappedRange(0, n * 8)));
-      keepingHostWrites(() => { readVelocities(simulator, data, new Float32Array(buffer.getMappedRange(n * 8, n * 16))); });
-      fireState = Array.from(new Float32Array(buffer.getMappedRange(n * 24, 16)));
-    }
-    buffer.unmap();
-    buffer.destroy();
+    const serial = ++readSerial, steps = queued, from = engine;
+    const state = await engine.readDevice();
+    if (!state || released || from !== engine) return;
+    if (serial > appliedSerial) apply(serial, steps, state.positions, true);
+    state.apply();
+    fireState = state.fireState;
   }
 
   // Graph edits and new structure: the device's numbers come back, then everything is built
@@ -593,9 +410,9 @@ function createRunner(layout, backend) {
 
   function makeReadbacks() {
     if (!engine) return;
-    const size = Math.max(16, data.n * 8 + (timestamps ? 16 : 0));
+    const size = Math.max(16, timestampsAt(engine.positionBytes) + (timestamps ? 16 : 0));
     for (let r = 0; r < READBACK_BUFFERS; r++) {
-      const rb = { buffer: device.createBuffer({ size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }), data };
+      const rb = { buffer: device.createBuffer({ size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }), engine };
       all.push(rb);
       free.push(rb);
     }
@@ -610,32 +427,14 @@ function createRunner(layout, backend) {
 
   // Which kernel an error message names, and the stages it computes
   function attribute(message) {
-    const kernels = lowering && lowering.plan ? Object.keys(lowering.plan.kernelStages) : [];
+    const kernels = engine ? Object.keys(engine.kernelStages) : [];
     const kernel = kernels.find(name => message.indexOf('"' + name + '"') >= 0) || null;
     return { message, kernel, stages: kernel ? stagesOf(kernel) : [] };
   }
 
   function stagesOf(kernel) {
-    const stages = lowering && lowering.plan && lowering.plan.kernelStages[kernel];
+    const stages = engine && engine.kernelStages[kernel];
     return stages ? stages.slice() : [];
-  }
-
-  function writeSettings() {
-    settingsChanged = false;
-    if (!settingsDiffer()) return;
-    const settings = simulator.settings;
-    const first = written.integrator === undefined, wasFire = written.integrator === 'fire';
-    SETTINGS.forEach(key => { written[key] = settings[key]; });
-    if (!engine) return;
-    // as the CPU's integrator: a speed limit that is not positive is 1
-    engine.setParams(Object.assign({}, settings, { maxVelocity: settings.maxVelocity > 0 ? settings.maxVelocity : 1 }));
-    if (!first && !wasFire && settings.integrator === 'fire') engine.resetFire();
-  }
-
-  function settingsDiffer() {
-    const settings = simulator.settings;
-    for (let i = 0; i < SETTINGS.length; i++) if (written[SETTINGS[i]] !== settings[SETTINGS[i]]) return true;
-    return false;
   }
 
   // The step's structure, to notice a change cheaply on every call: the stages and their
@@ -658,26 +457,16 @@ function createRunner(layout, backend) {
     return settingsChanged && simulator.program().version !== structure.version;
   }
 
-  function versions() {
-    const v = store.versions, l = springStore.versions;
-    return {
-      pos: v.pos, velocity: v.velocity, mass: v.mass, pinned: v.pinned,
-      from: l.from, to: l.to, length: l.length, coefficient: l.coefficient,
-    };
-  }
-
-  // Marks of everything the GPU reads: column versions and settings
-  function physicsMarks() {
-    const marks = NODE_COLUMNS.map(name => store.versions[name]).concat(LINK_COLUMNS.map(name => springStore.versions[name]));
-    const settings = simulator.settings;
-    SETTINGS.forEach(key => marks.push(settings[key]));
-    marks.push(simulator.repulsionLaw(), settings.inertia);
-    return marks;
-  }
-
-  function markNames() {
-    return NODE_COLUMNS.map(name => 'the column ' + name).concat(LINK_COLUMNS.map(name => 'the link column ' + name),
-      SETTINGS.map(key => 'the setting ' + key), ['the repulsion law', 'the inertia']);
+  // What a 'step' listener must not change: the columns the plan reads, the link columns, the
+  // physics settings, the law and the inertia
+  function markList(plan) {
+    const columns = plan.reads || ['pos', 'velocity', 'mass', 'pinned'];
+    const out = columns.map(name => ({ name: 'the column ' + name, read: () => store.versions[name] }));
+    LINK_COLUMNS.forEach(name => out.push({ name: 'the link column ' + name, read: () => springStore.versions[name] }));
+    PHYSICS_SETTINGS.forEach(key => out.push({ name: 'the setting ' + key, read: () => simulator.settings[key] }));
+    out.push({ name: 'the repulsion law', read: () => simulator.repulsionLaw() });
+    out.push({ name: 'the inertia', read: () => simulator.settings.inertia });
+    return out;
   }
 
   function gpuMsPerStep() {
@@ -701,7 +490,7 @@ function createRunner(layout, backend) {
       source: timestamps ? 'gpu-timestamps' : 'wall-clock',
       steps: firstStep + queued,
       engine: engine ? engine.kind : 'none',
-      nodes: data ? data.n : 0,
+      nodes: engine ? engine.n : 0,
       stepsPerSubmit: stepsPerSubmit(),
       halted: halted ? halted.message : null,
     };
@@ -712,16 +501,14 @@ function createRunner(layout, backend) {
   }
 }
 
+// Timestamps follow the positions in a readback, at an offset getMappedRange() takes
+function timestampsAt(positionBytes) {
+  return Math.ceil(positionBytes / 8) * 8;
+}
+
 const warned = new Set();
 function warnOnce(message) {
   if (warned.has(message)) return;
   warned.add(message);
   console.warn('ngraph.forcelayout.gpu: ' + message);
 }
-
-function sameValues(a, b) {
-  if (!b || a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (!Object.is(a[i], b[i])) return false;
-  return true;
-}
-

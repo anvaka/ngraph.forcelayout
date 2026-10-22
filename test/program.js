@@ -315,34 +315,36 @@ test('setters fire settings; columns keep versions', function (t) {
   t.same(events, ['springLength=12', 'integrator=fire', 'inertia=heavy'], 'once per change');
   t.equal(sim.program().listeners.settings, 1);
 
-  var store = sim.store, versions = store.versions;
-  var mass = versions.mass;
+  var store = sim.store;
+  // reading store.versions applies what setters wrote since the last read
+  var versions = function () { return store.versions; };
+  var mass = versions().mass;
   sim.bodies[1].mass = 5;
-  t.ok(versions.mass > mass, 'the body mass setter marks the mass');
-  var pinned = versions.pinned;
+  t.ok(versions().mass > mass, 'the body mass setter marks the mass');
+  var pinned = versions().pinned;
   sim.bodies[1].isPinned = true;
-  t.ok(versions.pinned > pinned, 'pinning marks pinned');
+  t.ok(versions().pinned > pinned, 'pinning marks pinned');
   var length = sim.springStore.versions.length;
   sim.springs[0].length = 3;
   t.ok(sim.springStore.versions.length > length, 'spring setters mark their column');
-  var heavy = versions.heavy;
+  var heavy = versions().heavy;
   store.changed('heavy');
-  t.ok(versions.heavy > heavy, 'changed() marks a column');
-  var before = Object.assign({}, versions);
+  t.ok(versions().heavy > heavy, 'changed() marks a column');
+  var before = Object.assign({}, versions());
   sim.addBodyAt({ x: 3, y: 3 });
   var topology = 0;
   sim.on('topology', function () { topology += 1; });
   sim.applyEdits();
   t.equal(topology, 1, 'applyEdits() fires topology at once');
-  t.ok(Object.keys(before).every(function (name) { return versions[name] > before[name]; }), 'graph edits mark every column');
+  t.ok(Object.keys(before).every(function (name) { return versions()[name] > before[name]; }), 'graph edits mark every column');
   sim.step();
   t.equal(topology, 1, 'and the step does not fire it again');
   var columnsVersion = store.columnsVersion;
-  heavy = versions.heavy;
+  heavy = versions().heavy;
   store.remove('heavy');
-  t.ok(versions.heavy > heavy, 'removing a column changes it');
+  t.ok(versions().heavy > heavy, 'removing a column changes it');
   t.ok(store.columnsVersion > columnsVersion);
-  t.notOk('toString' in versions, 'versions has columns only');
+  t.notOk('toString' in versions(), 'versions has columns only');
   t.end();
 });
 
@@ -467,19 +469,20 @@ test('host writes to positions and velocities mark their columns', function (t) 
   graph.addLink(1, 2);
   var layout = createLayout(graph);
   layout.step();
-  var versions = layout.simulator.store.versions;
-  var pos = versions.pos;
+  var store = layout.simulator.store;
+  var versions = function () { return store.versions; };
+  var pos = versions().pos;
   layout.setNodePosition(1, 5, 6);
-  t.ok(versions.pos > pos, 'setNodePosition (a drag) marks pos');
-  pos = versions.pos;
+  t.ok(versions().pos > pos, 'setNodePosition (a drag) marks pos');
+  pos = versions().pos;
   layout.getBody(2).pos.x = 3;
-  t.ok(versions.pos > pos, 'so does a write through a body\'s position');
-  var velocity = versions.velocity;
+  t.ok(versions().pos > pos, 'so does a write through a body\'s position');
+  var velocity = versions().velocity;
   layout.getBody(2).velocity.reset();
-  t.ok(versions.velocity > velocity, 'and of its velocity');
-  var force = versions.force;
+  t.ok(versions().velocity > velocity, 'and of its velocity');
+  var force = versions().force;
   layout.getBody(2).force.x = 1;
-  t.equal(versions.force, force, 'forces are cleared every step and not marked');
+  t.equal(versions().force, force, 'forces are cleared every step and not marked');
   var Body = require('../lib/codeGenerators/generateCreateBody')(2);
   var loose = new Body(1, 2);
   loose.setPosition(3, 4);
@@ -599,6 +602,25 @@ test('grouped sums follow groups that grow and shrink', function (t) {
     sim.step();
     var sum = sim.sums().massOf;
     t.same(Array.from(sum.groups.subarray(0, sum.count)), expected(), 'groups ' + ids.join(','));
+  });
+  t.end();
+});
+
+test('pair formulas find pairs just inside the radius, at any scale', function (t) {
+  // 1e-150: squares near underflow, where the squared test is off
+  [1, 1e-150, 1e150].forEach(function (scale) {
+    var sim = createSimulator({ dimensions: 2 });
+    var r = 0.7 * scale;
+    sim.addBodyAt({ x: 0, y: 0 });
+    sim.addBodyAt({ x: r, y: 0 });
+    sim.addBodyAt({ x: 0, y: 3 * r });
+    ['repulsion', 'drag', 'springs', 'integrate'].forEach(function (name) { sim.removeStage(name); });
+    sim.store.define('count');
+    // the next number above r: the pair at distance r is inside, the one at 3r is not
+    var radius = r * (1 + Number.EPSILON);
+    sim.addPairFormula('near', { radius: radius, startAtZero: ['count'], formula: 'count_i += 1; count_j += 1; push = 0' });
+    sim.step();
+    t.same(Array.from(sim.store.count.subarray(0, 3)), [1, 1, 0], 'scale ' + scale);
   });
   t.end();
 });
