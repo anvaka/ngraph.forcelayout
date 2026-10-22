@@ -206,6 +206,8 @@ declare module "ngraph.forcelayout" {
      * program(): at least a `shape`. Without it the stage is JavaScript, which only the CPU runs.
      */
     describe?: Partial<ProgramStage> & { shape: string } | (() => Partial<ProgramStage> & { shape: string });
+    /** The stage's numbers for a step, for stageValues() */
+    values?: (context: StepContext) => StageValues;
   }
 
   export interface HostStepOptions {
@@ -316,6 +318,7 @@ declare module "ngraph.forcelayout" {
 
   /** What stageValues() gives: a stage's numbers for one step */
   export interface StageValues {
+    [value: string]: any;
     params?: Record<string, number>;
     radius?: number;
     when: boolean;

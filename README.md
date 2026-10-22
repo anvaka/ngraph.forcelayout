@@ -375,7 +375,8 @@ removes them (a replaced stage comes back).
 them, and every stage in order with its shape, formula, what it reads and writes and how, its
 params and options. Engines compile from it; functions appear as `{kind: 'host'}`, and
 `simulator.stageValues(name, context)` gives their numbers for a step. A stage of an add-on
-module describes itself with `addStage(name, run, { describe: { shape: 'grid', ... } })`.
+module describes itself with `addStage(name, run, { describe: { shape: 'grid', ... } })`, and
+`values: function (context) { ... }` gives its numbers for a step.
 `simulator.plan(backend)` tells which stages an engine can run, and why not: the WebGPU module
 in `modules/gpu` exports `gpuBackend` for it. JS stages and pair rules run on the CPU only.
 
