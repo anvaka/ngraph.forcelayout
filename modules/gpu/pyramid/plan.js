@@ -40,7 +40,7 @@ export function chooseGrid(n, D) {
  * numbers per step instead of the pyramid's uniform: {decl(binding), law(c, k), gravity}.
  * `grid` forces the cells per axis (for measurements).
  */
-export function planPyramid({ D, n, limits, channels, pos, values = null, grid = 0, warn }) {
+export function planPyramid({ D, n, limits, channels, pos, values = null, grid = 0, heads, warn }) {
   const refuse = (reason, buffers = {}) => ({ refusal: reason, buffers, kernels: {}, section: null, dispatches: 0 });
   if (D !== 2 && D !== 3) return refuse(`the grid pyramid is 2D and 3D; this layout is ${D}D`);
   if (!channels.length) return refuse('a tree pass needs at least one charge');
@@ -78,10 +78,12 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
   const L = pyramidLayout(D, own, tableWords);
 
   const G = grid || chooseGrid(n, D);
+  if (G ** D > (1 << 20)) return refuse(`the grid pyramid takes up to 2^20 cells; ${G}^${D} is more`);
   const levels = Math.log2(G), nCells = G ** D;
   const levelOff = [];
   let pyrSize = 0;
   for (let l = 0, g = G; l <= levels; l++, g >>= 1) { levelOff.push(pyrSize); pyrSize += g ** D; }
+  // local expansions: every level but the top
   const localCells = levelOff[levels];
   const size = bytes => Math.max(16, Math.ceil(bytes / 16) * 16);
   const buffers = {
@@ -105,12 +107,12 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
   if (Math.ceil(n / WG) > limits.maxComputeWorkgroupsPerDimension ** 2) return refuse(`the grid pyramid runs up to ${(limits.maxComputeWorkgroupsPerDimension ** 2 * WG).toLocaleString('en-US')} bodies`);
 
   const spec = {
-    D, L, groups, lawWords: values ? 0 : lawWords, values, warn,
+    D, L, groups, lawWords: values ? 0 : lawWords, values, warn, heads: heads === undefined ? nCells > n : heads,
     channels: own, pos, charges: channels.map(channel => channel.charge),
   };
   const out = pyramidKernels(spec);
   return {
-    refusal: null, D, n, K: channels.length, layout: L, groups, sizes, buffers,
+    refusal: null, D, n, K: channels.length, layout: L, groups, sizes, buffers, heads: spec.heads,
     lawWords: spec.lawWords, values, channels,
     kernels: out.kernels, columns: out.columns, section: out.section,
     // HIST, BOX, BIN, 3 scans, PLACE, ORDER, AGG0, a PYR per level, LOCAL

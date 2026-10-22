@@ -30,6 +30,9 @@ import { createPrinter, lawPrologue } from '../wgsl/print.js';
 
 export const WG = 256;
 export const HIST_BINS = 1024;
+// A body whose sensitivities exceed this many times the mean charge resolves its close cells
+// (see the section's near field)
+const HEAVY = 8;
 const AX = 'xyzw';
 
 function each(n, fn, sep = ' ') {
@@ -168,16 +171,21 @@ fn jitter(a: u32, b: u32) -> vec3f {
 
 // Nested loops over a box of cells lo<k>..hi<k> (variables x<k>), with the Morton code of the
 // current cell in mm0 and `body` innermost
-function boxLoops(D, body, indent) {
+function boxLoops(D, body, indent, lo = 'lo', hi = 'hi') {
   let open = '', close = '';
   for (let k = D - 1; k >= 0; k--) {
     const pad = indent + '  '.repeat(D - 1 - k);
-    open += `${pad}for (var x${k} = lo${k}; x${k} <= hi${k}; x${k}++) {\n`;
+    open += `${pad}for (var x${k} = ${lo}${k}; x${k} <= ${hi}${k}; x${k}++) {\n`;
     open += `${pad}  let mm${k} = ${k === D - 1 ? '' : `mm${k + 1} | `}(spread(u32(x${k})) << ${k}u);\n`;
     close = `${pad}}\n` + close;
   }
   const pad = indent + '  '.repeat(D);
   return open + body.trim().split('\n').map(line => pad + line.trim()).join('\n') + '\n' + close;
+}
+
+// max(a, max(b, c)) of WGSL terms
+function maxOf(terms) {
+  return terms.reduce((acc, term) => (acc ? `max(${acc}, ${term})` : term), '');
 }
 
 // Thread index over a 1D or 2D grid of workgroups (2D past 65,535 workgroups, see build.js)
@@ -193,7 +201,7 @@ function paramsStruct(lawWords) {
 struct TreeParams {
   n: u32, G: u32, levels: u32, nCells: u32,
   locOff: u32, metaTag: u32, metaRow: u32, metaCount: u32,
-  nearCap: u32, outlierRank: u32, gravity: f32, pad: u32,${lawWords ? `
+  nearCap: u32, outlierRank: u32, gravity: f32, top: u32,${lawWords ? `
   law: array<vec4f, ${Math.ceil(lawWords / 4)}>,` : ''}
 };`;
 }
@@ -679,24 +687,38 @@ for (var ch = 0u; ch < ${1 << D}u; ch++) {
   ${body}
 }`, indent)}`;
 
-  // treeMeta only when it holds the counts; then the caller's step values (law numbers per
-  // step), when they hold them
-  const localMeta = L.CNT < 0 ? '\n@group(0) @binding(2) var<storage, read> treeMeta: array<u32>;' : '';
-  const valueBinding = stepDecl ? '\n' + stepDecl(L.CNT < 0 ? 3 : 2) : '';
+  // With more finest cells than bodies (3D), most finest cells are empty, and a thread per cell
+  // would leave most of a SIMD group idle: there LOCAL runs a thread per body for the finest
+  // level, the first body of each cell doing its cell, then a thread per cell above.
+  const heads = spec.heads;
+  // treeMeta when it holds the counts or the bodies' cells; then the caller's step values (law
+  // numbers per step), when they hold them
+  const localUsesMeta = L.CNT < 0 || heads;
+  const localMeta = localUsesMeta ? '\n@group(0) @binding(2) var<storage, read> treeMeta: array<u32>;' : '';
+  const valueBinding = stepDecl ? '\n' + stepDecl(localUsesMeta ? 3 : 2) : '';
   const LOCAL = common + lawCode + /* wgsl */`
 ${tp}
 @group(0) @binding(1) var<storage, read_write> treeCells: array<vec4f>;${localMeta}${valueBinding}
 @compute @workgroup_size(${WG})
 fn main(${LINEAR}) {
   let t = ${LINEAR_ID};
-  var off = 0u; var Gl = TP.G; var l = 0u;
-  loop {
-    if (l >= TP.levels) { return; }
-    let count = ${each(D, () => 'Gl', ' * ')};
-    if (t < off + count) { break; }
-    off += count; Gl >>= 1u; l++;
+  var off = 0u; var Gl = TP.G; var l = 0u; var c = 0u;${heads ? `
+  if (t < TP.n) {
+    // the first body of a finest cell does its cell
+    c = treeMeta[TP.metaTag + 2u * t + 1u] & 0x7fffffffu;
+    if (t > 0u && (treeMeta[TP.metaTag + 2u * t - 1u] & 0x7fffffffu) == c) { return; }
+  } else {
+    var u = t - TP.n + TP.nCells;` : `
+  {
+    var u = t;`}
+    loop {
+      if (l >= TP.levels) { return; }
+      let count = ${each(D, () => 'Gl', ' * ')};
+      if (u < off + count) { break; }
+      off += count; Gl >>= 1u; l++;
+    }
+    c = u - off;
   }
-  let c = t - off;
   ${loadVec4s('m', 'treeCells', `${L.TAB4}u + (off + c) * ${L.CS4}u`, L.CS4)}
   if (${L.CNT < 0 ? 'treeMeta[TP.metaCount + off + c]' : `u32(${word('m', L.CNT)})`} == 0u) { return; }
   let Gi = i32(Gl);
@@ -706,7 +728,7 @@ fn main(${LINEAR}) {
   ${each(D, k => `let ce${k} = ${word('m', L.C[0] + k)};`)}
   ${each(K, c => each(D, k => `var F${c}_${k} = 0.0;`) + ' ' + L.pairs.map((_, e) => `var J${c}_${e} = 0.0;`).join(' '), '\n  ')}
 ${interactionList(sourceCell(k => `ce${k}`, true), '  ')}
-  let o = TP.locOff + t * ${L.LS4}u;
+  let o = TP.locOff + (off + c) * ${L.LS4}u;
   ${storeVec4s('treeCells', 'o', (() => {
     const words = [];
     for (let k = 0; k < D; k++) words[k] = `ce${k}`;
@@ -737,11 +759,36 @@ ${interactionList(sourceCell(k => `ce${k}`, true), '  ')}
       const add = `g += wt${gi} * tree_k1_${gi}(r, r2);`;
       lines.push(conds.length ? `if (${conds.join(' && ')}) { ${add} }` : add);
     });
-    lines.push(each(D, k => `a${k} += (wgt * g) * d${k};`));
+    lines.push(each(D, k => `na${k} += (wgt * g) * d${k};`));
     return lines.join('\n');
   })();
 
-  const nearField = boxLoops(D, `
+  // The finest level at the body, in one loop over a box of cells. Every body: exact pairs in its
+  // 3^D cells. A heavy body (its sensitivities more than HEAVY times the mean charge), whose
+  // force a small relative error of its neighbours' monopoles would swamp (a hub amid its
+  // leaves), takes the finest level's interaction list here instead of from its cell's
+  // expansion: exact pairs with the cells at distance 2 that hold two bodies or more (one body
+  // is its own monopole), monopoles beyond. Cells keep exact pairs up to nearCap bodies, and
+  // sample with weights past that.
+  const ringCount = L.CNT < 0 ? 'treeMeta[TP.metaCount + mm0]' : `u32(${word('a', L.CNT)})`;
+  const nearField = `
+  // heavy: against the root's charges per body; a clamped body never is (the outside path sums
+  // its far field)
+  ${loadVec4s('top', 'treeCells', `${L.TAB4}u + TP.top * ${L.CS4}u`, L.CS4)}
+  let heavy = raw == c && (${each(K, q => `abs(s[${q}])`, ' + ')}) * f32(TP.n) > ${lit(HEAVY)} * (${each(K, q => `abs(${word('top', L.S[q])})`, ' + ')});
+  ${each(K, q => each(D, k => `var acc${q}_${k} = 0.0;`))}
+  {
+    ${each(D, k => `let lo${k} = select(max(cx${k} - 1, 0), max(2 * ((cx${k} >> 1u) - 1), 0), heavy); let hi${k} = select(min(cx${k} + 1, Gi - 1), min(2 * ((cx${k} >> 1u) + 1) + 1, Gi - 1), heavy);`, '\n    ')}
+${boxLoops(D, `
+let dist = ${maxOf(Array.from({ length: D }, (_, k) => `abs(x${k} - cx${k})`))};
+if (dist > 1) {
+  ${loadVec4s('a', 'treeCells', `${L.TAB4}u + mm0 * ${L.CS4}u`, L.CS4)}
+  if (!(${nonzero(spec.channels.map((_, q) => q), q => word('a', L.S[q]))})) { continue; }
+  if (dist > 2 || ${ringCount} < 2u) {
+${sourceCell(k => `p${k}`, false)}
+    continue;
+  }
+}
 let s0 = treeMeta[mm0];
 let e0 = select(TP.n, treeMeta[mm0 + 1u], mm0 + 1u < TP.nCells);
 let cnt = e0 - s0;
@@ -751,11 +798,14 @@ let wgt = f32(stride);
 for (var t = s0; t < e0; t += stride) {
   if (t == k) { continue; }
   ${nearPair}
-}`, '  ');
+}`, '    ')}
+    ${each(K, q => each(D, k => `b${k} += s[${q}] * acc${q}_${k};`), '\n    ')}
+  }`;
 
   const farInside = `
-    var off = 0u; var Gl = TP.G; var cc = c;
-    for (var l = 0u; l < TP.levels; l++) {
+    // (a heavy body has its finest level already)
+    var off = select(0u, TP.nCells, heavy); var Gl = select(TP.G, TP.G >> 1u, heavy); var cc = select(c, c >> ${D}u, heavy);
+    for (var l = select(0u, 1u, heavy); l < TP.levels; l++) {
       ${loadVec4s('e', 'treeCells', `TP.locOff + (off + cc) * ${L.LS4}u`, L.LS4)}
       ${each(D, k => `let h${k} = p${k} - ${word('e', k)};`)}
       ${each(K, c => each(D, q => `b${q} += s[${c}] * (${word('e', L.F[c] + q)} + ${each(D, r => {
@@ -785,17 +835,16 @@ fn tree_force(k: u32, s: array<f32, ${K}>) -> ${vec} {
   ${loadVec4s('me', 'treeSp', `k * ${L.SP4}u`, L.SP4)}
   ${each(D, q => `let p${q} = ${word('me', q)};`)}
   let Gi = i32(TP.G);
-  ${each(D, q => `let cx${q} = i32(compact(c >> ${q}u)); let lo${q} = max(cx${q} - 1, 0); let hi${q} = min(cx${q} + 1, Gi - 1);`, '\n  ')}
-  ${each(D, q => `var a${q} = 0.0;`)}
-  // near field: exact pairs in my 3^D cells (strided with weights in overfull cells)
-${nearField}
+  ${each(D, q => `let cx${q} = i32(compact(c >> ${q}u));`, ' ')}
+  ${each(D, q => `var na${q} = 0.0;`)}
   ${each(D, q => `var b${q} = 0.0;`)}
+${nearField}
   if (raw == c) {
     // far field: local expansions down my chain of parent cells${farInside}
   } else {
     // clamped into a border cell: monopoles of the interaction lists at my real position${farOutside}
   }
-  return ${gravity} * ${vec}(${each(D, q => `a${q} + b${q}`, ', ')});
+  return ${gravity} * ${vec}(${each(D, q => `na${q} + b${q}`, ', ')});
 }
 // The charge of channel c of the body in sorted slot k (its sensitivity when the two are one column)
 fn tree_charge(k: u32, c: u32) -> f32 {

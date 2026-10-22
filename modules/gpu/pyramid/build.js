@@ -25,12 +25,14 @@ const PARAM_WORDS = 12;
 export async function buildPyramid(device, plan, { buffers: external = {}, step = null, nearCap = NEAR_CAP } = {}) {
   if (plan.refusal) throw new Error(plan.refusal);
   const { D, sizes, kernels, columns } = plan;
+  // LOCAL reads treeMeta for counts (when cells have no room for them) or bodies' cells (heads)
+  const localMeta = plan.layout.CNT < 0 || plan.heads;
   const missing = [].concat(...Object.values(columns)).filter(name => !external[name]);
   if (missing.length) throw new Error('buildPyramid: no buffer for ' + missing.join(', '));
 
   const jobs = Object.keys(kernels).map(name => {
     const options = { code: kernels[name], label: name };
-    if (name === 'TREE_LOCAL' && step) options.bindings = ['uniform', 'storage'].concat(plan.layout.CNT < 0 ? ['read'] : [], [step.dynamic ? 'dynamic' : 'uniform']);
+    if (name === 'TREE_LOCAL' && step) options.bindings = ['uniform', 'storage'].concat(localMeta ? ['read'] : [], [step.dynamic ? 'dynamic' : 'uniform']);
     return getPipeline(device, options).then(pipeline => [name, pipeline]);
   });
   const pipes = Object.fromEntries(await Promise.all(jobs));
@@ -69,7 +71,7 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
   const pu = new Uint32Array(params), pf = new Float32Array(params);
   pu[0] = sizes.n; pu[1] = sizes.G; pu[2] = sizes.levels; pu[3] = sizes.nCells;
   pu[4] = sizes.locOff; pu[5] = sizes.metaTag; pu[6] = sizes.metaRow; pu[7] = sizes.metaCount;
-  pu[8] = nearCap; pu[9] = Math.max(1, Math.floor(sizes.n / 1000)); pf[10] = -1;
+  pu[8] = nearCap; pu[9] = Math.max(1, Math.floor(sizes.n / 1000)); pf[10] = -1; pu[11] = sizes.pyrSize - 1;
 
   const bind = (name, list, pipeline = pipes[name]) => device.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
@@ -90,7 +92,7 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     TREE_PLACE: bind('TREE_PLACE', [TP, treeMeta, treeWork]),
     TREE_ORDER: both('TREE_ORDER', p => [TP].concat(cols('TREE_ORDER', p), [treeWork, treeMeta, treeSp])),
     TREE_AGG0: bind('TREE_AGG0', [TP, treeSp, treeMeta, treeCells]),
-    TREE_LOCAL: bind('TREE_LOCAL', [TP, treeCells].concat(plan.layout.CNT < 0 ? [treeMeta] : [], step ? [{ buffer: step.buffer, size: step.size }] : [])),
+    TREE_LOCAL: bind('TREE_LOCAL', [TP, treeCells].concat(localMeta ? [treeMeta] : [], step ? [{ buffer: step.buffer, size: step.size }] : [])),
   };
   const levels = [];
   for (let l = 0; l < sizes.levels; l++) {
@@ -114,7 +116,8 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     const x = limit;
     return [x, Math.ceil(w / x)];
   }
-  const nodes = grid(sizes.n), cells = grid(sizes.nCells), locals = grid(sizes.localCells);
+  const nodes = grid(sizes.n), cells = grid(sizes.nCells);
+  const locals = grid(plan.heads ? sizes.n + sizes.localCells - sizes.nCells : sizes.localCells);
   const histGroups = Math.min(nodes[0] * nodes[1], 128);
   let parity = 0;
   function dispatch(pass, name, size) {
