@@ -185,9 +185,14 @@ A pair step that needs more than its cap runs in several submits ("slices") rath
   infinity are outside the contract. `tanh` is clamped (Metal's is NaN from 45).
 - **Bodies on one spot** are pushed apart along a small fixed direction where the CPU picks a
   random one.
-- **Some costs:** a pair formula in 3D costs about twice 2D (0.20–0.23 ms at 100k); laws that fall
-  slower than 1/r² cost 1.35–1.68× a stock step in 2D; a 3D grid field with quadratic weights
-  costs 0.73 ms at 1M bodies.
+- **Some costs:**
+  - a pair formula in 3D costs about twice 2D (0.20–0.23 ms at 100k);
+  - laws that fall slower than 1/r² cost 1.35–1.68× a stock step in 2D;
+  - a 3D grid field with quadratic weights costs 0.73 ms at 1M bodies;
+  - a grid field smoothed over diffuse / cell² ≥ 2 (ru-4's default is 16) keeps its field in two
+    32-bit words and refines it once a step, which costs ru-4-like grids 21–52% more (0.09 of
+    0.26 ms at 100k in 2D, 0.22 of 0.84 ms at 1M in 3D). Without it the smoothed field drifts to
+    9.6e-6 of its RMS at gamma 16, just under the 1e-5 tolerance; with it, 5e-7 at most.
 - **FIRE's state** is not handed back to the CPU's integrator on `stop()`.
 - **An uncaptured device error halts every runner on that device**: WebGPU reports errors per
   device.
