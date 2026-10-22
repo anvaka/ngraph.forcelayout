@@ -190,18 +190,24 @@ test('grid field matches a plain reference', function (t) {
 
 test('deposit values can read body columns and params', function (t) {
   return gridField.then(function (addGridField) {
-    var sim = makeSimulator(2, 40);
-    addGridField(sim, 'field', {
-      anchor: 'lattice', cell: 2, deposit: { value: 'k * mass', weights: 'quadratic' }, self: 'exclude',
-      params: { k: 0.5 }, into: { value: 'density', gradient: 'slope' }
+    [2, 3].forEach(function (D) {
+      [0, 6].forEach(function (diffuse) {
+        var sim = makeSimulator(D, 40);
+        addGridField(sim, 'field', {
+          anchor: 'lattice', cell: 2, margin: 3, deposit: { value: 'k * mass', weights: 'quadratic' }, self: 'exclude',
+          smooth: diffuse ? { diffuse: diffuse } : undefined,
+          params: { k: 0.5 }, into: { value: 'density', gradient: 'slope' }
+        });
+        var expected = expectedAt(sim, 'field', {
+          anchor: 'lattice', weights: 'quadratic', self: 'exclude', cell: 2, margin: 3, diffuse: diffuse,
+          value: function (i) { return 0.5 * sim.store.mass[i]; }
+        });
+        sim.step();
+        var name = D + 'D' + (diffuse ? ' smoothed' : '');
+        t.ok(relative(sim.store.density.subarray(0, 40), expected.value) < 1e-12, name + ': value');
+        t.ok(relative(sim.store.slope.subarray(0, 40 * D), expected.gradient) < 1e-12, name + ': gradient');
+      });
     });
-    var expected = expectedAt(sim, 'field', {
-      anchor: 'lattice', weights: 'quadratic', self: 'exclude', cell: 2, margin: 0,
-      value: function (i) { return 0.5 * sim.store.mass[i]; }
-    });
-    sim.step();
-    t.ok(relative(sim.store.density.subarray(0, 40), expected.value) < 1e-12, 'value');
-    t.ok(relative(sim.store.slope.subarray(0, 80), expected.gradient) < 1e-12, 'gradient');
   });
 });
 

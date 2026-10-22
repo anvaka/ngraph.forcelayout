@@ -642,14 +642,15 @@ function selfCode(D, weights) {
   const per = weights === 'linear' ? 2 : 3;
   const lines = [];
   range(D).forEach(k => {
-    lines.push(`var $c${k} = $grid.inverse[${k}].c, $d${k} = $grid.inverse[${k}].d;`);
+    // ($ic, $id: not $c, which names the deposit value's columns)
+    lines.push(`var $ic${k} = $grid.inverse[${k}].c, $id${k} = $grid.inverse[${k}].d;`);
     const entry = (i, j) => `$G${k}_${Math.min(i, j)}${Math.max(i, j)}`;
-    for (let i = 0; i < per; ++i) lines.push(`var ${entry(i, i)} = $d${k}[t${k} + ${i}];`);
-    for (let i = 0; i + 1 < per; ++i) lines.push(`var ${entry(i, i + 1)} = -$c${k}[t${k} + ${i}] * ${entry(i + 1, i + 1)};`);
-    if (per === 3) lines.push(`var ${entry(0, 2)} = -$c${k}[t${k}] * ${entry(1, 2)};`);
-    const row = (vector, i) => range(per).map(j => `${entry(i, j)} * ${axisWeight(weights, k, j)}`).join(' + ');
-    lines.push(`var $read${k} = ${range(per).map(i => `${axisWeight(weights, k, i)} * (${row('w', i)})`).join(' + ')};`);
-    lines.push(`var $tilt${k} = ${range(per).map(i => `${axisSlope(weights, k, i)} * (${row('w', i)})`).join(' + ')};`);
+    for (let i = 0; i < per; ++i) lines.push(`var ${entry(i, i)} = $id${k}[t${k} + ${i}];`);
+    for (let i = 0; i + 1 < per; ++i) lines.push(`var ${entry(i, i + 1)} = -$ic${k}[t${k} + ${i}] * ${entry(i + 1, i + 1)};`);
+    if (per === 3) lines.push(`var ${entry(0, 2)} = -$ic${k}[t${k}] * ${entry(1, 2)};`);
+    const row = i => range(per).map(j => `${entry(i, j)} * ${axisWeight(weights, k, j)}`).join(' + ');
+    lines.push(`var $read${k} = ${range(per).map(i => `${axisWeight(weights, k, i)} * (${row(i)})`).join(' + ')};`);
+    lines.push(`var $tilt${k} = ${range(per).map(i => `${axisSlope(weights, k, i)} * (${row(i)})`).join(' + ')};`);
   });
   lines.push(`$v -= $u * ${range(D).map(k => `$read${k}`).join(' * ')};`);
   range(D).forEach(k => {
