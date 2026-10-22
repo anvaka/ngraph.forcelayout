@@ -70,6 +70,7 @@ test('passes next to the repulsion walk with it, and give what separate walks gi
 test('program() and plan() say who walks with whom, and on which tree', function (t) {
   var sim = makeSimulator({ dimensions: 2, nbody: 'dualtree' }, 30);
   t.same(sim.program().stages[1].args.walk, { stages: ['repulsion'], index: 0, charges: 1, tree: 'dualtree' }, 'the repulsion alone keeps the dual tree');
+  t.same(sim.plan().warnings, [], 'so nothing to warn about');
   addPasses(sim);
   var program = sim.program();
   var core = program.stages[2];
@@ -79,6 +80,9 @@ test('program() and plan() say who walks with whom, and on which tree', function
   var plan = sim.plan();
   t.equal(plan.stages[1].how, 'one quad tree walk with 3 charges: repulsion, core, signed');
   t.equal(plan.stages[2].how, 'in the walk of repulsion');
+  t.same(plan.warnings, ["nbody 'dualtree' does not apply to tree passes walked together (repulsion, core, signed): they walk one quad tree"]);
+  sim.nbody('quadtree');
+  t.same(sim.plan().warnings, [], 'no warning under the quad tree');
   t.throws(function () { sim.addRepulsion('bad', { centroid: 'middle' }); }, /unknown centroid middle/);
   t.end();
 });

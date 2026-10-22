@@ -236,6 +236,10 @@ simulator.addHostStep('measure', {
 ```
 
 Setters of settings fire `'settings'` (`simulator.on('settings', function (key, value) {})`).
+Change settings only through them (`simulator.springLength(20)`, `simulator.nbody('dualtree')`,
+...). A direct write such as `simulator.settings.springLength = 20` changes the next steps on the
+CPU, but fires no event: `'settings'` listeners don't see it, and neither do engines that keep
+their own copy of the numbers.
 Every column has a version, `store.versions[name]`, that grows when it changes. Setters mark
 their column: `body.mass`, `body.isPinned`, `spring.length`, `spring.coefficient`, and positions
 and velocities written through a body (`layout.setNodePosition()`, `body.setPosition()`,
@@ -375,8 +379,9 @@ bodies (`pos` is read only; `integrate` and host steps move them).
   formulas read that as `name[group]`. Place sums before the formulas that read them.
 * `addRepulsion(name, { law, charge, sensitivity })` adds another tree pass with its own law and
   columns, e.g. a short push between leaves only. Passes next to each other and to `repulsion`
-  walk one quad tree with a charge each (under `nbody: 'dualtree'` too), so a pass costs a fraction
-  of a walk of its own. Each charge acts from its own centre in a tree cell, so it should not be
+  walk one quad tree with a charge each, so a pass costs a fraction of a walk of its own.
+  `nbody: 'dualtree'` does not apply to such a walk: it is always a quad tree walk, several times
+  slower than a stock dual tree step, and `plan()` warns about it. Each charge acts from its own centre in a tree cell, so it should not be
   negative; with `centroid: 'shared'` it acts from the centre of the walk's first charge, which is
   faster and lets it be signed. A pass that is gated with `when`, or kept apart by another stage,
   walks alone. `program()` lists each tree stage's walk in `args.walk`.

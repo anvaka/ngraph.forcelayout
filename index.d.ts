@@ -191,9 +191,11 @@ declare module "ngraph.forcelayout" {
     /** Body column of how strongly bodies feel the push; the charge by default */
     sensitivity?: string;
     /**
-     * Passes next to each other (and to the stock repulsion) walk one tree. 'own' (default): this
-     * charge acts from its own centre in a cell, so it may not be negative; 'shared': from the
-     * centre of the walk's first charge, which is faster, and then it may be signed.
+     * Passes next to each other (and to the stock repulsion) walk one quad tree, also under
+     * nbody 'dualtree' (plan() warns: such a step costs several times a stock dual tree step).
+     * 'own' (default): this charge acts from its own centre in a cell, so it may not be negative;
+     * 'shared': from the centre of the walk's first charge, which is faster, and then it may be
+     * signed.
      */
     centroid?: 'own' | 'shared';
     when?: string | ((context: StepContext) => boolean);
@@ -598,7 +600,10 @@ declare module "ngraph.forcelayout" {
     springStore: SpringStore;
 
     /**
-     * Returns settings with which current simulator was initialized
+     * The simulator's settings. Read them here, but change them through the setters
+     * (springLength(), gravity(), nbody(), ...), which fire 'settings'. A direct write changes
+     * the next CPU steps but fires no event: listeners and engines with their own copy of the
+     * numbers (a GPU) don't see it.
      */
     settings: PhysicsSettings;
 
