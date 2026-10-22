@@ -30,6 +30,10 @@ const DEFAULT_BATCH = 64;
 const MAX_BATCH = 1024;
 // A submit holds at most this much GPU work, far below the 2-second watchdog
 const MAX_SUBMIT_MS = 100;
+// A readback followed this soon by a newer one (calls in one burst, as a frame that steps several
+// times) is not written into the store: the newer one is a batch away and replaces it. Writing a
+// large graph's positions costs milliseconds of the main thread.
+const BURST_MS = 4;
 // Settings that change the physics: a 'step' listener must not change them
 const PHYSICS_SETTINGS = ['gravity', 'springLength', 'springCoefficient', 'dragCoefficient', 'timeStep', 'maxVelocity', 'integrator', 'theta'];
 const LINK_COLUMNS = ['from', 'to', 'length', 'coefficient'];
@@ -91,6 +95,7 @@ function createRunner(layout, backend) {
   const free = [], all = [];
   let querySet = null, resolveBuffer = null;
   let readSerial = 0, appliedSerial = 0, appliedSteps = 0, lastReadSteps = 0;
+  const issuedAt = new Map(); // serial of a readback in flight -> when it was issued
   const samples = [];
   let lastResolve = null;
   let lastMove = 0, wasStable = false;
@@ -255,13 +260,17 @@ function createRunner(layout, backend) {
 
   function readBack(rb, count, withTs) {
     rb.serial = ++readSerial;
+    issuedAt.set(rb.serial, performance.now());
     rb.steps = queued;
     rb.count = count;
     const from = engine;
     rb.buffer.mapAsync(GPUMapMode.READ).then(() => {
       if (released) { rb.buffer.destroy(); return; }
       const bytes = rb.engine.positionBytes;
-      if (rb.serial > appliedSerial && from === engine) {
+      const next = issuedAt.get(rb.serial + 1);
+      const replaced = next !== undefined && next - issuedAt.get(rb.serial) < BURST_MS;
+      issuedAt.delete(rb.serial);
+      if (rb.serial > appliedSerial && from === engine && !replaced) {
         apply(rb.serial, rb.steps, new Float32Array(rb.buffer.getMappedRange(0, bytes)), rb.ordered);
       }
       if (withTs) {
@@ -276,7 +285,7 @@ function createRunner(layout, backend) {
       rb.buffer.unmap();
       if (rb.engine === engine) free.push(rb); else rb.buffer.destroy();
       afterReadback();
-    }, () => { /* destroyed, or the device was lost */ }).catch(error => {
+    }, () => { issuedAt.delete(rb.serial); /* destroyed, or the device was lost */ }).catch(error => {
       // a bug here, or a listener that threw: say so, rather than stop reading back in silence
       if (rb.buffer.mapState === 'mapped') rb.buffer.unmap();
       if (rb.engine === engine && free.indexOf(rb) < 0) free.push(rb);
@@ -353,7 +362,9 @@ function createRunner(layout, backend) {
   // into the store
   async function readDevice() {
     const serial = ++readSerial, steps = queued, from = engine;
+    issuedAt.set(serial, performance.now());
     const state = await engine.readDevice();
+    issuedAt.delete(serial);
     if (!state || released || from !== engine) return;
     if (serial > appliedSerial) apply(serial, steps, state.positions, true);
     state.apply();

@@ -47,11 +47,12 @@ test('the stock step: one kernel up to N*, the grid template above it in 2D', ()
   const generic = lower(big.simulator.program(), big.simulator, SPEC_LIMITS, { generic: true }).plan;
   assert.equal(generic.template, 'generic');
   assert.equal(generic.regime, 'pyramid');
-  const deep = planOf(layoutOf(3000, { dimensions: 3 }));
+  const deep = planOf(layoutOf(4000, { dimensions: 3 }));
   assert.equal(deep.regime, 'pyramid');
   assert.ok(Object.keys(deep.kernels()).indexOf('TREE_LOCAL') >= 0);
-  assert.match(layoutOf(3000, { dimensions: 3 }).simulator.plan(gpuCapabilities()).stages.find(s => s.stage === 'repulsion').how, /grid pyramid/);
-  assert.equal(planOf(layoutOf(1000, { dimensions: 3 })).regime, 'pairs');
+  assert.match(layoutOf(4000, { dimensions: 3 }).simulator.plan(gpuCapabilities()).stages.find(s => s.stage === 'repulsion').how, /grid pyramid/);
+  // in 3D exact pairs stay faster up to 3,072 bodies
+  assert.equal(planOf(layoutOf(3000, { dimensions: 3 })).regime, 'pairs');
 });
 
 test('node formulas, sums, extra passes, charges, inertia and when run, in any dimension', () => {

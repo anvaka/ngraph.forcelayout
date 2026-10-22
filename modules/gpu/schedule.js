@@ -27,9 +27,8 @@ export { GUARD, STOCK_STAGES, isGuard, physicsStages, SMALL_GRAPH };
  */
 export function schedule(program, laws, limits, options = {}) {
   const nodes = program.spaces.nodes;
-  const smallGraph = options.smallGraph || SMALL_GRAPH;
-  if (!options.generic && nodes > smallGraph && isStockStep(program, laws)) return stockPlan(program, laws.repulsion || null);
-  const plan = genericPlan(program, laws, { limits, warn: options.warn, smallGraph });
+  if (!options.generic && nodes > (options.smallGraph || SMALL_GRAPH) && isStockStep(program, laws)) return stockPlan(program, laws.repulsion || null);
+  const plan = genericPlan(program, laws, { limits, warn: options.warn, smallGraph: options.smallGraph });
   if (plan.refusal) return plan;
   plan.buffers = Object.assign({
     S: plan.S.size * 4, H: plan.H.size * 4, X: plan.cap * plan.D * 4, Y: plan.cap * plan.D * 4,

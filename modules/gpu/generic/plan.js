@@ -5,7 +5,7 @@
 // Regime 'pairs': every tree pass is exact all-pairs inside a node kernel, over tiles of 256
 // bodies in workgroup memory. Up to the small-graph size N* the whole step is then one kernel;
 // sums and FIRE add their own small kernels. In 4 or more dimensions it runs up to 16,384 bodies.
-// Regime 'pyramid' (2D and 3D above N*): the first group of tree passes is the generic grid
+// Regime 'pyramid' (2D and 3D above N*, which is 3,072 in 3D): the first group of tree passes is the generic grid
 // pyramid (../pyramid): its structure dispatches run right before the node kernel that holds its
 // section, and that kernel runs its threads in the pyramid's cell order (thread t works on row
 // tree_row(t)), so bodies near each other in space run together. Further groups stay exact pairs.
@@ -26,8 +26,10 @@ import { planPyramid } from '../pyramid/plan.js';
 
 export const THREADS = 256;
 // Up to this many bodies the whole step is one kernel and repulsion is exact over all pairs
-// (design section 6.1; it measured about 2k on an M4 Max, so this default is conservative)
+// (design section 6.1; it measured about 2k on an M4 Max, so this default is conservative). In 3D
+// the pyramid costs more: exact pairs stay faster up to about 3.2k there (G5, M4 Max)
 export const SMALL_GRAPH = 1024;
+export const SMALL_GRAPH_3D = 3072;
 // Up to this many bodies the exact all-pairs loop runs where the pyramid does not (4D and up)
 export const MAX_PAIRS = 16384;
 const AXES = 'xyzw';
@@ -52,7 +54,7 @@ export function slotValue(index) {
  */
 export function genericPlan(program, laws, options = {}) {
   const D = program.dims, n = program.spaces.nodes;
-  const smallGraph = options.smallGraph || SMALL_GRAPH;
+  const smallGraph = options.smallGraph || (D === 3 ? SMALL_GRAPH_3D : SMALL_GRAPH);
   const stages = physicsStages(program);
   const columnInfo = Object.create(null);
   program.columns.nodes.forEach(column => { columnInfo[column.name] = column; });
@@ -89,6 +91,10 @@ export function genericPlan(program, laws, options = {}) {
   if (sections.filter(s => s.kind === 'euler' || s.kind === 'fire').length !== 1) {
     return { refusal: 'WebGPU needs exactly one integrate stage' };
   }
+  // tree passes read other bodies' positions from the start of the step
+  const integrateAt = sections.findIndex(s => s.kind === 'euler' || s.kind === 'fire');
+  const late = sections.slice(integrateAt + 1).find(s => s.kind === 'pairs');
+  if (late) return { refusal: `WebGPU runs tree passes before the integrate stage only (${late.stage.name} comes after it)` };
   // A tree pass joins the walk before it when the stages between only add to the force and
   // don't read it (drag, springs, addRepulsion's default place before integrate): the order of
   // additions is all that changes

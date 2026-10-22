@@ -37,7 +37,9 @@ test('grids: 2D as the stock template, 3D with about two cells per body', () => 
   const p = plan(3, 100000, stock);
   assert.equal(p.refusal, null);
   assert.deepEqual([p.sizes.G, p.sizes.levels, p.sizes.nCells], [64, 6, 262144]);
-  assert.equal(p.dispatches, 16);
+  assert.equal(p.dispatches, 17, '10 + 6 levels, and the heavy cells');
+  assert.ok(p.kernels.TREE_HEAVY, 'heavy cells: 3D only');
+  assert.equal(plan(2, 100000, stock).kernels.TREE_HEAVY, undefined);
 });
 
 test('every kernel fits 8 storage buffers, with columns in up to three buffers', () => {
@@ -90,6 +92,8 @@ test('laws with tables print as lookups in treeCells; JavaScript functions are r
 
 test('refusals name what does not fit, with the numbers', () => {
   assert.equal(plan(4, 1000, stock).refusal, 'the grid pyramid is 2D and 3D; this layout is 4D');
+  assert.equal(planPyramid({ D: 3, n: 1000, limits: SPEC_LIMITS, pos: pos(3), channels: stock, grid: 128 }).refusal,
+    'the grid pyramid takes up to 2^20 cells; 128^3 is more');
   const big = plan(2, 1000000, v25());
   assert.equal(big.refusal, 'the tree pass with 6 charges in 2D at 1,000,000 bodies needs 213 MiB for its cells; this device allows 128 MiB per buffer');
   assert.equal(plan(2, 1000000, v25(), Object.assign({}, SPEC_LIMITS, { maxStorageBufferBindingSize: 2 ** 32 - 4, maxBufferSize: 2 ** 32 - 4 })).refusal, null);
