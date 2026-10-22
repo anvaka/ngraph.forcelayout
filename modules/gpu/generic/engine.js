@@ -8,14 +8,15 @@ import { THREADS, GROUP_RUN, LINK_CHUNK } from './plan.js';
 import { buildPyramid, pyramidStatus } from '../pyramid/build.js';
 import { buildPairs } from '../pairs/build.js';
 import { buildGrid } from '../grid/build.js';
-import { gridStatus } from '../grid/plan.js';
+import { gridStatus, gridCappedMs } from '../grid/plan.js';
 import { slotFiller } from './values.js';
 import { chooseOrigin, relativePositions as relative, writePositionsBack, rowsMoved } from '../buffers.js';
 import { createRowWriter, trackHostPositions } from '../rows.js';
 
 // GPU time of one step at a structure's work cap, measured on an M4 Max: a pair stage at the pair
 // cap (3.6-6.3 ms whatever the formula, gpu-critic-2's pairs review) and the pyramid's crowded cells
-// at theirs (about 20 ms). The runner bounds steps per submit by them (see cappedMs).
+// at theirs (about 20 ms); a grid field's, from its size and body count (gridCappedMs()). The runner
+// bounds steps per submit by them (see cappedMs).
 const PAIR_STAGE_CAPPED_MS = 6.5;
 const PYRAMID_CAPPED_MS = 20;
 
@@ -400,7 +401,8 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     // GPU time of a step whose structures all work at their caps: a step can get there within a
     // submit (a gate opens, a radius grows, the layout piles up), so the runner keeps submits
     // below the watchdog with it rather than with the steps it timed
-    cappedMs: (pairs ? plan.pairs.stages.length * PAIR_STAGE_CAPPED_MS : 0) + (tree ? PYRAMID_CAPPED_MS : 0),
+    cappedMs: (pairs ? plan.pairs.stages.length * PAIR_STAGE_CAPPED_MS : 0) + (tree ? PYRAMID_CAPPED_MS : 0) +
+      [...grids.keys()].reduce((total, kernel) => total + gridCappedMs(kernel.section.grid), 0),
 
     destroy() {
       owned.forEach(b => b.destroy());
