@@ -309,10 +309,6 @@ test('the stage describes itself for other engines', function (t) {
       anchor: 'lattice', cell: 'h', params: { h: function (context) { return context.settings.springLength / 10; } },
       deposit: { weights: 'quadratic', value: 'mass' }, self: 'exclude', into: { value: 'gasDensity', gradient: 'gasSlope' }
     });
-    if (!sim.program) {
-      t.skip('this simulator has no program()');
-      return;
-    }
     var stage = sim.program().stages.filter(function (s) { return s.name === 'gas'; })[0];
     t.equal(stage.shape, 'grid', 'shape');
     t.same(stage.reads.map(function (r) { return r.column; }), ['pos', 'mass'], 'reads positions and the deposit column');
@@ -323,10 +319,8 @@ test('the stage describes itself for other engines', function (t) {
     t.same(stage.params, [{ name: 'h', kind: 'host' }], 'a host param');
     t.same(stage.args.cell, { kind: 'expression', text: 'h' }, 'cell as text');
     t.equal(stage.args.anchor, 'lattice', 'options in args');
-    var values = sim.stageValues('gas');
-    if (values.cell !== undefined) {
-      t.same(values, { when: true, params: { h: 1 }, cell: 1, margin: 0, diffuse: 0, value: null }, 'numbers of this step');
-      t.equal(sim.plan().stages.filter(function (s) { return s.stage === 'gas'; })[0].how, 'generated loops: a lattice grid, quadratic weights', 'how the CPU runs it');
-    }
+    t.same(sim.stageValues('gas'), { when: true, params: { h: 1 }, cell: 1, margin: 0, diffuse: 0, value: null }, 'numbers of this step');
+    t.same(sim.stageValues('gas', sim.stepContext(7)).cell, 1, 'numbers of a queued step');
+    t.equal(sim.plan().stages.filter(function (s) { return s.stage === 'gas'; })[0].how, 'generated loops: a lattice grid, quadratic weights', 'how the CPU runs it');
   });
 });

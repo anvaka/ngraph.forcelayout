@@ -93,6 +93,8 @@ export default function addGridField(simulator, name, options) {
     hash: null, slots: new Int32Array(0)
   };
   let sweepC = new Float64Array(0), sweepM = new Float64Array(0);
+  // what params and built in values read on the CPU's steps
+  const context = simulator.stepContext();
 
   simulator.addStage(name, run, {
     before: options.before, after: options.after, replace: options.replace,
@@ -107,11 +109,10 @@ export default function addGridField(simulator, name, options) {
     }
   };
 
-  function run(bodies, sim) {
+  function run(bodies) {
     const n = bodies.n;
     if (n === 0) return;
-    // (a library without step contexts hands functions the simulator)
-    const now = values.read(sim.stepContext ? sim.stepContext() : sim, grid.now);
+    const now = values.read(context, grid.now);
     const h = cell.read(now), room = margin.read(now);
     const out = bodies[into.value], slope = bodies[into.gradient];
     if (!out || !slope) throw new Error(`Grid field ${name}: the column ${out ? into.gradient : into.value} is gone`);
@@ -254,9 +255,9 @@ export default function addGridField(simulator, name, options) {
     };
   }
 
-  // This stage's numbers in the step of `context`, for engines that queue steps
-  function stepValues(context) {
-    const now = values.read(context, Object.create(null));
+  // This stage's numbers in the step of `stepContext`, for engines that queue steps
+  function stepValues(stepContext) {
+    const now = values.read(stepContext, Object.create(null));
     const params = {};
     values.names.forEach(key => { params[key] = now[key]; });
     return {
