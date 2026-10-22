@@ -254,12 +254,12 @@ function createRunner(layout, backend) {
     const hostSteps = (lowering.plan && lowering.plan.hostSteps) || [];
     for (let s = 0; hostSteps.length && s < count; s++) {
       const at = firstStep + queued + s;
-      const holding = hostSteps.filter(name => simulator.stageValues(name, simulator.stepContext(at)).when);
-      if (!holding.length) continue;
+      // a step where no host step holds at its start runs no host step: none runs to change that
+      if (!hostSteps.some(name => simulator.stageValues(name, simulator.stepContext(at)).when)) continue;
       if (s > 0) runSteps(s);
       if (halted) return;
       pending += count - s - 1;
-      busy = hostStep(firstStep + queued, holding).then(() => {
+      busy = hostStep(firstStep + queued).then(() => {
         busy = null;
         if (pending && !halted && !stopped) {
           const rest = pending;
@@ -275,15 +275,16 @@ function createRunner(layout, backend) {
     runSteps(count);
   }
 
-  // One step at a host step: its kernels up to each host step that holds, the device's numbers
-  // back into the store, the host step on the host, what it wrote back up, then the rest of the
-  // step (whose numbers are read after the host step ran)
-  async function hostStep(at, holding) {
+  // One step at a host step: its kernels up to each host step, whose `when` is asked at its turn
+  // (after the host steps before it ran, as on the CPU); where it holds, the device's numbers back
+  // into the store, the host step on the host, what it wrote back up, then the rest of the step
+  // (whose numbers are read after the host step ran)
+  async function hostStep(at) {
     const names = lowering.plan.hostSteps;
     const from = engine;
     for (let part = 0; part < engine.segments; part++) {
       engine.run(1, at, { segment: part });
-      if (part === names.length || holding.indexOf(names[part]) < 0) continue;
+      if (part === names.length || !simulator.stageValues(names[part], simulator.stepContext(at)).when) continue;
       await readDevice();
       if (released || halted || from !== engine) return;
       simulator.iteration(at);
