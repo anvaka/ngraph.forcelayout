@@ -6,8 +6,10 @@ Today it runs, in any number of dimensions, the built in step (springs, repulsio
 drag, Euler or FIRE, any inertia column), extra repulsion passes with their own charge and
 sensitivity columns, node formulas, link formulas (that pull, add into body columns, or set their
 link's own columns, length and stiffness too), links with their own lengths and stiffness, and
-sums over bodies, for all of them or per group of a column the host sets, all in the CPU's stage
-order and with `when` gates. Repulsion is exact over all pairs up to 1,024 bodies (2,560 in 3D); larger 2D and
+sums over bodies, for all of them or per group of a column the host sets, lookup tables in
+formulas and laws, and host steps (the batch stops at the steps where one runs, the host step
+runs on the host with the device's numbers in the store, then the step goes on), all in the CPU's
+stage order and with `when` gates. Repulsion is exact over all pairs up to 1,024 bodies (2,560 in 3D); larger 2D and
 3D layouts use a grid pyramid, and 4D and up runs exact pairs up to 16,384 bodies. `plan()` says
 why it cannot run anything else.
 
