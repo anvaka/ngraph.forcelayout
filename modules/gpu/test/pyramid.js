@@ -166,4 +166,8 @@ test('crowded cells: a status word turns into a halt message', () => {
   const p = plan(2, 100000, stock);
   assert.ok(p.buffers.treeLists >= (4 + Math.floor(100000 / 1025) + 1) * 4, 'room for every crowded cell');
   assert.match(p.section.declarations, /if \(crowded\)/);
+  // SCAN_BLOCKS lists the crowded cells, and ORDER skips ranking them
+  // on a step the cap refuses (a pile of 150k bodies took 37.5 ms a step to rank)
+  assert.match(p.kernels.TREE_SCAN_BLOCKS, /crowdList/);
+  assert.match(p.kernels.TREE_ORDER, /tree_refused\(\)/);
 });

@@ -354,6 +354,37 @@ export function pyramidKernels(spec) {
   const posAt = (row, k) => spec.pos.at(row, k);
 
   const hubs = !!spec.hubs;
+  // The near cells reach SEP cells around a body's cell (1: 3^D cells; 2 for laws that fall
+  // slower than 1/r^2 in 2D, whose far field is mostly monopoles at every level: a source cell
+  // then sits at least 3 cells away, not 2), and the interaction lists start past them.
+  const SEP = spec.sep || 1, SIDE = 2 * SEP + 1, NEAR = SIDE ** D;
+  // The step's crowded work in millions of pair evaluations: each crowded cell SCAN_BLOCKS listed,
+  // times the bodies of its near cells (rounded up per cell, so the sum does not depend on the
+  // list's order), from the starts. ORDER and AGG0 ask it in crowded cells only, before the cap is
+  // checked in TREE_LOCAL: on a step the cap refuses they skip those cells (ranking a pile of 150k
+  // bodies took 37.5 ms a step, summing it 20 ms; gpu-critic-2's m3-r1). `load` reads treeLists.
+  const crowdWorkFn = load => /* wgsl */`
+fn tree_crowd_work() -> u32 {
+  let crowded = ${load('1u')};
+  let Gi = i32(TP.G);
+  var work = 0u;
+  for (var l = 0u; l < crowded; l++) {
+    let b = ${load('TP.crowdList + l')};
+    ${each(D, k => `let x${k} = i32(tree_compact(b >> ${k}u));`, ' ')}
+    var targets = 0u;
+    for (var nu = 0u; nu < ${NEAR}u; nu++) {
+      ${each(D, k => `let y${k} = x${k} + i32((nu / ${SIDE ** k}u) % ${SIDE}u) - ${SEP};`, ' ')}
+      if (${each(D, k => `y${k} < 0 || y${k} >= Gi`, ' || ')}) { continue; }
+      let y = ${each(D, k => `(tree_spread(u32(y${k})) << ${k}u)`, ' | ')};
+      targets += select(TP.n, treeMeta[y + 1u], y + 1u < TP.nCells) - treeMeta[y];
+    }
+    let nb = select(TP.n, treeMeta[b + 1u], b + 1u < TP.nCells) - treeMeta[b];
+    work += u32(ceil(f32(nb) * f32(targets) * 1e-6));
+  }
+  return work;
+}
+// the cap refuses this step's crowded cells (weighted by the charges, see chargeWeight)
+fn tree_refused() -> bool { return f32(tree_crowd_work()) * ${lit(chargeWeight(K) * 1e6)} > TP.workCap; }`;
   const HIST = (() => {
     const cols = columnBindings(hubs ? [spec.pos].concat(spec.charges) : [spec.pos], 1);
     return common + /* wgsl */`
@@ -516,16 +547,25 @@ fn main(${LINEAR}) {
   })();
 
   // Exclusive scan of the counts (nCells = a multiple of 1,024, at most 2^20) in blocks of 1,024
-  // into the starts; zeroes the counts for the next step
-  const SCAN_BLOCKS = /* wgsl */`
+  // into the starts, listing the crowded cells (past the near cap); zeroes the counts for the next
+  // step
+  const SCAN_BLOCKS = paramsStruct(spec.lawWords) + /* wgsl */`
 @group(0) @binding(0) var<storage, read_write> treeCount: array<u32>;
 @group(0) @binding(1) var<storage, read_write> treeMeta: array<u32>;
 @group(0) @binding(2) var<storage, read_write> blockSums: array<u32>;
+@group(0) @binding(3) var<uniform> TP: TreeParams;
+@group(0) @binding(4) var<storage, read_write> treeLists: array<atomic<u32>>;
 var<workgroup> tmp: array<u32, 256>;
 @compute @workgroup_size(256)
 fn main(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: vec3u) {
   let base = wid.x * 1024u + li * 4u;
   let a0 = treeCount[base]; let a1 = treeCount[base + 1u]; let a2 = treeCount[base + 2u]; let a3 = treeCount[base + 3u];
+  if (max(max(a0, a1), max(a2, a3)) > TP.nearCap) {
+    let a = array<u32, 4>(a0, a1, a2, a3);
+    for (var k = 0u; k < 4u; k++) {
+      if (a[k] > TP.nearCap) { atomicStore(&treeLists[TP.crowdList + atomicAdd(&treeLists[1], 1u)], base + k); }
+    }
+  }
   treeCount[base] = 0u; treeCount[base + 1u] = 0u; treeCount[base + 2u] = 0u; treeCount[base + 3u] = 0u;
   let t = a0 + a1 + a2 + a3;
   tmp[li] = t;
@@ -597,12 +637,14 @@ fn main(${LINEAR}) {
     const words = [];
     for (let k = 0; k < D; k++) words.push(`${posAt('i', k)}`);
     spec.charges.forEach(ref => words.push(ref.at('i', 0)));
-    return paramsStruct(spec.lawWords) + /* wgsl */`
+    return paramsStruct(spec.lawWords) + mortonFns(D, L.bits) + /* wgsl */`
 ${tp}
 ${cols.decl}
 @group(0) @binding(${b}) var<storage, read> treeWork: array<u32>;
 @group(0) @binding(${b + 1}) var<storage, read_write> treeMeta: array<u32>;
 @group(0) @binding(${b + 2}) var<storage, read_write> treeSp: array<vec4f>;
+@group(0) @binding(${b + 3}) var<storage, read> treeLists: array<u32>;
+${crowdWorkFn(i => `treeLists[${i}]`)}
 @compute @workgroup_size(${WG})
 fn main(${LINEAR}) {
   let i = ${LINEAR_ID};
@@ -612,9 +654,9 @@ fn main(${LINEAR}) {
   let s = treeMeta[c];
   let e = select(TP.n, treeMeta[c + 1u], c + 1u < TP.nCells);
   var rank = treeWork[2u * i + 1u];
-  // a cell of more than 65,536 bodies keeps the atomic order; the crowded cells' work cap refuses
-  // such a step anyway (65,536^2 pairs)
-  if (e - s <= 65536u) {
+  // A crowded cell keeps the atomic order on a step the cap refuses (nothing is computed from it),
+  // and so does a cell of more than 65,536 bodies (65,536^2 pairs are refused)
+  if (e - s <= 65536u && !(e - s > TP.nearCap && tree_refused())) {
     rank = 0u;
     for (var t = s; t < e; t++) { if (treeWork[2u * TP.n + t] < i) { rank++; } }
   }
@@ -714,7 +756,8 @@ ${tp}
 @group(0) @binding(2) var<storage, read_write> treeMeta: array<u32>;
 @group(0) @binding(3) var<storage, read_write> treeCells: array<vec4f>;
 @group(0) @binding(4) var<storage, read_write> treeLists: array<atomic<u32>>;${hubs ? `
-@group(0) @binding(5) var<storage, read_write> treeBox: array<u32>;` : ''}${spec.heads ? `
+@group(0) @binding(5) var<storage, read_write> treeBox: array<u32>;` : ''}
+${crowdWorkFn(i => `atomicLoad(&treeLists[${i}])`)}${spec.heads ? `
 var<workgroup> wgOccupied: atomic<u32>;
 var<workgroup> wgBase: u32;` : ''}${block}
 @compute @workgroup_size(${WG})
@@ -736,8 +779,9 @@ fn main(${LINEAR}, @builtin(local_invocation_index) li: u32) {
 fn tree_aggregate(c: u32) -> TreeRec {
   let s = treeMeta[c];
   let e = select(TP.n, treeMeta[c + 1u], c + 1u < TP.nCells);
-  // a crowded cell: its near pushes are TREE_LOCAL's crowd workgroups' work
-  if (e - s > TP.nearCap) { atomicStore(&treeLists[TP.crowdList + atomicAdd(&treeLists[1], 1u)], c); }
+  // a crowded cell (SCAN_BLOCKS listed it): its near pushes are TREE_LOCAL's crowd workgroups'
+  // work, and on a step the cap refuses nothing is computed from its sums
+  if (e - s > TP.nearCap && tree_refused()) { var none: TreeRec; ${putRec('c', 'none', 'TP.metaCount')} return none; }
   ${each(K, q => `var m${q} = 0.0;`)}
   ${own.map(q => `var w${q} = 0.0; ` + each(D, k => `var s${q}_${k} = 0.0;`)).join(' ')}
   ${each(D, k => `var u${k} = 0.0;`)}
@@ -802,10 +846,6 @@ fn main(${LINEAR}) {
 }`);
 
   const lawCode = lawFunctions(spec) + tableWordFn(L);
-  // The near cells reach SEP cells around a body's cell (1: 3^D cells; 2 for laws that fall
-  // slower than 1/r^2 in 2D, whose far field is mostly monopoles at every level: a source cell
-  // then sits at least 3 cells away, not 2), and the interaction lists start past them.
-  const SEP = spec.sep || 1, SIDE = 2 * SEP + 1, NEAR = SIDE ** D;
   const lawGroups = spec.groups;
   // The centres channels act from: channel 0's (shared) and each own one
   const centres = [{ word: L.C[0], channels: [] }];
@@ -926,6 +966,7 @@ for (var ch = 0u; ch < ${1 << D}u; ch++) {
 var<workgroup> crowdPart: array<f32, ${WG * D}>;
 var<workgroup> crowdHead: vec4u;
 var<workgroup> crowdRange: vec4u;
+${crowdWorkFn(i => `atomicLoad(&treeLists[${i}])`)}
 fn tree_count(b: u32) -> u32 { return select(TP.n, treeMeta[b + 1u], b + 1u < TP.nCells) - treeMeta[b]; }
 // cell b's near cell number nu (base SIDE digits, minus SEP per axis), or nCells off the grid
 fn tree_near(b: u32, nu: u32) -> u32 {
@@ -939,18 +980,10 @@ fn tree_crowd(w: u32, li: u32) {
   if (w >= ${CROWD_GROUPS}u) { return; }
   if (li == 0u) {
     let crowded = atomicLoad(&treeLists[1]);
-    var work = 0.0; var biggest = 0u;
-    for (var l = 0u; l < crowded; l++) {
-      let b = atomicLoad(&treeLists[TP.crowdList + l]);
-      let nb = tree_count(b);
-      biggest = max(biggest, nb);
-      var targets = 0u;
-      for (var nu = 0u; nu < ${NEAR}u; nu++) {
-        let a = tree_near(b, nu);
-        if (a < TP.nCells) { targets += tree_count(a); }
-      }
-      work += f32(nb) * f32(targets);
-    }
+    var biggest = 0u;
+    for (var l = 0u; l < crowded; l++) { biggest = max(biggest, tree_count(atomicLoad(&treeLists[TP.crowdList + l]))); }
+    // the work ORDER and AGG0 refused by (tree_crowd_work)
+    let work = f32(tree_crowd_work()) * 1e6;
     // in evaluations of one charge (chargeWeight)
     let weighted = work * ${lit(chargeWeight(K))};
     let over = weighted > TP.workCap;
