@@ -6,6 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { planPyramid, chooseGrid, pyramidMemory } from '../pyramid/plan.js';
+import { walkGroups, walkChannels } from '../pyramid/channels.js';
 import { SPEC_LIMITS } from '../check.js';
 
 const require = createRequire(import.meta.url);
@@ -103,4 +104,20 @@ test('the section adds to the force variables it is given', () => {
   assert.match(code, /fx \+= tf\.x; fy \+= tf\.y; fz \+= tf\.z;/);
   assert.match(p.section.code({ t: null, i: 'row', force: ['a', 'b', 'c'] }), /let tk = tree_slot\(row\)/);
   assert.equal(p.section.row('t'), 'tree_row(t)');
+});
+
+test('walk groups: the library\'s walks, else tree stages next to each other', () => {
+  const tree = (name, walk, channel = {}) => ({ name, shape: 'tree', args: { channels: [Object.assign({ charge: 'mass', sensitivity: 'mass', centroid: 'own' }, channel)], walk } });
+  const node = name => ({ name, shape: 'node', args: {} });
+  const walk = stages => ({ stages, index: 0, charges: stages.length, tree: 'quadtree' });
+  const names = groups => groups.map(group => group.map(stage => stage.name));
+  const three = ['repulsion', 'core', 'leaves'];
+  assert.deepEqual(names(walkGroups({ stages: [node('clear'), tree('repulsion', walk(three)), tree('core', walk(three)),
+    tree('leaves', walk(three), { charge: 'leafq', sensitivity: 'core', centroid: 'shared' }), node('drag')] })), [three]);
+  assert.deepEqual(names(walkGroups({ stages: [tree('repulsion', walk(['repulsion'])), tree('gated', walk(['gated']))] })), [['repulsion'], ['gated']]);
+  assert.deepEqual(names(walkGroups({ stages: [tree('a'), tree('b'), node('n'), tree('c')] })), [['a', 'b'], ['c']]);
+  const group = walkGroups({ stages: three.map((name, k) => tree(name, walk(three), k === 2 ? { charge: 'leafq', sensitivity: 'core', centroid: 'shared' } : {})) })[0];
+  const channels = walkChannels(group, { column: name => ({ buffer: 'H', name }), law: () => null });
+  assert.deepEqual(channels.map(c => [c.stage, c.centroid, c.charge.name, c.sensitivity, c.sameColumn]),
+    [['repulsion', 'own', 'mass', 'mass', true], ['core', 'own', 'mass', 'mass', true], ['leaves', 'shared', 'leafq', 'core', false]]);
 });
