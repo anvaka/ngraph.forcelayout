@@ -215,6 +215,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
       gpu.on('error', e => {
         // Stepping stopped on the GPU: carry on with the CPU from the last positions
         gpuError = e.lost ? 'the WebGPU device was lost' : e.message;
+        // a lost device never comes back: picking WebGPU again asks for a new one
+        if (e.lost) gpuBackend = null;
         backend = 'cpu';
         changeLayout(null);
       });
