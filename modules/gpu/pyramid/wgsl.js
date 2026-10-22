@@ -33,6 +33,8 @@ import { createPrinter, lawPrologue } from '../wgsl/print.js';
 
 export const WG = 256;
 export const HIST_BINS = 1024;
+// Workgroups of TREE_HIST, at most
+export const HIST_GROUPS = 128;
 // A finest cell whose charge per body passes this many times the mean is heavy (see TREE_HEAVY)
 const HEAVY = 8;
 // Workgroups of TREE_HEAVY, and threads in each
@@ -42,6 +44,10 @@ export const CROWD_GROUPS = 128;
 // treeLists: heavy count, crowded count, status (the largest crowded cell when their work is over
 // the cap, else 0), work (millions of pair evaluations), occupied count, 3 spare, then the lists
 export const LIST_HEAD = 8;
+// Heavy bodies (hubs, 2D): a body whose charges pass HEAVY times the mean takes its far field from
+// TREE_LOCAL's HUB_GROUPS extra workgroups (see tree_hub), at most HUB_MAX of them a step
+export const HUB_GROUPS = 32;
+export const HUB_MAX = 2047;
 const AX = 'xyzw';
 
 function each(n, fn, sep = ' ') {
@@ -127,7 +133,10 @@ export function pyramidLayout(D, channels, tableWords = 0) {
 export function boxLayout(D) {
   const L = { BB_MIN: 0, BB_MAX: D, ORIGIN: 2 * D, SIDE: 3 * D, INV: 3 * D + 1, CENTRE: 3 * D + 2, DIAG: 4 * D + 2 };
   L.HEADER = Math.ceil((4 * D + 3) / 4) * 4;
-  L.size = L.HEADER + D * HIST_BINS;
+  // |charge| summed per HIST workgroup, then over them (BOX): the mean that makes a body heavy
+  L.PART = L.HEADER + D * HIST_BINS;
+  L.TOTAL = L.PART + HIST_GROUPS;
+  L.size = L.TOTAL + 1;
   return L;
 }
 
@@ -223,7 +232,7 @@ struct TreeParams {
   locOff: u32, metaTag: u32, metaRow: u32, metaCount: u32,
   nearCap: u32, outlierRank: u32, gravity: f32, top: u32,
   localGroups: u32, crowdOff: u32, workCap: f32, crowdList: u32,
-  occList: u32, pad0: u32, pad1: u32, pad2: u32,${lawWords ? `
+  occList: u32, hubOff: u32, hubList: u32, pad0: u32,${lawWords ? `
   law: array<vec4f, ${Math.ceil(lawWords / 4)}>,` : ''}
 };`;
 }
@@ -335,14 +344,16 @@ export function pyramidKernels(spec) {
   };
   const posAt = (row, k) => spec.pos.at(row, k);
 
+  const hubs = !!spec.hubs;
   const HIST = (() => {
-    const cols = columnBindings([spec.pos], 1);
+    const cols = columnBindings(hubs ? [spec.pos].concat(spec.charges) : [spec.pos], 1);
     return common + /* wgsl */`
 ${tp}
 ${cols.decl}
 @group(0) @binding(${1 + cols.names.length}) var<storage, read_write> treeBox: array<atomic<u32>>;
 var<workgroup> hist: array<atomic<u32>, ${D * HB}>;
-var<workgroup> wb: array<atomic<u32>, ${2 * D}>;
+var<workgroup> wb: array<atomic<u32>, ${2 * D}>;${hubs ? `
+var<workgroup> qpart: array<f32, ${WG}>;` : ''}
 fn fenc(v: f32) -> u32 { let u = bitcast<u32>(v); return select(u | 0x80000000u, ~u, (u & 0x80000000u) != 0u); }
 fn hbin(d: f32) -> u32 {
   let key = u32(clamp(i32(bitcast<u32>(abs(d)) >> 20u) - 824, 0, 511));
@@ -350,15 +361,17 @@ fn hbin(d: f32) -> u32 {
 }
 @compute @workgroup_size(${WG})
 fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocation_index) li: u32,
-        @builtin(num_workgroups) nwg: vec3u) {
+        @builtin(num_workgroups) nwg: vec3u, @builtin(workgroup_id) wid: vec3u) {
   for (var b = li; b < ${D * HB}u; b += ${WG}u) { atomicStore(&hist[b], 0u); }
   if (li < ${D}u) { atomicStore(&wb[li], 0xffffffffu); } else if (li < ${2 * D}u) { atomicStore(&wb[li], 0u); }
   workgroupBarrier();
   ${each(D, k => `let c${k} = bitcast<f32>(atomicLoad(&treeBox[${BL.CENTRE + k}]));`)}
-  ${each(D, k => `var mn${k} = 3e38; var mx${k} = -3e38;`)}
+  ${each(D, k => `var mn${k} = 3e38; var mx${k} = -3e38;`)}${hubs ? `
+  var qs = 0.0;` : ''}
   for (var i = gid.x; i < TP.n; i += nwg.x * ${WG}u) {
     ${each(D, k => `let p${k} = ${posAt('i', k)};`)}
-    if (!(${each(D, k => `abs(p${k}) < 1e37`, ' && ')})) { continue; } // NaN or inf
+    if (!(${each(D, k => `abs(p${k}) < 1e37`, ' && ')})) { continue; } // NaN or inf${hubs ? `
+    qs += ${spec.charges.map(ref => `abs(${ref.at('i', 0)})`).join(' + ')};` : ''}
     ${each(D, k => `mn${k} = min(mn${k}, p${k}); mx${k} = max(mx${k}, p${k});`)}
     ${each(D, k => `atomicAdd(&hist[${k * HB}u + hbin(p${k} - c${k})], 1u);`)}
   }
@@ -370,7 +383,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocation_ind
   }
   if (li == 0u) {
     ${each(D, k => `atomicMin(&treeBox[${BL.BB_MIN + k}], atomicLoad(&wb[${k}])); atomicMax(&treeBox[${BL.BB_MAX + k}], atomicLoad(&wb[${D + k}]));`, '\n    ')}
+  }${hubs ? `
+  // this workgroup's |charge| sum, in a fixed tree (BOX adds the workgroups' in order)
+  qpart[li] = qs;
+  for (var h = ${WG / 2}u; h > 0u; h >>= 1u) {
+    workgroupBarrier();
+    if (li < h) { qpart[li] += qpart[li + h]; }
   }
+  if (li == 0u) { atomicStore(&treeBox[${BL.PART}u + wid.x], bitcast<u32>(qpart[0])); }` : ''}
 }`;
   })();
 
@@ -385,7 +405,8 @@ ${tp}
 @group(0) @binding(2) var<storage, read_write> treeLists: array<u32>;
 var<workgroup> scan: array<u32, ${WG}>;
 var<workgroup> found: array<f32, ${3 * D}>;
-var<workgroup> total: u32;
+var<workgroup> total: u32;${hubs ? `
+var<workgroup> qsum: array<f32, ${WG}>;` : ''}
 fn fdec(u: u32) -> f32 { return bitcast<f32>(select(~u, u & 0x7fffffffu, (u & 0x80000000u) != 0u)); }
 fn keyLo(key: u32) -> f32 { return select(bitcast<f32>((key + 824u) << 20u), 0.0, key == 0u); }
 fn keyHi(key: u32) -> f32 { return bitcast<f32>((key + 825u) << 20u); }
@@ -394,7 +415,14 @@ fn edgeHi(s: u32) -> f32 { return select(-keyLo(511u - s), keyHi(s - 512u), s >=
 @compute @workgroup_size(${WG})
 fn main(@builtin(local_invocation_index) li: u32) {
   if (li < ${3 * D}u) { found[li] = 0.0; }
-  if (li < ${LIST_HEAD}u) { treeLists[li] = 0u; }
+  if (li < ${LIST_HEAD}u) { treeLists[li] = 0u; }${hubs ? `
+  // the total |charge|: HIST's workgroups' sums, in a fixed tree
+  qsum[li] = select(0.0, bitcast<f32>(treeBox[${BL.PART}u + li]), li < min((TP.n + ${WG - 1}u) / ${WG}u, ${HIST_GROUPS}u));
+  for (var h = ${WG / 2}u; h > 0u; h >>= 1u) {
+    workgroupBarrier();
+    if (li < h) { qsum[li] += qsum[li + h]; }
+  }
+  if (li == 0u) { treeBox[${BL.TOTAL}] = bitcast<u32>(qsum[0]); }` : ''}
   for (var a = 0u; a < ${D}u; a++) {
     let base = ${BL.HEADER}u + a * ${HB}u + li * 4u;
     var cs = array<u32, 4>(treeBox[base], treeBox[base + 1u], treeBox[base + 2u], treeBox[base + 3u]);
@@ -662,7 +690,8 @@ ${tp}
 @group(0) @binding(1) var<storage, read> treeSp: array<vec4f>;
 @group(0) @binding(2) var<storage, read_write> treeMeta: array<u32>;
 @group(0) @binding(3) var<storage, read_write> treeCells: array<vec4f>;
-@group(0) @binding(4) var<storage, read_write> treeLists: array<atomic<u32>>;${spec.heads ? `
+@group(0) @binding(4) var<storage, read_write> treeLists: array<atomic<u32>>;${hubs ? `
+@group(0) @binding(5) var<storage, read> treeBox: array<u32>;` : ''}${spec.heads ? `
 var<workgroup> wgOccupied: atomic<u32>;
 var<workgroup> wgBase: u32;` : ''}${block}
 @compute @workgroup_size(${WG})
@@ -690,12 +719,17 @@ fn tree_aggregate(c: u32) -> TreeRec {
   ${own.map(q => `var w${q} = 0.0; ` + each(D, k => `var s${q}_${k} = 0.0;`)).join(' ')}
   ${each(D, k => `var u${k} = 0.0;`)}
   // only a border cell can hold clamped bodies
-  let border = ${each(D, k => `tree_compact(c >> ${k}u) == 0u || tree_compact(c >> ${k}u) == TP.G - 1u`, ' || ')};
+  let border = ${each(D, k => `tree_compact(c >> ${k}u) == 0u || tree_compact(c >> ${k}u) == TP.G - 1u`, ' || ')};${hubs ? `
+  let heavyQ = ${lit(HEAVY)} * bitcast<f32>(treeBox[${BL.TOTAL}]) / f32(TP.n);` : ''}
   var cnt = 0u;
   for (var t = s; t < e; t++) {
     if (border && treeMeta[TP.metaTag + 2u * t + 1u] >= 0x80000000u) { continue; }
     cnt++;
-    ${loadVec4s('b', 'treeSp', `t * ${L.SP4}u`, L.SP4)}
+    ${loadVec4s('b', 'treeSp', `t * ${L.SP4}u`, L.SP4)}${hubs ? `
+    if (${each(K, q => `abs(${word('b', D + q)})`, ' + ')} > heavyQ) {
+      let h = atomicAdd(&treeLists[5], 1u);
+      if (h < ${HUB_MAX}u) { atomicStore(&treeLists[TP.hubList + h], t); }
+    }` : ''}
     ${each(K, q => `m${q} += ${word('b', D + q)};`)}
     ${own.map(q => `w${q} += abs(${word('b', D + q)}); ` + each(D, k => `s${q}_${k} += abs(${word('b', D + q)}) * ${word('b', k)};`)).join(' ')}
     ${each(D, k => `u${k} += ${word('b', k)};`)}
@@ -952,16 +986,79 @@ fn tree_crowd(w: u32, li: u32) {
   }
 }`;
 
+  // Heavy bodies (hubs, AGG0 lists them; 2D). A hub's push is the small residue of its leaves'
+  // pushes from every side, and the leaves sit mostly in cells 2 cells away, where the expansions
+  // of the hub's chain take them as monopoles at every level: megaStars after 200 steps was 1.6
+  // times the CPU tree's error, 83% of it at the main hub (its cell too full of leaves to count
+  // as a heavy cell). A hub takes its far field at its own position, with interaction lists that
+  // start a cell further out at every level above the finest; HUB_GROUPS workgroups of TREE_LOCAL
+  // take a hub each, their threads split the lists, and the sums add up in a fixed tree. The
+  // section reads the result through the hub's number in its tag (bits 20 to 30).
+  const R = SEP + 1, RS = 2 * R + 1, CAND = (RS ** D) << D;
+  if (hubs && CAND > WG) throw new Error('tree_hub: more candidate cells than threads');
+  const hubFn = hubs ? /* wgsl */`
+var<workgroup> hubHead: u32;
+fn tree_hub(w: u32, li: u32) {
+  if (w >= ${HUB_GROUPS}u) { return; }
+  if (li == 0u) { hubHead = min(atomicLoad(&treeLists[5]), ${HUB_MAX}u); }
+  let count = workgroupUniformLoad(&hubHead);
+  for (var hb = w; hb < count; hb += ${HUB_GROUPS}u) {
+    let k = atomicLoad(&treeLists[TP.hubList + hb]);
+    let raw = treeMeta[TP.metaTag + 2u * k + 1u];
+    let c = raw & 0x7fffffffu;
+    ${loadVec4s('me', 'treeSp', `k * ${L.SP4}u`, L.SP4)}
+    ${each(D, q => `let p${q} = ${word('me', q)};`)}
+    ${each(D, q => `let cx${q} = i32(tree_compact(c >> ${q}u));`)}
+    ${each(K, q => each(D, k => `var acc${q}_${k} = 0.0;`))}
+    var off = 0u; var Gl = TP.G;
+    for (var l = 0u; l < TP.levels; l++) {
+      let Gi = i32(Gl);
+      let Gp = Gi / 2;
+      let poff = off + ${each(D, () => 'Gl', ' * ')};
+      // the finest level skips my near cells only; the levels above the cells a list has had
+      let skip = select(${R}, ${SEP}, l == 0u);
+      if (li < ${CAND}u) {
+        let pi = li >> ${D}u;
+        let ch = li & ${(1 << D) - 1}u;
+        ${each(D, k => `let xl${k} = cx${k} >> l; let x${k} = (xl${k} >> 1u) + i32((pi / ${RS ** k}u) % ${RS}u) - ${R};`)}
+        if (${each(D, k => `x${k} >= 0 && x${k} < Gp`, ' && ')}) {
+          let mm0 = ${each(D, k => `(tree_spread(u32(x${k})) << ${k}u)`, ' | ')};
+          ${each(D, k => `let y${k} = 2 * x${k} + i32((ch >> ${k}u) & 1u);`)}
+          if (${countAt('poff + mm0')} != 0u && !(${each(D, k => `abs(y${k} - xl${k}) <= skip`, ' && ')})) {
+            let src = off + ((mm0 << ${D}u) | ch);
+            ${loadVec4s('a', 'treeCells', `${L.TAB4}u + src * ${L.CS4}u`, L.CS4)}
+${sourceCell(k => `p${k}`, false)}
+          }
+        }
+      }
+      off += ${each(D, () => 'Gl', ' * ')}; Gl >>= 1u;
+    }${each(K, q => `
+    ${each(D, k => `crowdPart[li * ${D}u + ${k}u] = acc${q}_${k};`)}
+    workgroupBarrier();
+    for (var h = ${WG / 2}u; h > 0u; h >>= 1u) {
+      if (li < h) { ${each(D, k => `crowdPart[li * ${D}u + ${k}u] += crowdPart[(li + h) * ${D}u + ${k}u];`)} }
+      workgroupBarrier();
+    }
+    if (li == 0u) { ${each(D, k => `treeCells[TP.hubOff + hb * ${CR4}u + ${crowdWord(q, k) >> 2}u].${AX[crowdWord(q, k) & 3]} = crowdPart[${k}u];`)} }
+    workgroupBarrier();`, '')}
+    if (li == 0u) { treeMeta[TP.metaTag + 2u * k + 1u] = raw | ((hb + 1u) << 20u); }
+  }
+}` : '';
+
   const LOCAL = common + lawCode + /* wgsl */`
 ${tp}
 @group(0) @binding(1) var<storage, read_write> treeCells: array<vec4f>;
-@group(0) @binding(2) var<storage, read> treeMeta: array<u32>;
+@group(0) @binding(2) var<storage, ${hubs ? 'read_write' : 'read'}> treeMeta: array<u32>;
 @group(0) @binding(3) var<storage, read_write> treeLists: array<atomic<u32>>;
 @group(0) @binding(4) var<storage, read> treeSp: array<vec4f>;${valueBinding}
-${crowdFn}
+${crowdFn}${hubFn}
 @compute @workgroup_size(${WG})
 fn main(${LINEAR}, @builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_index) li: u32) {
-  let wl = wid.x + wid.y * nwg.x;
+  let wl = wid.x + wid.y * nwg.x;${hubs ? `
+  if (wl >= TP.localGroups + ${CROWD_GROUPS}u) {
+    tree_hub(wl - TP.localGroups - ${CROWD_GROUPS}u, li);
+    return;
+  }` : ''}
   if (wl >= TP.localGroups) {
     tree_crowd(wl - TP.localGroups, li);
     return;
@@ -1190,7 +1287,7 @@ fn tree_force(k: u32, s: array<f32, ${K}>) -> ${vec} {
   if (${each(K, c => `s[${c}] == 0.0`, ' && ')}) { return ${vec}(0.0); }
   let i = treeMeta[TP.metaTag + 2u * k];
   let raw = treeMeta[TP.metaTag + 2u * k + 1u];
-  let c = raw & 0x7fffffffu;
+  let c = raw & ${hubs ? '0xfffffu' : '0x7fffffffu'};
   ${loadVec4s('me', 'treeSp', `k * ${L.SP4}u`, L.SP4)}
   ${each(D, q => `let p${q} = ${word('me', q)};`)}
   let Gi = i32(TP.G);
@@ -1198,7 +1295,12 @@ fn tree_force(k: u32, s: array<f32, ${K}>) -> ${vec} {
   ${each(D, q => `var na${q} = 0.0;`)}
   ${each(D, q => `var b${q} = 0.0;`)}
 ${nearField}
-  if (raw == c) {
+  ${hubs ? `let hub = (raw >> 20u) & 0x7ffu;
+  if (hub != 0u) {
+    // a hub: its far field from tree_hub
+    ${loadVec4s('hw', 'treeCells', `TP.hubOff + (hub - 1u) * ${CR4}u`, CR4)}
+    ${each(D, q => `b${q} += ${each(K, cc => `s[${cc}] * ${word('hw', crowdWord(cc, q))}`, ' + ')};`)}
+  } else ` : ''}if (raw == c) {
     // far field: local expansions down my chain of parent cells${farInside}
   } else {
     // clamped into a border cell: monopoles of the interaction lists at my real position${farOutside}
@@ -1238,7 +1340,7 @@ fn tree_row(k: u32) -> u32 { return treeMeta[TP.metaTag + 2u * k]; }`;
       TREE_SCAN_ADD: SCAN_ADD, TREE_PLACE: PLACE, TREE_ORDER: ORDER, TREE_AGG0: AGG0, TREE_PYR: PYR, TREE_LOCAL: LOCAL,
       ...(heavyCells ? { TREE_HEAVY: HEAVY_KERNEL } : {}) },
     columns: {
-      TREE_HIST: columnBindings([spec.pos], 1).names,
+      TREE_HIST: columnBindings(hubs ? [spec.pos].concat(spec.charges) : [spec.pos], 1).names,
       TREE_BIN: columnBindings([spec.pos], 1).names,
       TREE_ORDER: columnBindings([spec.pos].concat(spec.charges), 1).names,
     },

@@ -8,7 +8,7 @@
 //   // then the caller's node kernel, with tree.buffers bound as plan.section.bindings says
 import { getPipeline } from '../device.js';
 import { writeLawValues } from '../wgsl/print.js';
-import { boxLayout, WG, CROWD_GROUPS } from './wgsl.js';
+import { boxLayout, WG, CROWD_GROUPS, HUB_GROUPS, HIST_GROUPS } from './wgsl.js';
 import { NEAR_CAP, pyrLevels } from './plan.js';
 
 const PARAM_WORDS = 20;
@@ -34,7 +34,7 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
   const jobs = Object.keys(kernels).map(name => {
     const options = { code: kernels[name], label: name };
     const stepBinding = step ? [step.dynamic ? 'dynamic' : 'uniform'] : [];
-    if (name === 'TREE_LOCAL' && step) options.bindings = ['uniform', 'storage', 'read', 'storage', 'read'].concat(stepBinding);
+    if (name === 'TREE_LOCAL' && step) options.bindings = ['uniform', 'storage', plan.hubs ? 'storage' : 'read', 'storage', 'read'].concat(stepBinding);
     if (name === 'TREE_HEAVY' && step) options.bindings = ['uniform', 'read', 'read', 'storage', 'read'].concat(stepBinding);
     return getPipeline(device, options).then(pipeline => [name, pipeline]);
   });
@@ -80,6 +80,7 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
   const localThreads = plan.heads ? sizes.n + sizes.localCells - sizes.nCells : sizes.localCells;
   const localGroups = Math.ceil(localThreads / WG);
   pu[12] = localGroups; pu[13] = sizes.crowdOff; pf[14] = workCap; pu[15] = sizes.crowdList; pu[16] = sizes.occList;
+  pu[17] = sizes.hubOff; pu[18] = sizes.hubList;
 
   const bind = (name, list, pipeline = pipes[name]) => device.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
@@ -100,7 +101,7 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     TREE_SCAN_ADD: bind('TREE_SCAN_ADD', [TP, treeMeta, treeBlocks]),
     TREE_PLACE: bind('TREE_PLACE', [TP, treeMeta, treeWork]),
     TREE_ORDER: both('TREE_ORDER', p => [TP].concat(cols('TREE_ORDER', p), [treeWork, treeMeta, treeSp])),
-    TREE_AGG0: bind('TREE_AGG0', [TP, treeSp, treeMeta, treeCells, treeLists]),
+    TREE_AGG0: bind('TREE_AGG0', [TP, treeSp, treeMeta, treeCells, treeLists].concat(plan.hubs ? [treeBox] : [])),
     TREE_LOCAL: bind('TREE_LOCAL', [TP, treeCells, treeMeta, treeLists, treeSp].concat(stepEntry)),
   };
   if (plan.heavyCells) groups.TREE_HEAVY = bind('TREE_HEAVY', [TP, treeSp, treeMeta, treeCells, treeLists].concat(stepEntry));
@@ -129,8 +130,9 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     return [x, Math.ceil(w / x)];
   }
   const nodes = grid(sizes.n), cells = grid(sizes.nCells);
-  const locals = grid((localGroups + CROWD_GROUPS) * WG);
-  const histGroups = Math.min(nodes[0] * nodes[1], 128);
+  // LOCAL's own workgroups, the crowded cells' and the hubs'
+  const locals = grid((localGroups + CROWD_GROUPS + (plan.hubs ? HUB_GROUPS : 0)) * WG);
+  const histGroups = Math.min(nodes[0] * nodes[1], HIST_GROUPS);
   let parity = 0;
   function dispatch(pass, name, size) {
     pass.setPipeline(pipes[name]);
