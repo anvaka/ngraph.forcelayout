@@ -1,5 +1,5 @@
 // plan() verdicts for WebGPU without a device: the lowering table, the words of the refusals, the
-// small and grid templates by size and profile, literal checks and budgets.
+// stock template against the generic plan, literal checks and budgets.
 //
 //   node modules/gpu/test/check.js
 import test from 'node:test';
@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { gpuCapabilities, SPEC_LIMITS } from '../index.js';
 import { lower } from '../check.js';
-import { GUARD } from '../schedule.js';
+import { GUARD } from '../program.js';
 
 const require = createRequire(import.meta.url);
 const createLayout = require('../../../index.js');
@@ -26,48 +26,77 @@ function reasons(layout, limits) {
   return layout.simulator.plan(gpuCapabilities(limits)).reasons;
 }
 
-test('the stock step runs, on the small engine when it fits one workgroup', () => {
+function planOf(layout, limits = SPEC_LIMITS) {
+  return lower(layout.simulator.program(), layout.simulator, Object.assign({}, SPEC_LIMITS, limits)).plan;
+}
+
+test('the stock step: one kernel up to N*, the grid template above it in 2D', () => {
   const small = layoutOf(500);
   assert.deepEqual(reasons(small), []);
-  const lowering = lower(small.simulator.program(), small.simulator, Object.assign({}, SPEC_LIMITS, WIDE));
-  assert.equal(lowering.plan.template, 'small');
-  assert.equal(lower(small.simulator.program(), small.simulator, SPEC_LIMITS).plan.template, 'grid', '256 threads: too few for 500 bodies');
+  const plan = planOf(small);
+  assert.equal(plan.template, 'generic');
+  assert.deepEqual(plan.kernelList.map(k => k.name), ['STEP0']);
   const big = layoutOf(3000, { integrator: 'fire' });
-  const plan = big.simulator.plan(gpuCapabilities(WIDE));
-  assert.ok(plan.runs);
-  assert.match(plan.stages.find(s => s.stage === 'repulsion').how, /grid pyramid/);
-  assert.match(plan.stages.find(s => s.stage === 'integrate').how, /FIRE/);
+  const verdict = big.simulator.plan(gpuCapabilities(WIDE));
+  assert.ok(verdict.runs);
+  assert.equal(planOf(big).template, 'grid');
+  assert.match(verdict.stages.find(s => s.stage === 'repulsion').how, /grid pyramid/);
+  assert.match(verdict.stages.find(s => s.stage === 'integrate').how, /FIRE/);
+  // a generic plan on request (tests compare the two), and for the stock step in 3D
+  assert.equal(lower(big.simulator.program(), big.simulator, SPEC_LIMITS, { generic: true }).plan.template, 'generic');
+  assert.equal(planOf(layoutOf(3000, { dimensions: 3 })).template, 'generic');
+});
+
+test('node formulas, sums, extra passes, charges, inertia and when run, in any dimension', () => {
+  for (const D of [2, 3, 5]) {
+    const sim = layoutOf(200, { dimensions: D }).simulator;
+    sim.store.define('q', Float64Array, 1, 1);
+    sim.store.define('calm', Float64Array, 1, 2);
+    sim.repulsionCharge('q');
+    sim.inertia('calm');
+    sim.addSum('total', { formula: 'mass' });
+    sim.addSum('moment', { formula: 'mass * pos' });
+    sim.addNodeFormula('pull', { params: { k: c => 0.01 * c.springLength() }, formula: 'force -= k * (pos - moment / total)', when: 'step > 2' });
+    sim.addRepulsion('more', { law: { force: 'exp(-r / L) / r^2', params: { L: 3 } }, charge: 'mass', sensitivity: 'q' });
+    const plan = sim.plan(gpuCapabilities());
+    assert.deepEqual(plan.reasons, [], D + 'D');
+    const kernels = planOf({ simulator: sim }).kernelList.map(k => k.name);
+    assert.deepEqual(kernels, ['SUMS', 'SUMS_REDUCE', 'STEP2'], D + 'D: sums go first, the rest is one kernel');
+  }
 });
 
 test('what does not run yet is named', () => {
-  const layout = layoutOf(50, { dimensions: 3 });
-  assert.deepEqual(reasons(layout), ['WebGPU does not run 3D layouts yet']);
-
   const sim = layoutOf(50).simulator;
-  sim.addNodeFormula('pull', { formula: 'force += -0.01 * pos' });
+  sim.store.define('group', Int32Array, 1, 0);
   sim.addLinkFormula('springy', { formula: 'pull = coefficient * (r - length)', replace: 'springs' });
   sim.addPairFormula('apart', { radius: 5, formula: 'push = 1' });
-  sim.addSum('total', { formula: 'mass' });
-  sim.addRepulsion('more', { law: 'r^-1' });
+  sim.addSum('perGroup', { formula: 'mass', group: 'group' });
+  sim.addSum('overLinks', { formula: 'r', over: 'links' });
+  sim.addSum('largest', { formula: 'mass', reduce: 'max' });
+  sim.addNodeFormula('table', { formula: 'force += T(mass) * axis(0)', tables: { T: { from: 0, to: 1, values: [0, 1] } } });
+  sim.addNodeFormula('readsGroup', { formula: 'force += perGroup[group] * axis(0)' });
+  sim.addNodeFormula('writesGroup', { formula: 'group = 2' });
   sim.addHostStep('look', { run: () => {}, when: 'step == 3' });
   sim.addStage('js', () => {});
   sim.addPairRule('rule', { radius: 1, rule: () => 0 });
   const plan = sim.plan(gpuCapabilities());
   const words = Object.fromEntries(plan.stages.filter(s => !s.runs).map(s => [s.stage, s.reason]));
   assert.deepEqual(words, {
-    pull: 'WebGPU does not run node formulas yet',
     springy: 'WebGPU does not run link formulas yet',
     apart: 'WebGPU does not run pair formulas yet',
-    total: 'WebGPU does not run sums yet',
-    more: 'WebGPU does not run extra repulsion passes (addRepulsion) yet',
+    perGroup: 'WebGPU does not run sums per group yet',
+    overLinks: 'WebGPU does not run sums over links yet',
+    largest: 'WebGPU does not run max over bodies yet',
+    table: 'WebGPU does not run lookup tables in formulas yet',
+    readsGroup: 'WebGPU does not run sums per group yet (reads perGroup)',
+    writesGroup: 'WebGPU does not run formulas that write the i32 column group yet',
     look: 'WebGPU does not run host steps yet',
     js: 'JavaScript stages run on the CPU only (formula stages and host steps run on other engines too)',
     pairRules: 'pair rules are JavaScript and run on the CPU only (pair formulas do the same on every engine)',
   });
-  assert.ok(plan.reasons.indexOf('pull: WebGPU does not run node formulas yet') >= 0);
 });
 
-test('laws: tables and JS functions, f32 literals and values, 16 numbers', () => {
+test('laws: tables and JS functions, f32 literals and values; the template takes 16 numbers', () => {
   const sim = layoutOf(50).simulator;
   const verdict = () => sim.plan(gpuCapabilities()).stages.find(s => s.stage === 'repulsion');
   sim.repulsionLaw({ force: 'T(r) / r^2', tables: { T: { from: 0, to: 4, values: [1, 0.5, 0] } } });
@@ -81,28 +110,20 @@ test('laws: tables and JS functions, f32 literals and values, 16 numbers', () =>
   sim.repulsionLaw({ force: 'L * exp(-r) / r^2', params: { L: 1e-41 } });
   assert.ok(verdict().runs);
   assert.ok(sim.plan(gpuCapabilities()).warnings.some(w => /L is 1e-41, below 1.18e-38/.test(w)));
+  // 17 numbers: too many for the template's uniforms, so a big stock layout runs the generic plan
   const params = {};
   let force = '0';
   for (let i = 0; i < 17; i++) { params['a' + i] = i + 1; force += ' + a' + i + ' / r'; }
-  sim.repulsionLaw({ force, params });
-  assert.match(verdict().reason, /up to 16 numbers/);
-  sim.repulsionLaw({ force: 'exp(-r / L) / r^2', params: { L: c => 2 * c.springLength() } });
-  assert.ok(verdict().runs);
-  sim.repulsionLaw(null);
-  assert.ok(verdict().runs);
+  const big = layoutOf(3000);
+  big.simulator.repulsionLaw({ force, params });
+  assert.deepEqual(reasons(big), []);
+  assert.equal(planOf(big).template, 'generic');
 });
 
-test('charges, inertia, adaptive step, per-link springs, the shape of the step', () => {
-  const charged = createLayout(layoutOf(20).graph, { nodeCharge: () => 2 });
-  assert.match(reasons(charged)[0], /charge or sensitivity columns other than the mass/);
-
+test('adaptive step, per-link springs, the shape of the step, settings', () => {
   const sim = layoutOf(20).simulator;
-  sim.store.define('calm', Float64Array, 1, 1);
-  sim.inertia('calm');
-  assert.deepEqual(reasons({ simulator: sim }), ['integrate: WebGPU divides forces by the mass only for now (inertia: calm)']);
-  sim.inertia('mass');
   sim.adaptiveTimeStepWeight(0.1);
-  assert.deepEqual(reasons({ simulator: sim }), ['integrate: WebGPU has no adaptive time step']);
+  assert.deepEqual(reasons({ simulator: sim }), ['springs: WebGPU has no adaptive time step', 'integrate: WebGPU has no adaptive time step']);
   sim.adaptiveTimeStepWeight(0);
   sim.springs[3].length = 30;
   assert.deepEqual(reasons({ simulator: sim }), ['springs: WebGPU does not run links with their own length or stiffness yet']);
@@ -116,8 +137,11 @@ test('charges, inertia, adaptive step, per-link springs, the shape of the step',
   sim.replaceStage('drag', () => {});
   assert.deepEqual(reasons({ simulator: sim }), ['drag: JavaScript stages run on the CPU only (formula stages and host steps run on other engines too)']);
   sim.replaceStage('drag', drag);
+  // a step without drag runs as it is
   sim.removeStage('drag');
-  assert.deepEqual(reasons({ simulator: sim }), ['WebGPU runs the whole built in step only for now; this step has no drag']);
+  assert.deepEqual(reasons({ simulator: sim }), []);
+  sim.removeStage('integrate');
+  assert.deepEqual(reasons({ simulator: sim }), ['WebGPU needs exactly one integrate stage']);
 
   const other = layoutOf(20).simulator;
   other.gravity(1e300);
@@ -137,7 +161,7 @@ test("the guard stage runs; 'step' listeners are a warning", () => {
   assert.ok(!other.simulator.plan(gpuCapabilities()).runs);
 });
 
-test('budgets: storage buffers per kernel, buffer sizes, bodies per dispatch', () => {
+test('budgets: storage buffers, buffer sizes, workgroup memory, bodies', () => {
   const layout = layoutOf(5000);
   assert.deepEqual(reasons(layout, { maxStorageBuffersPerShaderStage: 7 }), [
     'kernel ORDER needs 8 storage buffers; this device allows 7',
@@ -145,17 +169,24 @@ test('budgets: storage buffers per kernel, buffer sizes, bodies per dispatch', (
   ]);
   assert.deepEqual(reasons(layout, { maxBufferSize: 65536 }).filter(r => /vel/.test(r)), ['the buffer vel needs 0.2 MiB; this device allows 0.1 MiB per buffer']);
   assert.match(reasons(layout, { maxComputeWorkgroupsPerDimension: 16 })[0], /up to 4,096 bodies/);
-  // the default limits take a million bodies
-  assert.ok(lower({ ...layout.simulator.program(), spaces: { nodes: 1e6, links: 1.25e6 } }, layout.simulator, SPEC_LIMITS).runs);
+  // many charges in 7D: the tile holds 7 + 10 numbers per body
+  const many = layoutOf(100, { dimensions: 7 }).simulator;
+  for (let c = 0; c < 10; c++) {
+    many.store.define('q' + c, Float64Array, 1, 1);
+    many.addRepulsion('pass' + c, { charge: 'q' + c });
+  }
+  assert.match(reasons({ simulator: many })[0], /workgroup memory \(17 numbers per body\)/);
+  // exact pairs go up to 16,384 bodies; the stock step in 2D has the template beyond
+  assert.match(reasons(layoutOf(17000, { dimensions: 3 }))[0], /up to 16,384 bodies/);
+  assert.deepEqual(reasons(layoutOf(17000)), []);
 });
 
 test('plan() and the runner use the same lowering', () => {
   const layout = layoutOf(300);
   const backend = gpuCapabilities(WIDE);
-  const program = layout.simulator.program();
-  const lowering = backend.lower(program, layout.simulator);
-  assert.ok(lowering.runs && lowering.plan.template === 'small');
-  layout.simulator.addNodeFormula('pull', { formula: 'force += -0.01 * pos' });
+  const lowering = backend.lower(layout.simulator.program(), layout.simulator);
+  assert.ok(lowering.runs && lowering.plan.template === 'generic');
+  layout.simulator.addPairFormula('apart', { radius: 5, formula: 'push = 1' });
   const refused = backend.lower(layout.simulator.program(), layout.simulator);
   assert.equal(refused.plan, null);
   assert.equal(refused.runs, false);
