@@ -74,7 +74,7 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
   const keyWords = deposit ? 3 : 2, spWords = deposit && D === 3 ? 2 : 1;
   const size = bytes => Math.max(16, Math.ceil(bytes / 16) * 16);
   const buffers = {
-    gridMeta: size((META.TABLE + 3 * TS) * 4),
+    gridMeta: size((META.TABLE + 2 * TS) * 4),
     gridCount: size(capacity * 4),
     gridStart: size((capacity + capacity / 2048) * 4),
     gridKey: size(keyWords * n * 4),

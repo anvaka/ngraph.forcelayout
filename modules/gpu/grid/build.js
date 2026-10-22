@@ -98,6 +98,14 @@ export async function buildGrid(device, plan, { buffers: external = {}, step = n
   if (plan.smooth) for (let k = 0; k < plan.D; k++) steps.push([`${L}_SMOOTH${k}`, IND_SMOOTH + 3 * k]);
   steps.push([`${L}_GATHER`, [nodes]]);
 
+  function dispatch(pass, name, size, { stepOffset = 0, parity = 0 } = {}) {
+    const k = byName[name];
+    pass.setPipeline(k.pipeline);
+    pass.setBindGroup(0, k.groups[k.groups.length > 1 ? parity : 0], k.dynamic ? [stepOffset] : []);
+    if (typeof size === 'number') pass.dispatchWorkgroupsIndirect(own.gridMeta, size * 4);
+    else pass.dispatchWorkgroups(size[0]);
+  }
+
   return {
     buffers: own,
     // Copy these 16 bytes into a readback and give the words to gridStatus()
@@ -118,16 +126,13 @@ export async function buildGrid(device, plan, { buffers: external = {}, step = n
     // The dispatches of one step, into the caller's compute pass. `stepOffset`: the dynamic
     // offset of the caller's step slot for this step; `parity`: which buffer of an alternating
     // pair holds this step's positions.
-    encode(pass, { stepOffset = 0, parity = 0 } = {}) {
+    encode(pass, options) {
       if (plan.n === 0) return;
-      for (const [name, size] of steps) {
-        const k = byName[name];
-        pass.setPipeline(k.pipeline);
-        pass.setBindGroup(0, k.groups[k.groups.length > 1 ? parity : 0], k.dynamic ? [stepOffset] : []);
-        if (typeof size === 'number') pass.dispatchWorkgroupsIndirect(own.gridMeta, size * 4);
-        else pass.dispatchWorkgroups(size[0]);
-      }
+      for (const [name, size] of steps) dispatch(pass, name, size, options);
     },
+
+    // The same, kernel by kernel (to time each in its own pass)
+    phases: steps.map(([name, size]) => ({ name, encode: (pass, options) => dispatch(pass, name, size, options) })),
 
     destroy() {
       owned.forEach(b => b.destroy());

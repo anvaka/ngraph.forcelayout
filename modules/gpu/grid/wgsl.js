@@ -53,7 +53,7 @@ export const META = {
   TAB_DONE: 32,  // entries they hold, or CONVERGED: entries past the last equal it
   STATUS: 36,    // sticky: [1 too wide | 3 over capacity, cells across (f32), cell (f32), axis]
   IND: 40,       // indirect dispatch arguments, 3 words each: scan blocks, scan add, deposit, smooth per axis
-  TABLE: 64,     // coefficient tables (see params()): sigma, 1 / pivot, mu; tableSize entries each
+  TABLE: 64,     // coefficient tables (see params()): 1 / pivot, then mu; tableSize entries each
 };
 export const IND_SCAN = META.IND, IND_ADD = META.IND + 3, IND_DEPOSIT = META.IND + 6, IND_SMOOTH = META.IND + 9;
 const CONVERGED = 0xffffffff;
@@ -343,28 +343,29 @@ function params(spec) {
     // the distance from the line's start only, so one table serves every line and axis; it
     // converges within a few dozen entries, past which readers clamp, and is kept until gamma
     // changes or a longer line needs more of it.
-    // The table holds mu_i = m_i - gamma and sigma_i = mu_i / m_i (1 - Thomas's ratio
-    // gamma / m_i), from mu_0 = 1 + gamma and mu_i = 1 + gamma sigma_{i-1}: no step subtracts.
-    // Forming 1 + 2 gamma in f32 loses the 1 to rounding, which the pivots' fixed point
-    // amplifies: the solve was off by about gamma times f32's precision (1e-5 at gamma 16), and is
-    // now off by about sqrt(gamma) times it.
+    // The pivots come from mu_i = m_i - gamma: mu_0 = 1 + gamma, mu_i = 1 + gamma mu_{i-1} / m_{i-1},
+    // m_i = gamma + mu_i, so no step subtracts. Thomas's own m_i = 1 + 2 gamma - gamma^2 / m_{i-1}
+    // loses the 1 of 1 + 2 gamma to f32 rounding, which the pivots' fixed point amplifies: the solve
+    // was off by about gamma times f32's precision (1e-5 at gamma 16), and is now off by about
+    // sqrt(gamma) times it. The table holds 1 / m_i, and mu_i for the self term.
     lines.push(`  let diffuse = ${at('diffuse')};`);
     lines.push('  let gam = select(0.0, diffuse / (cell.x * cell.x), diffuse > 0.0);');
     lines.push(`  let need = ${maxOf(Array.from({ length: D }, (_, k) => `sz${k}`))};`);
     lines.push(`  let held = gridMeta[${META.TAB_DONE}u];`);
     lines.push(`  if (flag == 0u && (gridMeta[${META.TAB_GAMMA}u] != bitcast<u32>(gam) || (held != ${CONVERGED}u && held < need))) {`);
-    lines.push(`    let ts = ${META.TABLE}u; let ti = ${META.TABLE + TS}u; let tu = ${META.TABLE + 2 * TS}u;`);
-    lines.push('    var mu = 1.0 + gam; var m = gam + mu; var sg = mu / m;');
-    lines.push('    gridMeta[ts] = bitcast<u32>(sg); gridMeta[ti] = bitcast<u32>(1.0 / m); gridMeta[tu] = bitcast<u32>(mu);');
+    lines.push(`    let ti = ${META.TABLE}u; let tu = ${META.TABLE + TS}u;`);
+    lines.push('    var mu = 1.0 + gam; var inv = 1.0 / (gam + mu); var mu1 = -1.0; var inv1 = -1.0;');
+    lines.push('    gridMeta[ti] = bitcast<u32>(inv); gridMeta[tu] = bitcast<u32>(mu);');
     lines.push(`    var last = 0u; var done = ${CONVERGED}u;`);
     lines.push('    loop {');
     lines.push('      if (last + 1u >= need) { done = need; break; }');
-    lines.push('      let mu2 = 1.0 + gam * sg; let m2 = gam + mu2; let sg2 = mu2 / m2;');
+    lines.push('      let mu2 = 1.0 + gam * mu * inv; let inv2 = 1.0 / (gam + mu2);');
     lines.push('      last += 1u;');
-    lines.push('      gridMeta[ts + last] = bitcast<u32>(sg2); gridMeta[ti + last] = bitcast<u32>(1.0 / m2); gridMeta[tu + last] = bitcast<u32>(mu2);');
-    // within two ulps: in f32 the sequence can end in a 2-cycle instead of repeating
-    lines.push('      if (abs(sg2 - sg) <= 2.5e-7 * sg2 && abs(mu2 - mu) <= 2.5e-7 * mu2) { break; }');
-    lines.push('      sg = sg2; mu = mu2;');
+    lines.push('      gridMeta[ti + last] = bitcast<u32>(inv2); gridMeta[tu + last] = bitcast<u32>(mu2);');
+    // converged: the numbers repeat, or (f32 rounding) alternate between two; stopping at a
+    // relative tolerance instead left the clamped entries 4e-7 off, which the solve amplifies
+    lines.push('      if ((mu2 == mu && inv2 == inv) || (mu2 == mu1 && inv2 == inv1)) { break; }');
+    lines.push('      mu1 = mu; inv1 = inv; mu = mu2; inv = inv2;');
     lines.push('    }');
     lines.push(`    gridMeta[${META.TAB_LAST}u] = last; gridMeta[${META.TAB_GAMMA}u] = bitcast<u32>(gam); gridMeta[${META.TAB_DONE}u] = done;`);
     lines.push('  }');
@@ -576,10 +577,10 @@ function smooth(spec, axis) {
   const { D } = spec;
   const TS = tableSize(spec.maxCells);
   const sizes = `let s0 = i32(gridMeta[${META.SIZE}u]); let s1 = i32(gridMeta[${META.SIZE + 1}u]);${D === 3 ? ` let s2 = i32(gridMeta[${META.SIZE + 2}u]);` : ''}`;
-  // sigma_m and 1 / m_m (see params()): forward d_m = (1 - sigma_m) d_{m-1} + u_m / m_m, backward
-  // x_m = (1 - sigma_m) x_{m+1} + d_m
-  const tables = `let K = gridMeta[${META.TAB_LAST}u];
-  let ts = ${META.TABLE}u; let ti = ${META.TABLE + TS}u;`;
+  // 1 / m_m from the table (see params()): forward d_m = (u_m + gamma d_{m-1}) / m_m, backward
+  // x_m = d_m + (gamma / m_m) x_{m+1}
+  const tables = `let K = gridMeta[${META.TAB_LAST}u]; let gam = ${f32At(META.TAB_GAMMA)};
+  let ti = ${META.TABLE}u;`;
   const bindings = [metaRead, field('storage')];
   if (smoothVariant(D, axis) === 'scan') {
     // A workgroup per line, every thread busy: both sweeps are first-order linear recurrences,
@@ -613,11 +614,11 @@ fn main(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: ve
   let m0 = li * ${PER}u;
   var u: array<f32, ${PER}>;
   for (var k = 0u; k < ${PER}u; k++) { let m = m0 + k; if (m < L) { u[k] = gridField[base + m * step]; } else { u[k] = 0.0; } }
-  // forward: d_m = alpha_m d_{m-1} + u_m inv_m, alpha_m = 1 - sigma_m (alpha_0 = 0)
+  // forward: d_m = alpha_m d_{m-1} + u_m inv_m, alpha_m = gamma inv_m (alpha_0 = 0)
   var A = 1.0; var B = 0.0;
   for (var k = 0u; k < ${PER}u; k++) {
     let m = m0 + k;
-    if (m < L) { let iv = bitcast<f32>(gridMeta[ti + min(m, K)]); let al = select(1.0 - bitcast<f32>(gridMeta[ts + min(m, K)]), 0.0, m == 0u); A = al * A; B = al * B + u[k] * iv; }
+    if (m < L) { let iv = bitcast<f32>(gridMeta[ti + min(m, K)]); let al = select(gam * iv, 0.0, m == 0u); A = al * A; B = al * B + u[k] * iv; }
   }
   sa[li] = A; sb[li] = B;
   workgroupBarrier();
@@ -626,13 +627,13 @@ fn main(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: ve
   workgroupBarrier();
   for (var k = 0u; k < ${PER}u; k++) {
     let m = m0 + k;
-    if (m < L) { let iv = bitcast<f32>(gridMeta[ti + min(m, K)]); let al = select(1.0 - bitcast<f32>(gridMeta[ts + min(m, K)]), 0.0, m == 0u); d = al * d + u[k] * iv; u[k] = d; }
+    if (m < L) { let iv = bitcast<f32>(gridMeta[ti + min(m, K)]); let al = select(gam * iv, 0.0, m == 0u); d = al * d + u[k] * iv; u[k] = d; }
   }
-  // backward: x_m = gamma_m x_{m+1} + d_m, gamma_m = 1 - sigma_m (gamma_{L-1} = 0), scanned from the end
+  // backward: x_m = g_m x_{m+1} + d_m, g_m = gamma inv_m (g_{L-1} = 0), scanned from the end
   A = 1.0; B = 0.0;
   for (var k = ${PER - 1}; k >= 0; k--) {
     let m = m0 + u32(k);
-    if (m < L) { let g = select(1.0 - bitcast<f32>(gridMeta[ts + min(m, K)]), 0.0, m == L - 1u); A = g * A; B = g * B + u[k]; }
+    if (m < L) { let g = select(gam * bitcast<f32>(gridMeta[ti + min(m, K)]), 0.0, m == L - 1u); A = g * A; B = g * B + u[k]; }
   }
   let r = ${PWG - 1}u - li;
   sa[r] = A; sb[r] = B;
@@ -641,13 +642,12 @@ fn main(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: ve
   var x = select(0.0, sb[max(r, 1u) - 1u], r > 0u);
   for (var k = ${PER - 1}; k >= 0; k--) {
     let m = m0 + u32(k);
-    if (m < L) { let g = select(1.0 - bitcast<f32>(gridMeta[ts + min(m, K)]), 0.0, m == L - 1u); x = g * x + u[k]; u[k] = x; }
+    if (m < L) { let g = select(gam * bitcast<f32>(gridMeta[ti + min(m, K)]), 0.0, m == L - 1u); x = g * x + u[k]; u[k] = x; }
   }
   for (var k = 0u; k < ${PER}u; k++) { let m = m0 + k; if (m < L) { gridField[base + m * step] = u[k]; } }
 }`);
   }
-  // A thread per line, loading 8 points per wait. d - sigma d as one fused step keeps sigma's
-  // precision (1 - sigma would round it away)
+  // A thread per line, loading 8 points per wait
   return kernel(spec, bindings, `@compute @workgroup_size(${LINE_WG})
 fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
   let l = gid.x + gid.y * nwg.x * ${LINE_WG}u;
@@ -658,37 +658,26 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
   ${tables}
   var d = gridField[base] * bitcast<f32>(gridMeta[ti]);
   gridField[base] = d;
-  var u: array<f32, 8>; var sg: array<f32, 8>; var iv: array<f32, 8>;
+  var u: array<f32, 8>; var cf: array<f32, 8>;
   var m = 1u;
   loop {
     if (m + 8u > L) { break; }
-    for (var k = 0u; k < 8u; k++) {
-      u[k] = gridField[base + (m + k) * step];
-      sg[k] = bitcast<f32>(gridMeta[ts + min(m + k, K)]); iv[k] = bitcast<f32>(gridMeta[ti + min(m + k, K)]);
-    }
-    for (var k = 0u; k < 8u; k++) { d = fma(-sg[k], d, d) + u[k] * iv[k]; u[k] = d; }
+    for (var k = 0u; k < 8u; k++) { u[k] = gridField[base + (m + k) * step]; cf[k] = bitcast<f32>(gridMeta[ti + min(m + k, K)]); }
+    for (var k = 0u; k < 8u; k++) { d = (u[k] + gam * d) * cf[k]; u[k] = d; }
     for (var k = 0u; k < 8u; k++) { gridField[base + (m + k) * step] = u[k]; }
     m += 8u;
   }
-  for (; m < L; m++) {
-    let idx = base + m * step;
-    d = fma(-bitcast<f32>(gridMeta[ts + min(m, K)]), d, d) + gridField[idx] * bitcast<f32>(gridMeta[ti + min(m, K)]);
-    gridField[idx] = d;
-  }
+  for (; m < L; m++) { let idx = base + m * step; d = (gridField[idx] + gam * d) * bitcast<f32>(gridMeta[ti + min(m, K)]); gridField[idx] = d; }
   var x = d;
   var q = i32(L) - 2;
   loop {
     if (q < 7) { break; }
-    for (var k = 0; k < 8; k++) { u[k] = gridField[base + u32(q - k) * step]; sg[k] = bitcast<f32>(gridMeta[ts + min(u32(q - k), K)]); }
-    for (var k = 0; k < 8; k++) { x = fma(-sg[k], x, x) + u[k]; u[k] = x; }
+    for (var k = 0; k < 8; k++) { u[k] = gridField[base + u32(q - k) * step]; cf[k] = gam * bitcast<f32>(gridMeta[ti + min(u32(q - k), K)]); }
+    for (var k = 0; k < 8; k++) { x = u[k] + cf[k] * x; u[k] = x; }
     for (var k = 0; k < 8; k++) { gridField[base + u32(q - k) * step] = u[k]; }
     q -= 8;
   }
-  for (; q >= 0; q--) {
-    let idx = base + u32(q) * step;
-    x = fma(-bitcast<f32>(gridMeta[ts + min(u32(q), K)]), x, x) + gridField[idx];
-    gridField[idx] = x;
-  }
+  for (; q >= 0; q--) { let idx = base + u32(q) * step; x = gridField[idx] + gam * bitcast<f32>(gridMeta[ti + min(u32(q), K)]) * x; gridField[idx] = x; }
 }`);
 }
 
@@ -709,12 +698,27 @@ function gather(spec) {
   const walk = (k, cur) => { if (k === D) { combos.push(cur); return; } for (const d of ds) walk(k + 1, cur.concat(d)); };
   walk(0, []);
   const strides = ['', ' * s0', ' * s0 * s1'];
-  const terms = combos.map(c => {
+  const local = c => 'o' + c.map(name).join('');
+  // the field at each stencil point (less the body's own deposit), then the value
+  const loads = combos.map(c => {
     const idx = c.map((d, k) => `(c${k} + (${d}))${strides[k]}`).join(' + ');
     const wp = c.map((d, k) => `w${k}${name(d)}`).join(' * ');
-    const grads = Array.from({ length: D }, (_, g) => c.map((d, k) => (k === g ? `q${k}${name(d)}` : `w${k}${name(d)}`)).join(' * '));
-    return `{ let wp = ${wp}; let o = gridField[u32(${idx})]${exclude === 'plain' ? ' - u * wp' : ''}; v += wp * o; ${grads.map((gr, g) => `gr${g} += ${gr} * o;`).join(' ')} }`;
-  }).join('\n  ');
+    return `let ${local(c)} = gridField[u32(${idx})]${exclude === 'plain' ? ` - u * ${wp}` : ''};`;
+  });
+  const value = `let v0 = ${combos.map(c => `${c.map((d, k) => `w${k}${name(d)}`).join(' * ')} * ${local(c)}`).join(' + ')};`;
+  // The slope along g from differences of neighbouring points, as the CPU's linear code does: on
+  // a smooth field, slope * F rounded per point leaves a residue that differences do not. The
+  // quadratic slopes add up to 0, so sum_j s_j F_j = s_m (F_m - F_z) + s_p (F_p - F_z).
+  const slopes = Array.from({ length: D }, (_, g) => {
+    const terms = combos.filter(c => c[g] === 0).map(c => {
+      const others = c.map((d, k) => (k === g ? null : `w${k}${name(d)}`)).filter(Boolean).join(' * ');
+      const at = shift => local(c.map((d, k) => (k === g ? shift : d)));
+      const along = quad ? `(q${g}m * (${at(-1)} - ${at(0)}) + q${g}p * (${at(1)} - ${at(0)}))` : `(${at(1)} - ${at(0)})`;
+      return others ? `${along} * ${others}` : along;
+    });
+    return `var gr${g} = ${terms.join(' + ')};`;
+  });
+  const terms = loads.concat([value.replace('let v0', 'var v')], slopes).join('\n  ');
   const outRefs = [spec.outputs.value, spec.outputs.gradient];
   const bindings = [U, metaRead, { name: spec.pos.buffer, kind: 'read', type: 'array<f32>' }, field('read')]
     .concat(callerBuffers(outRefs, 'storage'));
@@ -731,8 +735,7 @@ ${gridLets(spec)}  // no grid (a cell of 0, no body at a finite position): the f
   if (flag != 0u) { return; }
 ${bodyLets(spec)}  if (!ok) { ${write('0.0', () => '0.0')} return; }
   let u = ${exclude && spec.deposit ? `bitcast<f32>(gridKey[${KW}u * i + 2u]) * ${unit}` : unit};
-${pre}  var v = 0.0; ${each(D, k => `var gr${k} = 0.0;`)}
-  ${terms}
+${pre}  ${terms}
 ${exclude === 'smoothed' ? selfLines(spec) : ''}  ${write('v', k => `gr${k} / cell`)}
 }`);
 }
@@ -743,12 +746,12 @@ ${exclude === 'smoothed' ? selfLines(spec) : ''}  ${write('v', k => `gr${k} / ce
 // 2 x 2 or 3 x 3 block of A_k^-1 at those points is needed: its diagonal is
 // 1 / (m_p + n_p - (1 + 2 gamma)) = 1 / (mu_p + nu_p - 1), with m the forward pivots and n the
 // backward ones, which for this matrix are the forward ones counted from the line's other end
-// (mu = m - gamma, see params()); off the diagonal, (A^-1)_{p,q} = (1 - sigma_p) (A^-1)_{p+1,q}
+// (mu = m - gamma, see params()); off the diagonal, (A^-1)_{p,q} = (gamma / m_p) (A^-1)_{p+1,q}
 // for p < q. (modules/gridfield: inverseNearDiagonal, selfCode.)
 function selfFunctions(spec) {
   const TS = tableSize(spec.maxCells);
-  return `fn grid_mu(p: i32, K: u32) -> f32 { return bitcast<f32>(gridMeta[${META.TABLE + 2 * TS}u + min(u32(p), K)]); }
-fn grid_keep(p: i32, K: u32) -> f32 { return 1.0 - bitcast<f32>(gridMeta[${META.TABLE}u + min(u32(p), K)]); }
+  return `fn grid_mu(p: i32, K: u32) -> f32 { return bitcast<f32>(gridMeta[${META.TABLE + TS}u + min(u32(p), K)]); }
+fn grid_keep(p: i32, K: u32, gam: f32) -> f32 { return gam * bitcast<f32>(gridMeta[${META.TABLE}u + min(u32(p), K)]); }
 fn grid_d(p: i32, L: i32, K: u32) -> f32 { return 1.0 / (grid_mu(p, K) + grid_mu(L - 1 - p, K) - 1.0); }
 `;
 }
@@ -758,16 +761,18 @@ function selfLines(spec) {
   const per = quadratic(spec) ? 3 : 2;
   const ds = quadratic(spec) ? [-1, 0, 1] : [0, 1];
   const name = d => ({ '-1': 'm', 0: 'z', 1: 'p' })[d];
-  const lines = [`  let sK = gridMeta[${META.TAB_LAST}u];`];
+  const lines = [`  let sK = gridMeta[${META.TAB_LAST}u]; let sg = ${f32At(META.TAB_GAMMA)};`];
   for (let k = 0; k < D; k++) {
     const G = (i, j) => `G${k}_${Math.min(i, j)}${Math.max(i, j)}`;
     lines.push(`  let st${k} = c${k} - GRID_PAD;`);
     for (let i = 0; i < per; i++) lines.push(`  let ${G(i, i)} = grid_d(st${k} + ${i}, s${k}, sK);`);
-    for (let i = 0; i + 1 < per; i++) lines.push(`  let ${G(i, i + 1)} = grid_keep(st${k} + ${i}, sK) * ${G(i + 1, i + 1)};`);
-    if (per === 3) lines.push(`  let ${G(0, 2)} = grid_keep(st${k}, sK) * ${G(1, 2)};`);
+    for (let i = 0; i + 1 < per; i++) lines.push(`  let ${G(i, i + 1)} = grid_keep(st${k} + ${i}, sK, sg) * ${G(i + 1, i + 1)};`);
+    if (per === 3) lines.push(`  let ${G(0, 2)} = grid_keep(st${k}, sK, sg) * ${G(1, 2)};`);
     const row = i => ds.map((d, j) => `${G(i, j)} * w${k}${name(d)}`).join(' + ');
-    lines.push(`  let read${k} = ${ds.map((d, i) => `w${k}${name(d)} * (${row(i)})`).join(' + ')};`);
-    lines.push(`  let tilt${k} = ${ds.map((d, i) => `q${k}${name(d)} * (${row(i)})`).join(' + ')};`);
+
+    lines.push(`  let r${k}_0 = ${row(0)}; let r${k}_1 = ${row(1)};${per === 3 ? ` let r${k}_2 = ${row(2)};` : ''}`);
+    lines.push(`  let tilt${k} = ${per === 3 ? `q${k}m * (r${k}_0 - r${k}_1) + q${k}p * (r${k}_2 - r${k}_1)` : `r${k}_1 - r${k}_0`};`);
+    lines.push(`  let read${k} = ${ds.map((d, i) => `w${k}${name(d)} * r${k}_${i}`).join(' + ')};`);
   }
   lines.push(`  v -= u * ${each(D, k => `read${k}`, ' * ')};`);
   for (let k = 0; k < D; k++) lines.push(`  gr${k} -= u * ${each(D, m => (m === k ? `tilt${m}` : `read${m}`), ' * ')};`);
