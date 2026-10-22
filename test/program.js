@@ -394,10 +394,19 @@ test('host steps run inline and are described', function (t) {
 
 test('plan(backend): add-on stages describe themselves; backends check program() stages', function (t) {
   var sim = makeSimulator({ dimensions: 2 }, 4);
-  sim.addStage('field', function () {}, { describe: { shape: 'grid', anchor: 'box', writes: [{ space: 'nodes', column: 'mass', mode: 'set' }] } });
+  sim.addStage('field', function () {}, {
+    describe: { shape: 'grid', anchor: 'box', writes: [{ space: 'nodes', column: 'mass', mode: 'set' }] },
+    values: function (context) { return { when: true, params: { cell: context.unit() / 2 } }; }
+  });
+  sim.addStage('other', function () {}, { describe: function () { return { shape: 'mesh', how: 'a mesh on the CPU' }; } });
   var field = stageOf(sim.program(), 'field');
   t.equal(field.shape, 'grid');
   t.equal(field.anchor, 'box', 'with options of its own');
+  t.same(sim.stageValues('field', sim.stepContext(3)), { when: true, params: { cell: 5 } }, 'and its own numbers per step');
+  var cpu = sim.plan().stages;
+  t.equal(cpu.filter(function (s) { return s.stage === 'field'; })[0].how, 'add-on stage (grid)');
+  t.equal(cpu.filter(function (s) { return s.stage === 'other'; })[0].how, 'a mesh on the CPU');
+  sim.removeStage('other');
   t.equal(sim.program().columns.nodes.filter(function (c) { return c.name === 'mass'; })[0].writer, 'stage:field');
   var seen = [];
   var backend = {
