@@ -90,7 +90,10 @@ test('tree passes walk together across stages that only add to the force', () =>
 test('what does not run yet is named', () => {
   const sim = layoutOf(50).simulator;
   sim.store.define('group', Int32Array, 1, 0);
+  sim.springStore.define('kind', Int32Array, 1, 0);
   sim.addLinkFormula('springy', { formula: 'pull = coefficient * (r - length)', replace: 'springs' });
+  sim.addLinkFormula('pullsAndMarks', { formula: 'coefficient = 1; pull = r' });
+  sim.addLinkFormula('writesKind', { formula: 'kind = 2' });
   sim.addPairFormula('apart', { radius: 5, formula: 'push = 1' });
   sim.addSum('perGroup', { formula: 'mass', group: 'group' });
   sim.addSum('overLinks', { formula: 'r', over: 'links' });
@@ -104,13 +107,14 @@ test('what does not run yet is named', () => {
   const plan = sim.plan(gpuCapabilities());
   const words = Object.fromEntries(plan.stages.filter(s => !s.runs).map(s => [s.stage, s.reason]));
   assert.deepEqual(words, {
-    springy: 'WebGPU does not run link formulas yet',
+    pullsAndMarks: 'WebGPU does not run link formulas that both move bodies and write link columns yet',
+    writesKind: 'WebGPU does not run formulas that write the i32 link column kind yet',
     apart: 'WebGPU does not run pair formulas yet',
-    perGroup: 'WebGPU does not run sums per group yet',
+    // a formula writes the group ids
+    perGroup: 'WebGPU runs sums per group only with group ids set by the host',
     overLinks: 'WebGPU does not run sums over links yet',
     largest: 'WebGPU does not run max over bodies yet',
     table: 'WebGPU does not run lookup tables in formulas yet',
-    readsGroup: 'WebGPU does not run sums per group yet (reads perGroup)',
     writesGroup: 'WebGPU does not run formulas that write the i32 column group yet',
     look: 'WebGPU does not run host steps yet',
     js: 'JavaScript stages run on the CPU only (formula stages and host steps run on other engines too)',
@@ -147,13 +151,21 @@ test('adaptive step, per-link springs, the shape of the step, settings', () => {
   sim.adaptiveTimeStepWeight(0.1);
   assert.deepEqual(reasons({ simulator: sim }), ['springs: WebGPU has no adaptive time step', 'integrate: WebGPU has no adaptive time step']);
   sim.adaptiveTimeStepWeight(0);
+  // links with their own length or stiffness run; the springs then read them
   sim.springs[3].length = 30;
-  assert.deepEqual(reasons({ simulator: sim }), ['springs: WebGPU does not run links with their own length or stiffness yet']);
+  assert.deepEqual(reasons({ simulator: sim }), []);
+  assert.ok(planOf({ simulator: sim }).linkColumns.length);
   sim.springs[3].length = -1;
   sim.springs[4].coefficient = 2;
-  assert.deepEqual(reasons({ simulator: sim }), ['springs: WebGPU does not run links with their own length or stiffness yet']);
+  assert.ok(planOf({ simulator: sim }).linkColumns.coefficient);
   sim.springs[4].coefficient = -1;
   assert.deepEqual(reasons({ simulator: sim }), []);
+  assert.equal(planOf({ simulator: sim }).linkColumns.length, undefined);
+  // above N* the template runs only while every link has the defaults
+  const big = layoutOf(3000);
+  assert.equal(planOf(big).template, 'grid');
+  big.simulator.springs[10].length = 5;
+  assert.equal(planOf(big).template, 'generic');
 
   const drag = sim.getStage('drag');
   sim.replaceStage('drag', () => {});
