@@ -217,6 +217,8 @@ test('another repulsion pass with the same law doubles the push', function (t) {
     ['drag', 'springs', 'integrate'].forEach(function (name) { sim.removeStage(name); });
     sim.step();
     var once = Array.from(sim.store.force.subarray(0, 100));
+    // a stage in between: the pass walks its own tree, the same as the repulsion's
+    sim.addStage('between', function () {});
     sim.addRepulsion('again', { law: 'r^-2' });
     sim.step();
     var twice = Array.from(sim.store.force.subarray(0, 100));
