@@ -48,8 +48,8 @@ test('every combination plans in 2D and 3D, each kernel within 8 storage buffers
               const p = plan(D, gridStage(D, options).stage);
               const what = `${D}D ${anchor} ${weights} ${smooth ? 'smooth' : 'plain'} ${self}${charge ? ' charge' : ''}`;
               assert.equal(p.refusal, null, what);
-              assert.equal(p.dispatches, 10 + (smooth ? D : 0), what);
-              assert.equal(Object.keys(p.kernels).length, 10 + (smooth ? D : 0), what);
+              assert.equal(p.dispatches, 9 + (smooth ? D : 0), what);
+              assert.equal(Object.keys(p.kernels).length, 9 + (smooth ? D : 0), what);
               for (const [name, kernel] of Object.entries(p.kernels)) {
                 assert.ok(storageBindings(kernel.code) <= 8, `${what} ${name}: ${storageBindings(kernel.code)} storage buffers`);
                 assert.equal(kernel.bindings.length, (kernel.code.match(/@binding\(/g) || []).length, `${what} ${name}: bindings listed`);
@@ -82,7 +82,7 @@ test('refusals name the numbers', () => {
 
 test('plan() says how it runs', () => {
   const { stage } = gridStage(2, { anchor: 'lattice', cell: 1, deposit: { weights: 'quadratic' }, self: 'exclude' });
-  assert.deepEqual(checkGrid(stage, 2, 1000, SPEC_LIMITS), { runs: true, how: 'a lattice grid of up to 1,024 cells per axis, quadratic weights, own share left out: 10 dispatches' });
+  assert.deepEqual(checkGrid(stage, 2, 1000, SPEC_LIMITS), { runs: true, how: 'a lattice grid of up to 1,024 cells per axis, quadratic weights, own share left out: 9 dispatches' });
 });
 
 test('numbers per step: the lattice phase puts relative positions back on it', () => {

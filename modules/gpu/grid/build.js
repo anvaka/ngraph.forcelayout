@@ -45,7 +45,6 @@ export async function buildGrid(device, plan, { buffers: external = {}, step = n
     gridCount: buffer(sizes.gridCount, SB),
     gridStart: buffer(sizes.gridStart, SB | CS),
     gridKey: buffer(sizes.gridKey, SB | CS),
-    gridSlotted: buffer(sizes.gridSlotted, SB),
     gridSp: buffer(sizes.gridSp, SB | CS),
     gridField: buffer(sizes.gridField, SB | CS),
   };
@@ -91,7 +90,6 @@ export async function buildGrid(device, plan, { buffers: external = {}, step = n
     [`${L}_SCAN_BLOCKS`, IND_SCAN],
     [`${L}_SCAN_TOP`, [1]],
     [`${L}_SCAN_ADD`, IND_ADD],
-    [`${L}_PLACE`, [nodes]],
     [`${L}_ORDER`, [nodes]],
     [`${L}_DEPOSIT`, IND_DEPOSIT],
   ];

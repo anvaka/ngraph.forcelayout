@@ -4,33 +4,33 @@
 //   MINMAX: smallest and largest position per axis (integer atomics on order-preserving bits)
 //   PARAMS: one thread; the grid's corner, cell and sizes as the CPU module computes them, the
 //     sizes of the indirect dispatches, and the smoothing's coefficients (kept while they last)
-//   BIN, SCAN x3, PLACE, ORDER: a counting sort of the bodies by base cell; ORDER puts a cell's
-//     bodies in index order, so the deposit adds them in the same order every run (cells of more
-//     than 1,024 bodies keep the atomic order, as the pyramid's do)
+//   BIN, SCAN x3, ORDER: a counting sort of the bodies by base cell (within a cell, in the order
+//     the atomic counter gave them)
 //   DEPOSIT: a thread per grid point gathers the bodies of the 2^D or 3^D base cells around it:
-//     along x those cells are neighbours in the sorted order, so each stencil row is one run
+//     along x those cells are neighbours in the sorted order, so each stencil row is one run. It
+//     adds in 64-bit fixed point, so the order of bodies within a cell does not change a bit: a
+//     layout's start puts thousands of bodies in one cell (megaStars: 2,909 in a spring length
+//     square), too many to put in index order
 //   SMOOTH: one dispatch per axis, a line solve (Thomas) per grid line. Along x in 2D a workgroup
 //     runs each line as a scan of affine maps; elsewhere a thread runs a line, loading 8 points
 //     per wait (measured: one thread per line, a point per load, cost 0.28 of a 0.39 ms step)
 //   GATHER: a thread per body writes the value and gradient columns
 //
-// No float atomics anywhere, so steps repeat exactly.
+// No float atomics anywhere, and no float sum whose order a race decides, so steps repeat exactly.
 //
 // Buffers owned here (the caller's are positions and the columns, through colRefs):
 //   gridMeta  u32 words, see META; then the smoothing's coefficient tables (f32 bits)
-//   gridCount bodies per grid cell (atomic; the scan zeroes it for the next step)
+//   gridCount bodies per grid cell (atomic; the scan zeroes it for the next step), then the largest
+//             |deposit value| when that reads columns
 //   gridStart where each cell's bodies start in the sorted order (one more entry for the end),
 //             then the scan's block sums
 //   gridKey   per body: its cell and its slot in it, and its deposit value when that reads columns
-//   gridSlotted bodies by cell start + slot
 //   gridSp    per sorted body: its offsets in its base cell per axis and that cell along x (and its
 //             value, in 2D in the third word; in 3D in a second vec4)
 //   gridField the field, a density per grid point
 export const WG = 256;
 // Threads of a smoothing workgroup that runs one line per thread
 const LINE_WG = 64;
-// A cell up to this many bodies is put in index order (as the pyramid's ORDER)
-const ORDER_CAP = 1024;
 // Bodies per block of the counting sort's scan
 const SCAN_BLOCK = 2048;
 
@@ -107,7 +107,6 @@ export function gridKernels(spec) {
   k[`${label}_SCAN_BLOCKS`] = scanBlocks(spec);
   k[`${label}_SCAN_TOP`] = scanTop(spec);
   k[`${label}_SCAN_ADD`] = scanAdd(spec);
-  k[`${label}_PLACE`] = place(spec);
   k[`${label}_ORDER`] = order(spec);
   k[`${label}_DEPOSIT`] = deposit(spec);
   if (spec.smooth) for (let axis = 0; axis < D; axis++) k[`${label}_SMOOTH${axis}`] = smooth(spec, axis);
@@ -370,7 +369,13 @@ function params(spec) {
     lines.push(`    gridMeta[${META.TAB_LAST}u] = last; gridMeta[${META.TAB_GAMMA}u] = bitcast<u32>(gam); gridMeta[${META.TAB_DONE}u] = done;`);
     lines.push('  }');
   }
-  return kernel(spec, [U, STEP, metaWrite], `fn grid_split(w: u32, at: u32) { gridMeta[at] = min(w, 65535u); gridMeta[at + 1u] = (w + 65534u) / 65535u; gridMeta[at + 2u] = 1u; }
+  const bindings = [U, STEP, metaWrite];
+  if (spec.deposit) {
+    // the largest |deposit value| of this step, which BIN finds
+    bindings.push({ name: 'gridCount', kind: 'storage', type: 'array<u32>' });
+    lines.push(`  gridCount[${spec.capacity}u] = 0u;`);
+  }
+  return kernel(spec, bindings, `fn grid_split(w: u32, at: u32) { gridMeta[at] = min(w, 65535u); gridMeta[at + 1u] = (w + 65534u) / 65535u; gridMeta[at + 2u] = 1u; }
 // Numbers held as hi + lo. a + b = s + e exactly (two-sum)
 fn grid_sum(a: f32, b: f32) -> vec2f {
   let s = grid_opq(a + b);
@@ -407,8 +412,11 @@ function bin(spec) {
     bindings.push(STEP);
     spec.deposit.buffers.forEach(name => { if (!bindings.some(b => b.name === name)) bindings.push({ name, kind: 'read', type: 'array<f32>' }); });
   }
+  // the deposit value, and the largest |value| (non-negative floats order as their bits)
   const value = spec.deposit ? `${spec.deposit.lines.map(line => '  ' + line).join('\n')}
-  gridKey[${KW}u * i + 2u] = bitcast<u32>(${spec.deposit.code});\n` : '';
+  let grid_value = ${spec.deposit.code};
+  gridKey[${KW}u * i + 2u] = bitcast<u32>(grid_value);
+  if (ok) { atomicMax(&gridCount[${spec.capacity}u], bitcast<u32>(abs(grid_value))); }\n` : '';
   return kernel(spec, bindings, `@compute @workgroup_size(${WG})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
@@ -482,20 +490,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg:
 }`);
 }
 
-function place(spec) {
-  const KW = keyWords(spec);
-  return kernel(spec, [U, metaRead, { name: 'gridKey', kind: 'read', type: 'array<u32>' }, { name: 'gridStart', kind: 'read', type: 'array<u32>' },
-    { name: 'gridSlotted', kind: 'storage', type: 'array<u32>' }], `@compute @workgroup_size(${WG})
-fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
-  if (i >= GU.n || gridMeta[${META.FLAG}u] != 0u) { return; }
-  let c = gridKey[${KW}u * i];
-  if (c == 0xffffffffu) { return; }
-  gridSlotted[gridStart[c] + gridKey[${KW}u * i + 1u]] = i;
-}`);
-}
-
-// Within a cell, bodies go in index order, so the deposit adds them in the same order every run
+// Each body's record at its place in the sorted order: its cell's start plus its slot
 function order(spec) {
   const { D } = spec;
   const KW = keyWords(spec), SPW = spWords(spec);
@@ -505,22 +500,14 @@ function order(spec) {
   else if (SPW === 1) record = '  gridSp[at] = vec4f(f0, f1, f2, f32(c0));';
   else record = `  gridSp[${SPW}u * at] = vec4f(f0, f1, f2, f32(c0));\n  gridSp[${SPW}u * at + 1u] = vec4f(${value}, 0.0, 0.0, 0.0);`;
   return kernel(spec, [U, metaRead, { name: spec.pos.buffer, kind: 'read', type: 'array<f32>' }, { name: 'gridKey', kind: 'read', type: 'array<u32>' },
-    { name: 'gridStart', kind: 'read', type: 'array<u32>' }, { name: 'gridSlotted', kind: 'read', type: 'array<u32>' },
-    { name: 'gridSp', kind: 'storage', type: 'array<vec4f>' }], `@compute @workgroup_size(${WG})
+    { name: 'gridStart', kind: 'read', type: 'array<u32>' }, { name: 'gridSp', kind: 'storage', type: 'array<vec4f>' }], `@compute @workgroup_size(${WG})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
   if (i >= GU.n) { return; }
 ${gridLets(spec)}  if (flag != 0u) { return; }
   let cid = gridKey[${KW}u * i];
   if (cid == 0xffffffffu) { return; }
-  let s = gridStart[cid];
-  let e = gridStart[cid + 1u];
-  var rank = gridKey[${KW}u * i + 1u];
-  if (e - s <= ${ORDER_CAP}u) {
-    rank = 0u;
-    for (var t = s; t < e; t++) { if (gridSlotted[t] < i) { rank++; } }
-  }
-${bodyLets(spec)}  let at = s + rank;
+${bodyLets(spec)}  let at = gridStart[cid] + gridKey[${KW}u * i + 1u];
 ${record}
 }`);
 }
@@ -528,6 +515,9 @@ ${record}
 // A thread per grid point j: the bodies whose stencil reaches j have base cells j - d, d in
 // {0, 1} (linear) or {-1, 0, 1} (quadratic) per axis. Along x those cells are consecutive, so
 // each stencil row is one run of sorted bodies.
+// The sum is a 64-bit integer (hi, lo) of weights in units of 2^-30, so any order gives the same
+// bits, and it is exact to 1e-9 per body (f32 adds would round at 6e-8). A deposit value read
+// from columns scales each term by 2^30 / (the largest |value|, from BIN).
 function deposit(spec) {
   const { D } = spec;
   const quad = quadratic(spec), SPW = spWords(spec);
@@ -535,7 +525,11 @@ function deposit(spec) {
   const rows = [];
   if (D === 2) ds.forEach(d1 => rows.push([d1]));
   else ds.forEach(d2 => ds.forEach(d1 => rows.push([d1, d2])));
-  const valueOf = !spec.deposit ? '' : D === 2 ? ' * e.z' : ` * gridSp[${SPW}u * q + 1u].x`;
+  const valueOf = D === 2 ? 'e.z' : `gridSp[${SPW}u * q + 1u].x`;
+  // add a term of at most 2^30 to (hi, lo); a signed one carries its sign into hi
+  const add = spec.deposit
+    ? `let tq = i32(round(w * ${valueOf} * scale)); let sum = lo + bitcast<u32>(tq); hi += bitcast<u32>(tq >> 31u) + select(0u, 1u, sum < lo); lo = sum;`
+    : 'let tq = u32(max(w, 0.0) * 1073741824.0 + 0.5); let sum = lo + tq; hi += select(0u, 1u, sum < lo); lo = sum;';
   const body = rows.map(([d1, d2]) => {
     const conds = ['cy >= 0 && cy < s1'];
     if (D === 3) conds.push('cz >= 0 && cz < s2');
@@ -546,23 +540,31 @@ function deposit(spec) {
       let row = cy * s0${D === 3 ? ' + cz * s0 * s1' : ''};
       let beg = gridStart[u32(row + lo0)];
       let fin = gridStart[u32(row + hi0 + 1)];
-      for (var q = beg; q < fin; q++) { let e = gridSp[${SPW === 1 ? 'q' : `${SPW}u * q`}]; let dx = j0 - i32(e.w); acc += ${w}${valueOf}; }
+      for (var q = beg; q < fin; q++) { let e = gridSp[${SPW === 1 ? 'q' : `${SPW}u * q`}]; let dx = j0 - i32(e.w); let w = ${w}; ${add} }
     }
   }`;
   }).join('\n  ');
-  return kernel(spec, [metaRead, { name: 'gridStart', kind: 'read', type: 'array<u32>' }, { name: 'gridSp', kind: 'read', type: 'array<vec4f>' }, field('storage')],
-    `@compute @workgroup_size(${WG})
+  const bindings = [metaRead, { name: 'gridStart', kind: 'read', type: 'array<u32>' }, { name: 'gridSp', kind: 'read', type: 'array<vec4f>' }, field('storage')];
+  if (spec.deposit) bindings.push({ name: 'gridCount', kind: 'read', type: 'array<u32>' });
+  const unit = f32At(META.UNIT);
+  const scale = spec.deposit ? `  let most = bitcast<f32>(gridCount[${spec.capacity}u]);
+  let scale = select(0.0, 1073741824.0 / most, most > 0.0);
+` : '';
+  const total = spec.deposit
+    ? `select(0.0, (f32(bitcast<i32>(hi)) * 4294967296.0 + f32(lo)) * (${unit} / scale), scale > 0.0)`
+    : `(f32(hi) * 4294967296.0 + f32(lo)) * (${unit} * 9.313225746154785e-10)`;
+  return kernel(spec, bindings, `@compute @workgroup_size(${WG})
 fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
   let t = gid.x + gid.y * nwg.x * ${WG}u;
 ${gridLets(spec)}  if (t >= total) { return; }
-  let j0 = i32(t % u32(s0));
+${scale}  let j0 = i32(t % u32(s0));
   let r = t / u32(s0);
   ${D === 3 ? 'let j1 = i32(r % u32(s1)); let j2 = i32(r / u32(s1));' : 'let j1 = i32(r);'}
   let lo0 = max(j0 - 1, 0);
   let hi0 = min(j0${quad ? ' + 1' : ''}, s0 - 1);
-  var acc = 0.0;
+  var lo = 0u; var hi = 0u;
   ${body}
-  gridField[t] = acc * ${f32At(META.UNIT)};
+  gridField[t] = ${total};
 }`);
 }
 

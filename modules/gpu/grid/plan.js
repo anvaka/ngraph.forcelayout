@@ -75,10 +75,9 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
   const size = bytes => Math.max(16, Math.ceil(bytes / 16) * 16);
   const buffers = {
     gridMeta: size((META.TABLE + 2 * TS) * 4),
-    gridCount: size(capacity * 4),
+    gridCount: size((capacity + 4) * 4),
     gridStart: size((capacity + capacity / 2048) * 4),
     gridKey: size(keyWords * n * 4),
-    gridSlotted: size(n * 4),
     gridSp: size(spWords * n * 16),
     gridField: size(capacity * 4),
   };
@@ -102,8 +101,8 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
     refusal: null, D, n, label, maxCells, capacity, tableSize: TS, keyWords, anchor: args.anchor,
     smooth: spec.smooth, deposit: !!deposit, buffers, kernels, values, own,
     slotNames: names,
-    // MINMAX, PARAMS, BIN, 3 scans, PLACE, ORDER, DEPOSIT, a smoothing per axis, GATHER
-    dispatches: 10 + (spec.smooth ? D : 0),
+    // MINMAX, PARAMS, BIN, 3 scans, ORDER, DEPOSIT, a smoothing per axis, GATHER
+    dispatches: 9 + (spec.smooth ? D : 0),
   };
 }
 
