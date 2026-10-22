@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import addGridField from '../../gridfield/index.js';
 import { planGrid, checkGrid, gridSlotValues, gridIsDynamic, gridStatus } from '../grid/plan.js';
+import { gridChunkWords, CROWD } from '../grid/wgsl.js';
 import { SPEC_LIMITS } from '../check.js';
 
 const require = createRequire(import.meta.url);
@@ -48,8 +49,8 @@ test('every combination plans in 2D and 3D, each kernel within 8 storage buffers
               const p = plan(D, gridStage(D, options).stage);
               const what = `${D}D ${anchor} ${weights} ${smooth ? 'smooth' : 'plain'} ${self}${charge ? ' charge' : ''}`;
               assert.equal(p.refusal, null, what);
-              assert.equal(p.dispatches, 5 + (smooth ? 2 * D + 1 : 0), what);
-              assert.equal(Object.keys(p.kernels).length, 5 + (smooth ? D + 1 : 0), what);
+              assert.equal(p.dispatches, 9 + (smooth ? 2 * D + 1 : 0), what);
+              assert.equal(Object.keys(p.kernels).length, 9 + (smooth ? D + 1 : 0), what);
               for (const [name, kernel] of Object.entries(p.kernels)) {
                 assert.ok(storageBindings(kernel.code) <= 8, `${what} ${name}: ${storageBindings(kernel.code)} storage buffers`);
                 assert.equal(kernel.bindings.length, (kernel.code.match(/@binding\(/g) || []).length, `${what} ${name}: bindings listed`);
@@ -66,7 +67,7 @@ test('every combination plans in 2D and 3D, each kernel within 8 storage buffers
 test('the deposit value reads its column and param; the step slot names them', () => {
   const { stage } = gridStage(2, { anchor: 'box', cell: 'unit / 2', deposit: { value: 'charge * k' }, params: { k: 2 }, charge: true });
   const p = plan(2, stage);
-  assert.ok(p.kernels.GRID_SCATTER.code.indexOf('H[i + 0u]') >= 0, 'SCATTER reads the column');
+  assert.ok(p.kernels.GRID_BIN.code.indexOf('H[i + 0u]') >= 0, 'BIN reads the column');
   assert.ok(p.kernels.GRID_MINMAX.code.indexOf('H[i + 0u]') >= 0, 'MINMAX finds its largest value');
   assert.deepEqual(p.slotNames, ['cell', 'cellLow', 'margin', 'marginLow', 'diffuse', 'value', 'phase0', 'phase1', 'param:k', 'builtIn:unit']);
 });
@@ -83,7 +84,7 @@ test('refusals name the numbers', () => {
 
 test('plan() says how it runs', () => {
   const { stage } = gridStage(2, { anchor: 'lattice', cell: 1, deposit: { weights: 'quadratic' }, self: 'exclude' });
-  assert.deepEqual(checkGrid(stage, 2, 1000, SPEC_LIMITS), { runs: true, how: 'a lattice grid of up to 2,048 cells per axis, quadratic weights, own share left out: 5 dispatches' });
+  assert.deepEqual(checkGrid(stage, 2, 1000, SPEC_LIMITS), { runs: true, how: 'a lattice grid of up to 2,048 cells per axis, quadratic weights, own share left out: 9 dispatches' });
 });
 
 test('numbers per step: the lattice phase puts relative positions back on it', () => {
@@ -104,9 +105,24 @@ test('a grid stage is dynamic when its numbers can change within a call', () => 
 });
 
 test('the halt message for a lattice wider than maxCells', () => {
-  const p = plan(2, gridStage(2, { anchor: 'lattice', cell: 10 }).stage);
   const bits = x => new Uint32Array(new Float32Array([x]).buffer)[0];
-  assert.equal(gridStatus([0, 0, 0, 0], p, 'gas'), null);
-  assert.equal(gridStatus([1, bits(5300), bits(10), 0], p, 'gas'), 'Grid field gas: the layout spans 5300 cells at cell 10; maxCells is 2048');
-  assert.equal(gridStatus([1, bits(5300), bits(4.1), 0], p, 'gas'), 'Grid field gas: the layout spans 5300 cells at cell 4.1; maxCells is 2048', 'the cell as the CPU prints it');
+  // smoothed: the CPU module stops too, in these words
+  const smoothed = plan(2, gridStage(2, { anchor: 'lattice', cell: 10, smooth: { diffuse: 100 } }).stage);
+  assert.equal(gridStatus([0, 0, 0, 0], smoothed, 'gas'), null);
+  assert.equal(gridStatus([1, bits(5300), bits(10), 0], smoothed, 'gas'), 'Grid field gas: the layout spans 5300 cells at cell 10; maxCells is 2048');
+  assert.equal(gridStatus([1, bits(5300), bits(4.1), 0], smoothed, 'gas'), 'Grid field gas: the layout spans 5300 cells at cell 4.1; maxCells is 2048', 'the cell as the CPU prints it');
+  // without smoothing the CPU goes on: the message says it is the GPU's limit
+  const plain = plan(2, gridStage(2, { anchor: 'lattice', cell: 10 }).stage);
+  assert.equal(gridStatus([1, bits(5300), bits(10), 0], plain, 'gas'),
+    'Grid field gas: the layout spans 5300 cells at cell 10, more than the GPU\'s maxCells of 2048; the CPU runs this lattice at any width. Raise maxCells, or run on the CPU');
+});
+
+test('gridChunk holds the chunks of the most crowding', () => {
+  // the most chunks per body: every cell just crowded (CROWD + 1 bodies, two chunks)
+  for (const n of [1, 64, 65, 1000, 123457, 1e6]) {
+    const cells = Math.floor(n / (CROWD + 1)), rest = n - cells * (CROWD + 1);
+    const chunks = 2 * cells + (rest > CROWD ? Math.ceil(rest / CROWD) : 0);
+    assert.ok(4 + 2 * chunks <= gridChunkWords(n), `${n} bodies`);
+    assert.ok(4 + 2 * Math.ceil(n / CROWD) <= gridChunkWords(n), `${n} bodies in one cell`);
+  }
 });

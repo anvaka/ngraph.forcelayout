@@ -6,7 +6,7 @@
 //   grid.encode(pass, { stepOffset, parity });
 //   // copy grid.status into a readback: gridStatus(words, plan, name) says when to halt
 import { getPipeline } from '../device.js';
-import { META, IND_CONVERT, IND_SMOOTH, IND_RESIDUAL, IND_SMOOTH_LOW, WG } from './wgsl.js';
+import { META, IND_SCAN, IND_DEPOSIT, IND_SMOOTH, IND_RESIDUAL, IND_SMOOTH_LOW, WG } from './wgsl.js';
 
 // MINMAX loops over the bodies with at most this many workgroups
 const MINMAX_GROUPS = 1024;
@@ -42,8 +42,12 @@ export async function buildGrid(device, plan, { buffers: external = {}, step = n
   const own = {
     GU: buffer(32, GPUBufferUsage.UNIFORM | CD),
     gridMeta: buffer(sizes.gridMeta, SB | CD | CS | GPUBufferUsage.INDIRECT),
+    gridCount: buffer(sizes.gridCount, SB),
+    gridStart: buffer(sizes.gridStart, SB | CS),
+    gridKey: buffer(sizes.gridKey, SB | CS),
+    gridSp: buffer(sizes.gridSp, SB | CS),
+    gridChunk: buffer(sizes.gridChunk, SB | CS | GPUBufferUsage.INDIRECT),
     gridAcc: buffer(sizes.gridAcc, SB | CS),
-    gridValue: sizes.gridValue ? buffer(sizes.gridValue, SB | CS) : null,
     gridField: buffer(sizes.gridField, SB | CS),
     gridLo: sizes.gridLo ? buffer(sizes.gridLo, SB | CS) : null,
   };
@@ -84,12 +88,17 @@ export async function buildGrid(device, plan, { buffers: external = {}, step = n
   const byName = Object.fromEntries(kernels.map(k => [k.name, k]));
   const nodes = Math.ceil(plan.n / WG);
   const L = plan.label;
-  // [kernel, workgroups or the word of its indirect arguments]
+  // [kernel, workgroups or the word of its indirect arguments in gridMeta]
   const steps = [
     [`${L}_MINMAX`, [Math.min(nodes, MINMAX_GROUPS)]],
     [`${L}_PARAMS`, [1]],
-    [`${L}_SCATTER`, [nodes]],
-    [`${L}_CONVERT`, IND_CONVERT],
+    [`${L}_BIN`, [nodes]],
+    [`${L}_SCAN_BLOCKS`, IND_SCAN],
+    [`${L}_SCAN_TOP`, [1]],
+    [`${L}_ORDER`, [nodes]],
+    // its arguments are in gridChunk (ORDER's chunks of crowded cells)
+    [`${L}_CROWD`, 'chunks'],
+    [`${L}_DEPOSIT`, IND_DEPOSIT],
   ];
   if (plan.smooth) {
     for (let k = 0; k < plan.D; k++) steps.push([`${L}_SMOOTH${k}`, IND_SMOOTH + 3 * k]);
@@ -104,7 +113,8 @@ export async function buildGrid(device, plan, { buffers: external = {}, step = n
     const k = byName[name];
     pass.setPipeline(k.pipeline);
     pass.setBindGroup(0, low ? k.lowGroup : k.groups[k.groups.length > 1 ? parity : 0], k.dynamic ? [stepOffset] : []);
-    if (typeof size === 'number') pass.dispatchWorkgroupsIndirect(own.gridMeta, size * 4);
+    if (size === 'chunks') pass.dispatchWorkgroupsIndirect(own.gridChunk, 0);
+    else if (typeof size === 'number') pass.dispatchWorkgroupsIndirect(own.gridMeta, size * 4);
     else pass.dispatchWorkgroups(size[0]);
   }
 
