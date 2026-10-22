@@ -234,11 +234,12 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
      */
     async readDevice() {
       const stageColumns = Object.values(plan.columns).filter(c => c.buffer === 'S');
-      const posBytes = n * D * 4;
-      const read = device.createBuffer({ size: Math.max(16, posBytes + plan.S.size * 4), usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+      // getMappedRange() takes offsets that are multiples of 8
+      const posBytes = n * D * 4, sAt = Math.ceil(posBytes / 8) * 8;
+      const read = device.createBuffer({ size: Math.max(16, sAt + plan.S.size * 4), usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
       const enc = device.createCommandEncoder();
       enc.copyBufferToBuffer(positions[parity], 0, read, 0, posBytes);
-      enc.copyBufferToBuffer(S, 0, read, posBytes, plan.S.size * 4);
+      enc.copyBufferToBuffer(S, 0, read, sAt, plan.S.size * 4);
       device.queue.submit([enc.finish()]);
       try {
         await read.mapAsync(GPUMapMode.READ);
@@ -247,7 +248,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
         return null;
       }
       const positionsRead = new Float32Array(read.getMappedRange(0, posBytes)).slice();
-      const s = new Float32Array(read.getMappedRange(posBytes, plan.S.size * 4)).slice();
+      const s = new Float32Array(read.getMappedRange(sAt, plan.S.size * 4)).slice();
       read.unmap();
       read.destroy();
       return {

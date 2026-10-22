@@ -223,7 +223,7 @@ function createRunner(layout, backend) {
     if (!engine) { queued += count; return; }
     const rb = free.pop();
     const withTs = !!rb && timestamps;
-    const bytes = engine.positionBytes;
+    const at = timestampsAt(engine.positionBytes);
     const result = engine.run(count, firstStep + queued, {
       timestampWrites: withTs ? { querySet } : null,
       perSubmit: stepsPerSubmit(),
@@ -231,7 +231,7 @@ function createRunner(layout, backend) {
         rb.ordered = engine.copyPositions(enc, rb.buffer, 0, count);
         if (withTs) {
           enc.resolveQuerySet(querySet, 0, 2, resolveBuffer, 0);
-          enc.copyBufferToBuffer(resolveBuffer, 0, rb.buffer, bytes, 16);
+          enc.copyBufferToBuffer(resolveBuffer, 0, rb.buffer, at, 16);
         }
       } : null,
     });
@@ -263,7 +263,7 @@ function createRunner(layout, backend) {
         apply(rb.serial, rb.steps, new Float32Array(rb.buffer.getMappedRange(0, bytes)), rb.ordered);
       }
       if (withTs) {
-        const t = new BigUint64Array(rb.buffer.getMappedRange(bytes, 16));
+        const t = new BigUint64Array(rb.buffer.getMappedRange(timestampsAt(bytes), 16));
         const ns = Number(t[1] - t[0]);
         if (t[1] > t[0] && ns < 60e9) addSample(ns / 1e6, count);
       } else {
@@ -410,7 +410,7 @@ function createRunner(layout, backend) {
 
   function makeReadbacks() {
     if (!engine) return;
-    const size = Math.max(16, engine.positionBytes + (timestamps ? 16 : 0));
+    const size = Math.max(16, timestampsAt(engine.positionBytes) + (timestamps ? 16 : 0));
     for (let r = 0; r < READBACK_BUFFERS; r++) {
       const rb = { buffer: device.createBuffer({ size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }), engine };
       all.push(rb);
@@ -499,6 +499,11 @@ function createRunner(layout, backend) {
   function emit(event, payload) {
     listeners[event].slice().forEach(callback => callback(payload));
   }
+}
+
+// Timestamps follow the positions in a readback, at an offset getMappedRange() takes
+function timestampsAt(positionBytes) {
+  return Math.ceil(positionBytes / 8) * 8;
 }
 
 const warned = new Set();
