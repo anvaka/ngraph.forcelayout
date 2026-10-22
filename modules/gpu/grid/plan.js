@@ -79,16 +79,14 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
 
   const capacity = gridCapacity(D, maxCells);
   const TS = tableSize(maxCells);
-  const keyWords = deposit ? 3 : 2, spWords = deposit && D === 3 ? 2 : 1;
   const size = bytes => Math.max(16, Math.ceil(bytes / 16) * 16);
   const buffers = {
     gridMeta: size((META.TABLE + 2 * TS) * 4),
-    gridCount: size((capacity + 4) * 4),
-    gridStart: size((capacity + capacity / 2048) * 4),
-    gridKey: size(keyWords * n * 4),
-    gridSp: size(spWords * n * 16),
+    // the deposit's 64-bit sums
+    gridAcc: size(2 * capacity * 4),
     gridField: size(capacity * 4),
   };
+  if (deposit) buffers.gridValue = size(n * 4);
   // a smoothed field's low word (the refinement step, see residual() in wgsl.js)
   if (args.diffuse) buffers.gridLo = size(capacity * 4);
   const largest = Math.min(limits.maxStorageBufferBindingSize, limits.maxBufferSize);
@@ -108,12 +106,12 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
   };
   const kernels = gridKernels(spec);
   return {
-    refusal: null, D, n, label, maxCells, capacity, tableSize: TS, keyWords, anchor: args.anchor,
+    refusal: null, D, n, label, maxCells, capacity, tableSize: TS, anchor: args.anchor,
     smooth: spec.smooth, deposit: !!deposit, buffers, kernels, values, own,
     slotNames: names,
-    // MINMAX, PARAMS, BIN, 3 scans, ORDER, DEPOSIT, GATHER; with smoothing a sweep per axis, the
-    // residual and a sweep per axis again
-    dispatches: 9 + (spec.smooth ? 2 * D + 1 : 0),
+    // MINMAX, PARAMS, SCATTER, CONVERT, GATHER; with smoothing a sweep per axis, the residual and
+    // a sweep per axis again
+    dispatches: 5 + (spec.smooth ? 2 * D + 1 : 0),
   };
 }
 
@@ -168,6 +166,16 @@ export function gridIsDynamic(stage) {
   if (['cell', 'margin', 'diffuse', 'value'].some(key => args[key] && args[key].kind === 'host')) return true;
   if (stage.params.some(param => param.kind === 'host')) return true;
   return (stage.builtIns || []).indexOf('step') >= 0;
+}
+
+/**
+ * GPU time of one step of the grid at its worst, in ms, for the runner's bound on steps per
+ * submit: every body piled into one cell (the scatter's atomics then queue on a few sums) and the
+ * grid at maxCells. Measured on an M4 Max at 1M bodies: piled up 1.7 ms (linear weights) to
+ * 4.4 ms (quadratic, 2D) and 6.4 ms (quadratic, 3D); a smoothed 2,026^2 grid 1.6 ms.
+ */
+export function gridCappedMs(plan) {
+  return 7 * plan.n / 1e6 + 0.5 * plan.capacity / 1e6 * (plan.smooth ? 2 : 1);
 }
 
 /**
