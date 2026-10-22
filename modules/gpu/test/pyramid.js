@@ -160,8 +160,9 @@ test('laws that fall slower than 1/r^2 get second-order expansions, and wider ne
 
 test('crowded cells: a status word turns into a halt message', () => {
   assert.equal(pyramidStatus([0, 3, 0, 120]), null);
-  assert.match(pyramidStatus([0, 2, 100000, 20000]), /a grid cell holds 100,000 bodies.*20\.0 billion pair evaluations/);
+  assert.match(pyramidStatus([0, 2, 100000, 20000]), /a grid cell holds 100,000 bodies.*20 billion pair evaluations/);
   assert.match(pyramidStatus([0, 2, 100000, 20000], 4e8), /more than the GPU takes \(0\.40 billion\)/, 'the device\'s own cap');
+  assert.match(pyramidStatus([0, 2, 50000, 1200], 2e9, 5), /1\.2 billion pair evaluations a step with 5 charges \(the work of 2\.4 billion with one\), more than the GPU takes \(2\.0 billion\)/);
   const p = plan(2, 100000, stock);
   assert.ok(p.buffers.treeLists >= (4 + Math.floor(100000 / 1025) + 1) * 4, 'room for every crowded cell');
   assert.match(p.section.declarations, /if \(crowded\)/);

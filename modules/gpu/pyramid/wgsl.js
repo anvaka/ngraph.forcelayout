@@ -44,7 +44,9 @@ export const CROWD_GROUPS = 128;
 // treeLists: heavy count, crowded count, status (the largest crowded cell of the first step whose
 // crowded work was over the cap, else 0; it stays until the buffers are made again, so a readback
 // after a batch sees it), that step's work (millions of pair evaluations), occupied count, hub
-// count, 2 spare, then the lists. BOX clears the counts every step, not the status.
+// count, 1 spare, the last step's crowded work (millions of pair evaluations, weighted by the
+// charges: the cap's unit, see CHARGE_WEIGHT), then the lists. BOX clears all but the status every
+// step.
 export const LIST_HEAD = 8;
 // Heavy bodies (hubs, 2D): a body whose charges pass HEAVY times the mean takes its far field from
 // TREE_LOCAL's HUB_GROUPS extra workgroups (see tree_hub), at most HUB_MAX of them a step
@@ -57,6 +59,11 @@ function each(n, fn, sep = ' ') {
   for (let k = 0; k < n; k++) out.push(fn(k));
   return out.join(sep);
 }
+
+// The crowded work of a pair evaluation with K charges, in evaluations with one: the distance and
+// the law once, an accumulation per charge (gpu-critic-2's pyrcap.js: 5 charges took 1.9 times
+// one charge's time)
+export const chargeWeight = K => 1 + (K - 1) / 4;
 
 // Literal for a float the generator knows (always with a decimal point)
 function lit(value) {
@@ -944,11 +951,16 @@ fn tree_crowd(w: u32, li: u32) {
       }
       work += f32(nb) * f32(targets);
     }
-    let over = work > TP.workCap;
+    // in evaluations of one charge (chargeWeight)
+    let weighted = work * ${lit(chargeWeight(K))};
+    let over = weighted > TP.workCap;
     crowdHead = vec4u(crowded, select(0u, 1u, over), 0u, 0u);
-    if (w == 0u && over && atomicLoad(&treeLists[2]) == 0u) {
-      atomicStore(&treeLists[3], u32(min(work * 1e-6, 4e9)));
-      atomicStore(&treeLists[2], biggest);
+    if (w == 0u) {
+      atomicStore(&treeLists[7], u32(min(weighted * 1e-6, 4e9)));
+      if (over && atomicLoad(&treeLists[2]) == 0u) {
+        atomicStore(&treeLists[3], u32(min(work * 1e-6, 4e9)));
+        atomicStore(&treeLists[2], biggest);
+      }
     }
   }
   let head = workgroupUniformLoad(&crowdHead);
