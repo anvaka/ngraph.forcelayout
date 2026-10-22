@@ -182,6 +182,9 @@ function createRunner(layout, backend) {
     simulator.applyEdits();
     topologyChanged = false;
     const program = simulator.program();
+    // a grid field waits for the device's check of its exact arithmetic (grid/canary.js), started
+    // with the backend; on a failed check the lowering refuses what needs it
+    if (backend.gridCheck && program.stages.some(stage => stage.shape === 'grid')) await backend.gridCheck;
     lowering = backend.lower(program, simulator);
     if (!lowering.runs) throw refusal(reasonsOf(lowering));
     const plan = lowering.plan;

@@ -24,7 +24,7 @@ under "What is refused"):
 | Pair formulas | every pair within the radius, with the CPU's i/j roles, one-sided stages, accumulators |
 | Sums | over all bodies, or per group of a column the host sets; formulas read `name` or `name[group]` |
 | Lookup tables | in formulas and in laws |
-| Host steps (`addHostStep`) | the batch stops at the steps where one runs; it runs on the host with the device's numbers in the store, then the step goes on |
+| Host steps (`addHostStep`) | the batch stops at the steps where one runs; it runs on the host with the device's numbers in the store, then the step goes on. Each host step's `when` is asked at its turn, after the ones before it ran, as on the CPU |
 | Grid fields (`modules/gridfield`) | every option: both anchors, both weights, smoothing, self included or left out |
 
 How it runs, by size and dimension:
@@ -64,8 +64,9 @@ if (plan.runs) {
 ```
 
 - **`createWebGPUBackend({device})`** uses your device, or requests one with the adapter's limits
-  and timestamp queries. `gpuCapabilities(limits)` is a backend without a device, for `plan()` in
-  tests or on a server.
+  and timestamp queries. Once per device it also checks that the compiler keeps the grid field's
+  exact arithmetic (about 50 ms). `gpuCapabilities(limits)` is a backend without a device, for
+  `plan()` in tests or on a server.
 - **`simulator.plan(backend)`** gives `{runs, reasons, warnings, stages}`; `stages[name]` is
   `{runs, how}` or `{runs: false, reason}`.
 - **`gpu.step(n)`** queues `n` steps and submits their work. The layout's `'step'` event fires once
@@ -111,7 +112,7 @@ still works.
 
 | Halt | What it means |
 |---|---|
-| A work cap passed (`e.status` set) | a pair formula needed more pair tests in one step than its slices planned for; the pyramid's crowded cells need more pair evaluations than the cap (a layout piled densely in one place); a grid field's lattice is wider than its `maxCells` (the CPU module's words). The message says by which step. |
+| A work cap passed (`e.status` set) | a pair formula needed more pair tests in one step than its slices planned for; the pyramid's crowded cells need more pair evaluations than the cap (a layout piled densely in one place); a grid field's lattice is wider than its `maxCells` (a smoothed lattice halts in the CPU module's words; an unsmoothed one, which the CPU runs at any width, says to raise `maxCells` or run on the CPU). The message says by which step. |
 | A number that does not fit 32-bit floats | a host value or parameter became too large on some step; the message names it and the step |
 | A `'step'` listener changed the physics | see above |
 | A device error (`e.kernel`) or a lost device (`e.lost`) | a validation error names its kernel; after a loss, create a new backend |
@@ -124,12 +125,17 @@ from the device. The layout loses at most a batch of good steps and never keeps 
 ## Each device's speed
 
 The work caps (the pyramid's crowded cells, a pair formula's tests per slice) were sized on an
-Apple M4 Max, so that a step at its cap takes a few to 20 ms. `runOnGpu()` times a fixed probe of
-16.8M pair evaluations once per device (0.26 ms there; about 2 ms of setup in all) and gets how
-many times slower the device is (`gpu.stats().slowdown`, 1 to 100):
+Apple M4 Max. `runOnGpu()` runs a speed probe once per device: an exact pair loop, scattered
+reads over 16 MB and atomic adds, about 1 ms each there (about 9 ms of setup in all). The part
+that falls furthest behind the M4 Max says how many times slower the device is
+(`gpu.stats().slowdown`, 1 to 100; 10 when the probe cannot measure):
 
-- the pyramid's cap is divided by it, so a capped step takes about as long on any device;
+- the pyramid's cap (pair evaluations, weighted by its charges) is divided by it, so a capped
+  step takes about 30 ms on any device; the pyramid then follows the rate it measures on crowded
+  steps;
 - the pair formulas start from a matching cap, then follow the rate they measure on dense steps;
+- a grid field's worst step is its estimate for the M4 Max times a factor that starts at the
+  probe's and only grows, with the steps the grid times itself;
 - a submit holds no more steps than fit 1 s if every step reached its caps, far below the
   2-second GPU watchdog; and as many as fit 100 ms of the time steps actually take.
 
@@ -156,6 +162,7 @@ A pair step that needs more than its cap runs in several submits ("slices") rath
 | Repulsion in 4D and up above 16,384 bodies; pair formulas in 5D and up above 16,384 | exact pairs only; more needs a tree search |
 | More than one group of tree passes per step above 16,384 bodies in 2D and 3D | one pyramid per step |
 | Grid fields outside 2D and 3D | |
+| On a GPU whose compiler does not keep the grid's exact arithmetic (checked once per device): box grids wider than 16 cells (8 in 3D), and smoothing with diffuse / cell² ≥ 2 | the grid's coordinates and smoothing would no longer match the CPU; the reason says what failed |
 | Numbers that do not fit 32-bit floats (`1e300` in a formula, a column with integers above 2^24) | f32 rules: a literal is refused when the step is planned; a value that grows too large halts at the step |
 | Columns of other than 1 or D numbers per body | |
 | A layout too large for the device (buffer sizes, storage buffers per kernel, workgroup memory, one thread per body: 16.7M bodies) | the reason names the limit and the device's value |
@@ -178,7 +185,7 @@ A pair step that needs more than its cap runs in several submits ("slices") rath
   random one.
 - **Some costs:** a pair formula in 3D costs about twice 2D (0.20–0.23 ms at 100k); laws that fall
   slower than 1/r² cost 1.35–1.68× a stock step in 2D; a 3D grid field with quadratic weights
-  costs 1.08 ms at 1M bodies.
+  costs 0.73 ms at 1M bodies.
 - **FIRE's state** is not handed back to the CPU's integrator on `stop()`.
 - **An uncaptured device error halts every runner on that device**: WebGPU reports errors per
   device.
@@ -197,7 +204,7 @@ the same lowering, so they cannot disagree.
 
 | File | Part |
 |---|---|
-| `index.js` | Public API: `createWebGPUBackend`, `runOnGpu`, `gpuCapabilities`. Test options: `generic`, `smallGraph`, `pairEstimate`, `slowdown`, `renumber`. |
+| `index.js` | Public API: `createWebGPUBackend`, `runOnGpu`, `gpuCapabilities`. Test options: `generic`, `smallGraph`, `pairEstimate`, `slowdown`, `renumber`, `gridArithmetic`. |
 | `device.js` | The device: limits, `uncapturederror` and loss watching, pipelines compiled with `createComputePipelineAsync` and cached per device by their WGSL text, the submit cost, the speed probe. |
 | `wgsl/print.js` | The WGSL printer of the formula language: prefixed user names, safe builtins, f32 literal rules, the law helpers. |
 | `check.js` | The lowering table: what each stage needs, checked against a set of limits with no device; budgets (storage buffers per kernel, buffer sizes, workgroup memory). |
@@ -209,7 +216,7 @@ the same lowering, so they cannot disagree.
 | `generic/engine.js` | A generic plan on a device: buffers, the ring of slots, encoding, status words, readbacks, uploads row by row. Layouts of 4,096 bodies or more keep their rows in a spatial order on the device; uploads, links and groups go through it, and readbacks come back in the store's order. |
 | `pyramid/` | The grid pyramid for tree passes (2D and 3D, K charges, any law): exact crowded cells under a cap, far fields of their own for hubs. |
 | `pairs/` | Pair formulas above N*: a cell sort per radius, a work list of 256-test chunks with a cap and slices, a gather per stage; the pair-formula printer both regimes share. |
-| `grid/` | Grid fields: a deposit into 64-bit fixed-point sums, smoothing, the value and slope gathered back per body; a lattice wider than `maxCells` halts. |
+| `grid/` | Grid fields: a deposit into 64-bit fixed-point sums, smoothing, the value and slope gathered back per body; a lattice wider than `maxCells` halts; a per-device check of its exact arithmetic (`canary.js`). |
 | `templates/grid.js`, `templates/stock.js` | Today's grid kernels, WGSL byte for byte, and the engine around them. |
 | `buffers.js`, `rows.js` | Store to device and back: the f64 origin, the device's row order (a Hilbert curve in 2D, Morton order in 3D), rows the host wrote found and uploaded one by one (one scatter dispatch for many). |
 | `runner.js` | `runOnGpu`: the guard stage, uploads, batching, readbacks, `sync`, `stop`, events, the listener check, status and device errors, sync points. It drives either engine through one interface. |

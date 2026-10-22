@@ -10,5 +10,5 @@ none of them ships inside the `ngraph.forcelayout` npm package, and none is publ
 | [gpu](gpu) | `ngraph.forcelayout.gpu` | Runs a layout of the library on WebGPU: the GPU runs the layout's own simulator, and `plan()` says what it cannot run yet. |
 | [gridfield](gridfield) | `ngraph.forcelayout.gridfield` | A density of the bodies on a grid, read back at every body as two columns that formulas can use. |
 
-The [demo](../demo) imports both by package name (see `demo/vite.config.js`) and shows them in
-its "Add-ons" section.
+The [demo](../demo) imports pivot and gpu by package name (see `demo/vite.config.js`) and shows them
+in its "Add-ons" section. Two of its ideas, ru-4 and v1-6, import gridfield by its path.
