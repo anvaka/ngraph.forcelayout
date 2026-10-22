@@ -356,8 +356,11 @@ function createLayout(graph, physicsSettings) {
 
   function updateBodyMass(nodeId) {
     var body = nodeBodies.get(nodeId);
-    body.mass = nodeMass(nodeId);
-    if (Number.isNaN(body.mass)) {
+    // Straight into the store, not through the setter: every mass update here comes with a graph
+    // edit, after which the simulator marks all columns changed anyway
+    var mass = body.store.mass;
+    mass[body.index] = nodeMass(nodeId);
+    if (Number.isNaN(mass[body.index])) {
       throw new Error('Node mass should be a number');
     }
     if (nodeCharge) {
