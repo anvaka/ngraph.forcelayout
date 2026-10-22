@@ -296,6 +296,8 @@ function createRunner(layout, backend) {
           enc.resolveQuerySet(querySet, 0, 2, resolveBuffer, 0);
           enc.copyBufferToBuffer(resolveBuffer, 0, rb.buffer, at, 16);
         }
+        // the structures' status words (a work cap passed, a lattice too wide) come back too
+        if (engine.statusBytes) engine.copyStatus(enc, rb.buffer, at + 16);
       } : null,
     });
     queued += result.ran;
@@ -329,6 +331,7 @@ function createRunner(layout, backend) {
       if (rb.serial > appliedSerial && from === engine && !replaced) {
         apply(rb.serial, rb.steps, new Float32Array(rb.buffer.getMappedRange(0, bytes)), rb.ordered);
       }
+      const status = from === engine && engine.statusBytes ? engine.statusMessage(new Uint32Array(rb.buffer.getMappedRange(timestampsAt(bytes) + 16, engine.statusBytes))) : null;
       if (withTs) {
         const t = new BigUint64Array(rb.buffer.getMappedRange(timestampsAt(bytes), 16));
         const ns = Number(t[1] - t[0]);
@@ -340,6 +343,10 @@ function createRunner(layout, backend) {
       }
       rb.buffer.unmap();
       if (rb.engine === engine) free.push(rb); else rb.buffer.destroy();
+      if (status) {
+        halt({ message: status.message, kernel: null, stages: status.stages || [] });
+        return;
+      }
       afterReadback();
     }, () => { issuedAt.delete(rb.serial); /* destroyed, or the device was lost */ }).catch(error => {
       // a bug here, or a listener that threw: say so, rather than stop reading back in silence
@@ -489,7 +496,8 @@ function createRunner(layout, backend) {
 
   function makeReadbacks() {
     if (!engine) return;
-    const size = Math.max(16, timestampsAt(engine.positionBytes) + (timestamps ? 16 : 0));
+    // positions | timestamps (16 bytes) | the structures' status words
+    const size = Math.max(16, timestampsAt(engine.positionBytes) + 16 + (engine.statusBytes || 0));
     for (let r = 0; r < READBACK_BUFFERS; r++) {
       const rb = { buffer: device.createBuffer({ size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }), engine };
       all.push(rb);

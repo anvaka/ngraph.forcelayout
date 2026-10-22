@@ -106,6 +106,9 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     }
     tree.setValues({ gravity: 0 }, null);
   }
+  // Structures with status words on the device (work caps passed, ...): {buffer, offset, size,
+  // message(words), stages}
+  const statuses = [];
   // Bind groups per layout and parity
   const bindGroups = kernel => [0, 1].map(p => device.createBindGroup({
     layout: pipelineOf[kernel.name].getBindGroupLayout(0),
@@ -196,6 +199,23 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
 
     // parts of a step between host steps (see run()'s `segment`)
     segments: segments.length,
+
+    // The status words of the structures that have them, for every readback: copyStatus() puts
+    // them at `offset` of a readback, statusMessage() says why to halt, or null
+    statusBytes: statuses.reduce((total, status) => total + status.size, 0),
+    copyStatus(enc, dst, offset) {
+      let at = offset;
+      statuses.forEach(status => { enc.copyBufferToBuffer(status.buffer, status.offset, dst, at, status.size); at += status.size; });
+    },
+    statusMessage(words) {
+      let at = 0;
+      for (const status of statuses) {
+        const message = status.message(words.subarray(at, at + status.size / 4));
+        if (message) return { message, stages: status.stages };
+        at += status.size / 4;
+      }
+      return null;
+    },
 
     /**
      * Encodes `count` steps from simulator step `firstStep`. Returns {ran, halt?}: fewer steps
