@@ -1,0 +1,160 @@
+// The generic pyramid's plan, made without a device: grid size, buffers and their bytes (with the
+// refusal when they do not fit the device), the WGSL of its structure kernels and the section a
+// node kernel fuses to add the push at each body. build.js makes it real on a device.
+//
+//   const pyr = planPyramid({ D, n, limits, channels, pos });
+//   pyr.refusal     // null, or why this device cannot hold it (with the numbers)
+//   pyr.buffers     // bytes per buffer
+//   pyr.kernels     // WGSL by kernel name
+//   pyr.section     // {bindings, uniform, declarations, row(t), code({t, i, force, sensitivity})}
+//
+// A channel is {stage, law, centroid, charge, sensitivity}: `law` a compiled law of the library
+// (null for 1/r^2), `centroid` 'own' or 'shared' (channel 0 always has its own centre),
+// `charge` and `pos` colRefs: {buffer, type?, at(row, axis)}, the caller's columns.
+import { pyramidKernels, pyramidLayout, boxLayout, WG } from './wgsl.js';
+import { createPrinter, lawValueCount, lawValueProblem, f32Problem, F32_MAX } from '../wgsl/print.js';
+
+// Bodies of an overfull cell past this many are sampled with weights (today's template: 64, which
+// on relaxed hub graphs left cells of 65 to 330 bodies sampled and pushes 15 to 100% off)
+export const NEAR_CAP = 256;
+const AX = 'xyzw';
+
+/**
+ * Cells per axis for n bodies in D dimensions. 2D: today's grid (templates/grid.js), G^2 >= n / 2
+ * from 32 to 1,024. 3D: the smallest G with G^3 >= max(1,024, 2n), at most 2^20 cells. (Round 3
+ * had G^3 >= n / 2: on hub graphs that put most bodies of megaStars in 30 crowded cells.)
+ */
+export function chooseGrid(n, D) {
+  if (D === 2) {
+    let G = 32;
+    while (G * G * 2 < n && G < 1024) G *= 2;
+    return G;
+  }
+  let G = 2;
+  while ((G ** D < 1024 || G ** D < 2 * n) && (2 * G) ** D <= (1 << 20)) G *= 2;
+  return G;
+}
+
+/**
+ * The pyramid for `n` bodies: see the top of this file. `values`, when given, holds the law
+ * numbers per step instead of the pyramid's uniform: {decl(binding), law(c, k), gravity}.
+ * `grid` forces the cells per axis (for measurements).
+ */
+export function planPyramid({ D, n, limits, channels, pos, values = null, grid = 0, warn }) {
+  const refuse = (reason, buffers = {}) => ({ refusal: reason, buffers, kernels: {}, section: null, dispatches: 0 });
+  if (D !== 2 && D !== 3) return refuse(`the grid pyramid is 2D and 3D; this layout is ${D}D`);
+  if (!channels.length) return refuse('a tree pass needs at least one charge');
+
+  // Law groups: channels with one law object (or one law spec, or 1/r^2) evaluate it once
+  const groups = [];
+  const printer = createPrinter(warn);
+  for (let c = 0; c < channels.length; c++) {
+    const law = channels[c].law && !channels[c].law.isDefault ? channels[c].law : null;
+    let group = groups.find(g => (law ? g.law === law || (g.law && g.law.spec === law.spec) : g.isDefault));
+    if (!group) {
+      if (law) {
+        const problem = lawProblem(law, D, printer);
+        if (problem) return refuse(`${channels[c].stage || 'channel ' + c}: ${problem}`);
+      }
+      group = { law, isDefault: !law, channels: [], first: c };
+      groups.push(group);
+    }
+    group.channels.push(c);
+  }
+  // Tables live at the start of treeCells, law numbers in TP.law unless the caller holds them
+  let tableWords = 0, lawWords = 0;
+  groups.forEach(group => {
+    if (!group.law) return;
+    group.tables = group.law.describe().tables.map(table => {
+      const entry = { name: table.name, from: table.from, to: table.to, length: table.values.length, values: table.values, base: tableWords };
+      tableWords += table.values.length;
+      return entry;
+    });
+    group.base = lawWords;
+    lawWords += Math.ceil(lawValueCount(group.law) / 4) * 4;
+    group.value = values ? k => values.law(group.first, k) : k => `TP.law[${(group.base + k) >> 2}].${AX[(group.base + k) & 3]}`;
+  });
+  const own = channels.map((channel, c) => ({ own: c === 0 || channel.centroid !== 'shared', group: groups.findIndex(g => g.channels.indexOf(c) >= 0) }));
+  const L = pyramidLayout(D, own, tableWords);
+
+  const G = grid || chooseGrid(n, D);
+  const levels = Math.log2(G), nCells = G ** D;
+  const levelOff = [];
+  let pyrSize = 0;
+  for (let l = 0, g = G; l <= levels; l++, g >>= 1) { levelOff.push(pyrSize); pyrSize += g ** D; }
+  const localCells = levelOff[levels];
+  const size = bytes => Math.max(16, Math.ceil(bytes / 16) * 16);
+  const buffers = {
+    treeBox: size(boxLayout(D).size * 4),
+    treeCount: size(nCells * 4),
+    treeBlocks: size(Math.max(nCells / 1024, 4) * 4),
+    treeWork: size(3 * n * 4),
+    treeMeta: size((nCells + 3 * n + pyrSize) * 4),
+    treeSp: size(n * L.SP4 * 16),
+    treeCells: size((L.TAB4 + pyrSize * L.CS4 + localCells * L.LS4) * 16),
+  };
+  const sizes = { n, G, levels, nCells, levelOff, pyrSize, localCells, locOff: L.TAB4 + pyrSize * L.CS4, metaTag: nCells, metaRow: nCells + 2 * n, metaCount: nCells + 3 * n };
+
+  const largest = Math.min(limits.maxStorageBufferBindingSize, limits.maxBufferSize);
+  const over = Object.keys(buffers).filter(name => buffers[name] > largest);
+  if (over.length) {
+    const name = over.sort((a, b) => buffers[b] - buffers[a])[0];
+    return refuse(`the tree pass with ${channels.length} charge${channels.length > 1 ? 's' : ''} in ${D}D at ${n.toLocaleString('en-US')} bodies needs ` +
+      `${megabytes(buffers[name])} for ${name === 'treeCells' ? 'its cells' : name}; this device allows ${megabytes(largest)} per buffer`, buffers);
+  }
+  if (Math.ceil(n / WG) > limits.maxComputeWorkgroupsPerDimension ** 2) return refuse(`the grid pyramid runs up to ${(limits.maxComputeWorkgroupsPerDimension ** 2 * WG).toLocaleString('en-US')} bodies`);
+
+  const spec = {
+    D, L, groups, lawWords: values ? 0 : lawWords, values, warn,
+    channels: own, pos, charges: channels.map(channel => channel.charge),
+  };
+  const out = pyramidKernels(spec);
+  return {
+    refusal: null, D, n, K: channels.length, layout: L, groups, sizes, buffers,
+    lawWords: spec.lawWords, values, channels,
+    kernels: out.kernels, columns: out.columns, section: out.section,
+    // HIST, BOX, BIN, 3 scans, PLACE, ORDER, AGG0, a PYR per level, LOCAL
+    dispatches: 10 + levels,
+  };
+}
+
+/**
+ * Bytes the pyramid needs for `channels` ([{centroid, law}]) at n bodies in D dimensions, by
+ * buffer, without printing anything (design risk R5).
+ */
+export function pyramidMemory(D, n, channels, tableWords = 0) {
+  const L = pyramidLayout(D, channels.map((channel, c) => ({ own: c === 0 || channel.centroid !== 'shared' })), tableWords);
+  const G = chooseGrid(n, D), levels = Math.log2(G), nCells = G ** D;
+  let pyrSize = 0, last = 0;
+  for (let l = 0, g = G; l <= levels; l++, g >>= 1) { last = pyrSize; pyrSize += g ** D; }
+  return {
+    treeCells: (L.TAB4 + pyrSize * L.CS4 + last * L.LS4) * 16,
+    treeMeta: (nCells + 3 * n + pyrSize) * 4,
+    treeSp: n * L.SP4 * 16,
+    treeWork: 3 * n * 4,
+  };
+}
+
+// Why the GPU cannot print `law`, or null
+function lawProblem(law, D, printer) {
+  if (Object.keys(law.functions).filter(name => law.tableNames.indexOf(name) < 0).length) {
+    return 'laws with JavaScript functions run on the CPU only';
+  }
+  try {
+    law.emit(printer, D, 'r', 'k1', 'k2');
+  } catch (e) {
+    return 'the law: ' + e.message;
+  }
+  for (const table of law.describe().tables) {
+    // tiny values may become 0, which a table can afford; values past f32 cannot
+    const bad = Array.from(table.values).find(v => !Number.isFinite(v) || Math.abs(v) > F32_MAX);
+    if (bad !== undefined) return `the law's table ${table.name}: ${f32Problem(bad)}`;
+  }
+  const problem = lawValueProblem(law);
+  if (problem) return `the law's ${problem.name} is ${problem.problem}`;
+  return null;
+}
+
+function megabytes(bytes) {
+  return (bytes / 1048576).toFixed(bytes < 10485760 ? 1 : 0) + ' MiB';
+}
