@@ -15,12 +15,6 @@ import { slotFiller } from './values.js';
 import { chooseOrigin, relativePositions as relative, writePositionsBack, writePermutedBack, rowsMoved, bodyOrder } from '../buffers.js';
 import { createRowWriter, trackHostPositions } from '../rows.js';
 
-// GPU time of a step of the pyramid's crowded cells at their work cap on the M4 Max the cap was
-// sized on (about 20 ms); on other devices the cap and this time scale with the device's
-// slowdown (device.js), so that a capped step takes about as long. A pair stage's comes from the
-// pairs' measured rate, a grid field's from its size and body count (gridCappedMs()). The runner
-// bounds steps per submit by them (see cappedMs).
-const PYRAMID_CAPPED_MS = 20;
 
 // Integers above this are not exact in f32
 const F32_INTEGER = 16777216;
@@ -154,7 +148,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   if (plan.pyramid) {
     try {
       tree = await buildPyramid(device, plan.pyramid, {
-        buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes, dynamic: true }, workCap: WORK_CAP / slowdown,
+        buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes, dynamic: true }, workCap: WORK_CAP / slowdown, slowdown,
       });
     } catch (e) {
       owned.forEach(b => b.destroy());
@@ -190,17 +184,17 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     });
   }
   if (tree && tree.status) {
-    statuses.push(Object.assign({ message: tree.statusMessage, stages: plan.pyramid.channels.map(c => c.stage) }, tree.status));
+    statuses.push(Object.assign({ message: tree.statusMessage, observe: words => tree.observe(words), stages: plan.pyramid.channels.map(c => c.stage) }, tree.status));
   }
   // Grid fields: positions (by parity), their columns in S and H, their numbers in the slot
   const grids = new Map();
   try {
     for (const kernel of dispatched) {
       if (kernel.kind !== 'grid') continue;
-      const grid = await buildGrid(device, kernel.section.grid, { buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes, dynamic: true } });
+      const grid = await buildGrid(device, kernel.section.grid, { buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes, dynamic: true }, slowdown });
       grids.set(kernel, grid);
       const name = kernel.section.stage.name;
-      statuses.push(Object.assign({ message: words => gridStatus(words, kernel.section.grid, name), stages: [name] }, grid.status));
+      statuses.push(Object.assign({ message: words => gridStatus(words, kernel.section.grid, name), observe: grid.observe ? words => grid.observe(words) : null, stages: [name] }, grid.status));
     }
   } catch (e) {
     owned.forEach(b => b.destroy());
@@ -499,16 +493,20 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     // GPU time of a step whose structures all work at their caps: a step can get there within a
     // submit (a gate opens, a radius grows, the layout piles up), so the runner keeps submits
     // below the watchdog with it rather than with the steps it timed
+    // (the pairs and the pyramid measure theirs on the device; a grid's is its estimate for an M4
+    // Max times the device's slowdown, unless it measures its own)
     get cappedMs() {
-      return (pairs ? plan.pairs.stages.length * pairStageMs() : 0) + (tree ? PYRAMID_CAPPED_MS * slowdown : 0) +
-        [...grids.keys()].reduce((total, kernel) => total + gridCappedMs(kernel.section.grid) * slowdown, 0);
+      const gridMs = [...grids].reduce((total, [kernel, grid]) => total + (grid.cappedMs ? grid.cappedMs() : gridCappedMs(kernel.section.grid) * slowdown), 0);
+      return (pairs ? plan.pairs.stages.length * pairStageMs() : 0) + (tree ? tree.cappedMs() : 0) + gridMs;
     },
     // slices each pair sort's last encoded step ran in (0: one submit), for tests
     pairSlices: () => (pairs ? pairs.slices() : []),
-    // the runner's measured GPU ms a step: the pairs take the device's rate from it, for their cap
-    // and the pair work of a submit
+    // the runner's measured GPU ms a step: the structures that measure themselves take the
+    // device's rate from it, for their caps and capped times
     observeTiming(msPerStep) {
       if (pairs) pairs.observeTime(msPerStep);
+      if (tree) tree.observeTime(msPerStep);
+      grids.forEach(grid => { if (grid.observeTime) grid.observeTime(msPerStep); });
     },
 
     destroy() {

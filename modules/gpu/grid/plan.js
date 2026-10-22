@@ -12,14 +12,22 @@
 // `pos` and `column(name)` give colRefs, {buffer, at(row, axis)}: the positions at the start of
 // the step, the columns the deposit value reads, and the two columns the field writes (into.value,
 // into.gradient). `values`, when given, is the caller's step slot: {decl(binding), at(name)};
-// without it the grid has a uniform of its own (build.js setValues()).
+// without it the grid has a uniform of its own (build.js setValues()). `limits.gridArithmetic`,
+// when the device was checked (canary.js), says which exact arithmetic it keeps: what needs the
+// rest is refused.
 import formula from '../../../lib/formula.js';
-import { createPrinter, f32Problem } from '../wgsl/print.js';
-import { gridKernels, gridCapacity, tableSize, META, WG } from './wgsl.js';
+import { createPrinter, f32Problem, F32_MAX } from '../wgsl/print.js';
+import { gridKernels, gridCapacity, gridChunkWords, tableSize, META, WG, REFINE_GAMMA } from './wgsl.js';
 
 const AX = 'xyzw';
 // Numbers of the stage that the host works out per step (simulator.stageValues())
 const NUMBERS = ['cell', 'cellLow', 'margin', 'marginLow', 'diffuse', 'value'];
+// The widest box grid, per D, that keeps within half the tolerance when a device's compiler sees
+// through grid_opq (canary.js). Measured on Metal with the barriers left out: a box's cell and
+// corner then lose their low words, and 2D boxes were off by 1.9e-6 at 16 cells and 6.9e-6 at 32;
+// 3D by 1.3e-6 at 8 and 9.8e-6 at 16. Lattices, whose cell comes from the host, held 4e-6 up to
+// 2,048 cells (grid-work/plaincells-seen*.json).
+const PLAIN_BOX_CELLS = { 2: 16, 3: 8 };
 
 /**
  * The grid's own numbers per step, by slot name (gridSlotValues() gives them); the stage's params
@@ -44,6 +52,21 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
     if (number && number.kind === 'number') {
       const problem = f32Problem(number.value);
       if (problem) return refuse(`the grid's ${key}: ${problem}`);
+    }
+  }
+
+  // What the device's compiler does not keep exact (canary.js); unknown (no device) passes
+  const exact = limits.gridArithmetic;
+  if (exact && !exact.sums && args.anchor === 'box' && maxCells > PLAIN_BOX_CELLS[D]) {
+    return refuse(`${exact.reason}. Without exact arithmetic a ${D}D box grid wider than ${PLAIN_BOX_CELLS[D]} cells per axis is off by more than half the ` +
+      `tolerance, and this one may reach ${maxCells}. Set maxCells to ${PLAIN_BOX_CELLS[D]}, use the 'lattice' anchor, or run on the CPU`);
+  }
+  if (exact && !(exact.sums && exact.residual) && args.diffuse) {
+    // smoothing over diffuse / cell^2 >= REFINE_GAMMA needs the refinement step, which needs both
+    const gamma = gammaBound(args);
+    if (!(gamma < REFINE_GAMMA)) {
+      return refuse(`${exact.reason}. Without exact arithmetic smoothing with diffuse / cell^2 of ${REFINE_GAMMA} or more is off by more than half the ` +
+        `tolerance, and this grid's ${Number.isFinite(gamma) ? `is ${+gamma.toPrecision(4)}` : 'comes from expressions, known only as it runs'}. Run it on the CPU`);
     }
   }
 
@@ -79,14 +102,19 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
 
   const capacity = gridCapacity(D, maxCells);
   const TS = tableSize(maxCells);
+  const keyWords = deposit ? 3 : 2, spWords = deposit && D === 3 ? 2 : 1;
   const size = bytes => Math.max(16, Math.ceil(bytes / 16) * 16);
   const buffers = {
     gridMeta: size((META.TABLE + 2 * TS) * 4),
-    // the deposit's 64-bit sums
+    gridCount: size(capacity * 4),
+    gridStart: size((capacity + capacity / 2048) * 4),
+    gridKey: size(keyWords * n * 4),
+    gridSp: size(spWords * n * 16),
+    gridChunk: size(gridChunkWords(n) * 4),
+    // crowded cells' 64-bit sums
     gridAcc: size(2 * capacity * 4),
     gridField: size(capacity * 4),
   };
-  if (deposit) buffers.gridValue = size(n * 4);
   // a smoothed field's low word (the refinement step, see residual() in wgsl.js)
   if (args.diffuse) buffers.gridLo = size(capacity * 4);
   const largest = Math.min(limits.maxStorageBufferBindingSize, limits.maxBufferSize);
@@ -109,10 +137,32 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
     refusal: null, D, n, label, maxCells, capacity, tableSize: TS, anchor: args.anchor,
     smooth: spec.smooth, deposit: !!deposit, buffers, kernels, values, own,
     slotNames: names,
-    // MINMAX, PARAMS, SCATTER, CONVERT, GATHER; with smoothing a sweep per axis, the residual and
-    // a sweep per axis again
-    dispatches: 5 + (spec.smooth ? 2 * D + 1 : 0),
+    // MINMAX, PARAMS, BIN, 2 scans, ORDER, CROWD, DEPOSIT, GATHER; with smoothing a sweep per
+    // axis, the residual and a sweep per axis again
+    dispatches: 9 + (spec.smooth ? 2 * D + 1 : 0),
   };
+}
+
+// diffuse / cell^2 at most, when both are numbers in the description (a box's cell only grows);
+// else Infinity
+function gammaBound(args) {
+  const number = x => (x && x.kind === 'number' ? x.value : NaN);
+  const gamma = number(args.diffuse) / (number(args.cell) * number(args.cell));
+  return gamma >= 0 ? gamma : Infinity;
+}
+
+/**
+ * The first of a grid's numbers for a step (simulator.stageValues()) that does not fit f32, as
+ * {name, value}, or null. The device would turn them into NaN or no grid without a word.
+ */
+export function gridNumberProblem(numbers) {
+  const names = { cell: 'grid cell', margin: 'grid margin', diffuse: 'smoothing\'s diffuse', value: 'deposit value' };
+  for (const name of Object.keys(names)) {
+    const value = numbers[name];
+    if (value === null || value === undefined) continue;
+    if (!Number.isFinite(value) || Math.abs(value) > F32_MAX) return { name: names[name], value };
+  }
+  return null;
 }
 
 /**
@@ -169,13 +219,24 @@ export function gridIsDynamic(stage) {
 }
 
 /**
- * GPU time of one step of the grid at its worst, in ms, for the runner's bound on steps per
- * submit: every body piled into one cell (the scatter's atomics then queue on a few sums) and the
- * grid at maxCells. Measured on an M4 Max at 1M bodies: piled up 1.7 ms (linear weights) to
- * 4.4 ms (quadratic, 2D) and 6.4 ms (quadratic, 3D); a smoothed 2,026^2 grid 1.6 ms.
+ * GPU time of one step of the grid at its worst, in ms on an M4 Max (the engine scales it by the
+ * device's speed), for the runner's bound on steps per submit. Measured at 1M bodies: piled into
+ * one cell 1.0-1.1 ms (BIN's counter takes every body); about 64 bodies in every cell, the gather's
+ * longest threads, 0.38-0.68 ms; the grid at maxCells 0.63 ms (2,003^2 lattice), 0.88 ms (131^3)
+ * and 1.43 ms (2,050^2 box, smoothed and refined).
  */
 export function gridCappedMs(plan) {
-  return 7 * plan.n / 1e6 + 0.5 * plan.capacity / 1e6 * (plan.smooth ? 2 : 1);
+  return 0.1 + 1.2 * plan.n / 1e6 + 0.3 * plan.capacity / 1e6;
+}
+
+/**
+ * GPU ms of a relaxed step of the grid on an M4 Max, at most: n bodies and `points` grid points
+ * this step. A lower envelope of the measured steps (100k and 1M bodies, 2D and 3D, both grids of
+ * timegrid.js), so a step timed on a device, divided by it, gives that device's factor or more
+ * (build.js observeTime()).
+ */
+export function gridRelaxedMs(plan, points) {
+  return 0.02 + 0.25 * plan.n / 1e6 + (plan.smooth ? 0.15 : 0.03) * points / 1e6;
 }
 
 /**
@@ -185,12 +246,15 @@ export function gridCappedMs(plan) {
 export function gridStatus(words, plan, stageName) {
   const code = words[0];
   if (!code) return null;
-  // the CPU module's words for the same refusal (a smoothed lattice), numbers as it prints them
   const f = new Float32Array(new Uint32Array([words[1], words[2]]).buffer);
   const cells = Number.isFinite(f[0]) ? Math.round(f[0]) : f[0];
   const cell = +f[1].toPrecision(6);
   if (code === 1) {
-    return `Grid field ${stageName}: the layout spans ${cells} cells at cell ${cell}; maxCells is ${plan.maxCells}`;
+    // a smoothed lattice: the CPU module's words, numbers as it prints them (it stops too)
+    const spans = `Grid field ${stageName}: the layout spans ${cells} cells at cell ${cell}`;
+    if (plan.smooth) return `${spans}; maxCells is ${plan.maxCells}`;
+    // without smoothing the CPU keeps going past maxCells (in bricks of cells); the GPU's grid is dense
+    return `${spans}, more than the GPU's maxCells of ${plan.maxCells}; the CPU runs this lattice at any width. Raise maxCells, or run on the CPU`;
   }
   return `Grid field ${stageName}: the grid needs ${cells} cells, more than its buffers hold (${plan.capacity})`;
 }
