@@ -21,7 +21,9 @@ the README):
   engines can run the same text. Laws are written in the same language, which now has
   conditions, named values, lookup tables, `floor`/`ceil`/`round`/`sign`/`clamp`, and built in
   values such as `dt`, `step` and `unit`.
-* `addRepulsion()` - more tree passes, each with its own law, charges and sensitivity.
+* `addRepulsion()` - more tree passes, each with its own law, charges and sensitivity. Passes next
+  to each other and to the stock repulsion walk one quad tree with a charge each
+  (`centroid: 'shared'` lets a charge act from the first charge's centre).
 * `simulator.plan(backend)` - which stages an engine (such as the WebGPU module) can run, and
   why not, with warnings. Stages can `replace` another stage.
 * `simulator.program()` - the whole step as plain data (settings, columns and who writes them,

@@ -119,8 +119,9 @@ test('program() describes the stock step as plain data', function (t) {
   var repulsion = stageOf(program, 'repulsion');
   t.same(repulsion.args.channels, [{
     law: { force: 'r^-2', params: [], builtIns: [], range: null, tables: [], functions: [], isDefault: true, key: 'r^-2|||' },
-    charge: 'mass', sensitivity: 'mass'
+    charge: 'mass', sensitivity: 'mass', centroid: 'own'
   }]);
+  t.same(repulsion.args.walk, { stages: ['repulsion'], index: 0, charges: 1, tree: 'quadtree' }, 'the repulsion walks alone');
   t.same(stageOf(program, 'integrate').args.inertia, 'mass');
   t.equal(program.listeners.step, 1, "the layout's step listeners are counted");
   layout.off('step', onStep);
