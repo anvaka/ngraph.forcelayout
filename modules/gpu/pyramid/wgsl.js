@@ -36,7 +36,7 @@ export const HIST_BINS = 1024;
 // Workgroups of TREE_HIST, at most
 export const HIST_GROUPS = 128;
 // A finest cell whose charge per body passes this many times the mean is heavy (see TREE_HEAVY)
-const HEAVY = 8;
+export const HEAVY = 8;
 // Workgroups of TREE_HEAVY, and threads in each
 const HEAVY_GROUPS = 64, HEAVY_THREADS = 64;
 // Workgroups that TREE_LOCAL adds for crowded cells (see tree_crowd)
@@ -48,7 +48,7 @@ export const CROWD_GROUPS = 128;
 // charges: the cap's unit, see CHARGE_WEIGHT), then the lists. BOX clears all but the status every
 // step.
 export const LIST_HEAD = 8;
-// Heavy bodies (hubs, 2D): a body whose charges pass HEAVY times the mean takes its far field from
+// Heavy bodies (hubs): a body whose charges pass HEAVY times the mean takes its far field from
 // TREE_LOCAL's HUB_GROUPS extra workgroups (see tree_hub), at most HUB_MAX of them a step
 export const HUB_GROUPS = 32;
 export const HUB_MAX = 2047;
@@ -1050,7 +1050,7 @@ fn tree_crowd(w: u32, li: u32) {
   }
 }`;
 
-  // Heavy bodies (hubs, AGG0 lists them; 2D). A hub's push is the small residue of its leaves'
+  // Heavy bodies (hubs, AGG0 lists them). A hub's push is the small residue of its leaves'
   // pushes from every side, and the leaves sit mostly in cells 2 cells away, where the expansions
   // of the hub's chain take them as monopoles at every level: megaStars after 200 steps was 1.6
   // times the CPU tree's error, 83% of it at the main hub (its cell too full of leaves to count
@@ -1059,7 +1059,17 @@ fn tree_crowd(w: u32, li: u32) {
   // take a hub each, their threads split the lists, and the sums add up in a fixed tree. The
   // section reads the result through the hub's number in its tag (bits 20 to 30).
   const R = SEP + 1, RS = 2 * R + 1, CAND = (RS ** D) << D;
-  if (hubs && CAND > WG) throw new Error('tree_hub: more candidate cells than threads');
+  // The field at the hub's position of one body of its ring (loaded as `b`), every channel
+  const ringPair = (() => {
+    const lines = [loadVec4s('b', 'treeSp', `t * ${L.SP4}u`, L.SP4), each(D, k => `let d${k} = ${word('b', k)} - p${k};`), `let r2 = ${each(D, k => `d${k} * d${k}`, ' + ')};`, 'if (r2 > 0.0) {', 'let r = sqrt(r2);'];
+    lawGroups.forEach((group, g) => {
+      const conds = [`(${nonzero(group.channels, c => word('b', D + c))})`];
+      if (group.law && group.law.hasRange) conds.push(`tree_in_${g}(r2)`);
+      lines.push(`if (${conds.join(' && ')}) { let k1 = tree_k1_${g}(r, r2); ${group.channels.map(c => each(D, k => `acc${c}_${k} += (${word('b', D + c)} * k1) * d${k};`)).join(' ')} }`);
+    });
+    lines.push('}');
+    return lines.join(' ');
+  })();
   const hubFn = hubs ? /* wgsl */`
 var<workgroup> hubHead: u32;
 fn tree_hub(w: u32, li: u32) {
@@ -1081,15 +1091,26 @@ fn tree_hub(w: u32, li: u32) {
       let poff = off + ${each(D, () => 'Gl', ' * ')};
       // the finest level skips my near cells only; the levels above the cells a list has had
       let skip = select(${R}, ${SEP}, l == 0u);
-      if (li < ${CAND}u) {
-        let pi = li >> ${D}u;
-        let ch = li & ${(1 << D) - 1}u;
+      // (3D: 1,000 candidates, a few a thread)
+      for (var cand = li; cand < ${CAND}u; cand += ${WG}u) {
+        let pi = cand >> ${D}u;
+        let ch = cand & ${(1 << D) - 1}u;
         ${each(D, k => `let xl${k} = cx${k} >> l; let x${k} = (xl${k} >> 1u) + i32((pi / ${RS ** k}u) % ${RS}u) - ${R};`)}
         if (${each(D, k => `x${k} >= 0 && x${k} < Gp`, ' && ')}) {
           let mm0 = ${each(D, k => `(tree_spread(u32(x${k})) << ${k}u)`, ' | ')};
           ${each(D, k => `let y${k} = 2 * x${k} + i32((ch >> ${k}u) & 1u);`)}
           if (${countAt('poff + mm0')} != 0u && !(${each(D, k => `abs(y${k} - xl${k}) <= skip`, ' && ')})) {
-            let src = off + ((mm0 << ${D}u) | ch);
+            let src = off + ((mm0 << ${D}u) | ch);${D === 3 ? `
+            // 3D: the ring just past the near cells body by body, as TREE_HEAVY takes it (a hub's
+            // leaves sit there; as monopoles, relaxed megaStars in 3D was 2.6 times the CPU tree's error)
+            if (l == 0u && ${maxOf(Array.from({ length: D }, (_, k) => `abs(y${k} - xl${k})`))} == ${SEP + 1}) {
+              let s0 = treeMeta[src];
+              let e0 = select(TP.n, treeMeta[src + 1u], src + 1u < TP.nCells);
+              for (var t = s0; t < e0; t++) {
+${ringPair}
+              }
+              continue;
+            }` : ''}
             ${loadVec4s('a', 'treeCells', `${L.TAB4}u + src * ${L.CS4}u`, L.CS4)}
 ${sourceCell(k => `p${k}`, false)}
           }

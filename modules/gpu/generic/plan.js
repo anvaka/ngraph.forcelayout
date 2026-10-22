@@ -89,7 +89,7 @@ export function slotValue(index) {
  * 1/r^2); `options.limits` the device's (for the pyramid's buffers), `options.warn` takes the
  * printer's warnings, `options.smallGraph` overrides N* (for measurements). `options.data` holds
  * what the plan needs to know of the store: {linksDefault: no link has its own length or
- * stiffness, groups: {column: number of groups}}.
+ * stiffness, groups: {column: number of groups}, maxDegree, peak(columns)}.
  */
 export function genericPlan(program, laws, options = {}) {
   const D = program.dims, n = program.spaces.nodes, m = program.spaces.links;
@@ -544,8 +544,11 @@ export function genericPlan(program, laws, options = {}) {
       const column = columns[name];
       return { buffer: column.buffer, at: row => `${column.buffer}[${column.offset}u + ${row}]` };
     };
+    // the charges' peak, when only the host writes them (stages may write any value later)
+    const charges = pyramidWalk.channels.map(c => c.charge);
+    const peak = data.peak && charges.every(name => columns[name].buffer === 'H') ? data.peak(charges) : undefined;
     pyramid = planPyramid({
-      D, n, limits: options.limits, warn: options.warn,
+      D, n, limits: options.limits, warn: options.warn, peak,
       channels: pyramidWalk.channels.map((c, k) => ({ stage: c.stage.name, law: c.law, centroid: k === 0 ? 'own' : c.centroid, charge: colRef(c.charge) })),
       pos: { buffer: 'X', at: (row, k) => `X[${row} * ${D}u + ${k}u]` },
       values: {

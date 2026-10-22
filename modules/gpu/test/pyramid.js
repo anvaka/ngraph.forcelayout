@@ -47,16 +47,20 @@ test('grids: 2D as the stock template (twice as fine up to 8,192 bodies), 3D wit
   assert.equal(plan(2, 100000, stock).kernels.TREE_HEAVY, undefined);
 });
 
-test('hubs: 2D lists heavy bodies in AGG0 and gives them their own far field in TREE_LOCAL', () => {
-  const p2 = plan(2, 10000, stock), p3 = plan(3, 10000, stock);
-  assert.equal(p2.hubs, true);
-  assert.equal(p3.hubs, false, '3D has its heavy cells');
-  assert.match(p2.kernels.TREE_HIST, /qpart/, 'HIST sums |charge| per workgroup');
-  assert.match(p2.kernels.TREE_AGG0, /heavyQ/);
-  assert.match(p2.kernels.TREE_LOCAL, /fn tree_hub/);
-  assert.match(p2.section.declarations, /let hub = \(raw >> 20u\)/);
-  assert.doesNotMatch(p3.kernels.TREE_LOCAL, /tree_hub/);
+test('hubs: AGG0 lists heavy bodies, and TREE_LOCAL gives them their own far field, in 2D and 3D', () => {
+  for (const D of [2, 3]) {
+    const p = plan(D, 10000, stock);
+    assert.equal(p.hubs, true);
+    assert.match(p.kernels.TREE_HIST, /qpart/, 'HIST sums |charge| per workgroup');
+    assert.match(p.kernels.TREE_AGG0, /heavyQ/);
+    assert.match(p.kernels.TREE_LOCAL, /fn tree_hub/);
+    assert.match(p.section.declarations, /let hub = \(raw >> 20u\)/);
+  }
   assert.equal(plan(2, 10000, stock, { hubs: false }).kernels.TREE_LOCAL.includes('tree_hub'), false);
+  // 3D plans them only when the charges may have one (a body past HEAVY times the mean)
+  assert.equal(plan(3, 10000, stock, { peak: 4 }).hubs, false);
+  assert.equal(plan(3, 10000, stock, { peak: 400 }).hubs, true);
+  assert.equal(plan(2, 10000, stock, { peak: 4 }).hubs, true);
 });
 
 test('every kernel fits 8 storage buffers, with columns in up to three buffers', () => {
