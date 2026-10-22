@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { planPyramid, chooseGrid, pyramidMemory } from '../pyramid/plan.js';
+import { planPyramid, chooseGrid, pyramidMemory, pyrLevels } from '../pyramid/plan.js';
 import { walkGroups, walkChannels } from '../pyramid/channels.js';
 import { pyramidStatus } from '../pyramid/build.js';
 import { SPEC_LIMITS } from '../check.js';
@@ -38,7 +38,11 @@ test('grids: 2D as the stock template, 3D with about two cells per body', () => 
   const p = plan(3, 100000, stock);
   assert.equal(p.refusal, null);
   assert.deepEqual([p.sizes.G, p.sizes.levels, p.sizes.nCells], [64, 6, 262144]);
-  assert.equal(p.dispatches, 17, '10 + 6 levels, and the heavy cells');
+  assert.equal(p.dispatches, 13, '10, 2 PYR for 6 levels (2 a workgroup, AGG0 the first 2), and the heavy cells');
+  assert.deepEqual(pyrLevels(7, 4), [{ from: 4, steps: 3 }], '2D at 10k: AGG0 does 4 levels, one PYR the other 3');
+  assert.deepEqual(pyrLevels(10, 4), [{ from: 4, steps: 4 }, { from: 8, steps: 2 }]);
+  assert.equal(pyrLevels(3, 4).length, 0);
+  assert.equal(pyrLevels(6, 0).length, 6, 'without blocks, one level a dispatch');
   assert.ok(p.kernels.TREE_HEAVY, 'heavy cells: 3D only');
   assert.equal(plan(2, 100000, stock).kernels.TREE_HEAVY, undefined);
 });

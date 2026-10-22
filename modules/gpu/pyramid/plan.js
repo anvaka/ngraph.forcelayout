@@ -41,9 +41,10 @@ export function chooseGrid(n, D) {
 /**
  * The pyramid for `n` bodies: see the top of this file. `values`, when given, holds the law
  * numbers per step instead of the pyramid's uniform: {decl(binding), law(c, k), gravity}.
- * `grid` forces the cells per axis (for measurements).
+ * `grid` forces the cells per axis and `blocks: false` one TREE_PYR dispatch per level (for
+ * measurements and tests).
  */
-export function planPyramid({ D, n, limits, channels, pos, values = null, grid = 0, heads, heavyCells, secondOrder, separation, warn }) {
+export function planPyramid({ D, n, limits, channels, pos, values = null, grid = 0, heads, heavyCells, secondOrder, separation, blocks = true, warn }) {
   const refuse = (reason, buffers = {}) => ({ refusal: reason, buffers, kernels: {}, section: null, dispatches: 0 });
   if (D !== 2 && D !== 3) return refuse(`the grid pyramid is 2D and 3D; this layout is ${D}D`);
   if (!channels.length) return refuse('a tree pass needs at least one charge');
@@ -112,9 +113,13 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
   }
   if (Math.ceil(n / WG) > limits.maxComputeWorkgroupsPerDimension ** 2) return refuse(`the grid pyramid runs up to ${(limits.maxComputeWorkgroupsPerDimension ** 2 * WG).toLocaleString('en-US')} bodies`);
 
+  // Levels of the pyramid a workgroup reduces in its own memory (see tree_block in wgsl.js): its
+  // WG records, and the counts when they have no room in the records
+  const blockBytes = WG * L.CS4 * 16 + (L.CNT < 0 ? WG * 4 : 0) + 16;
+  const blockSteps = blocks && blockBytes <= (limits.maxComputeWorkgroupStorageSize || 16384) ? Math.floor(Math.log2(WG) / D) : 0;
   const spec = {
     D, L, groups, lawWords: values ? 0 : lawWords, values, warn, heads: heads === undefined ? nCells > n : heads, heavyCells: heavy,
-    sep,
+    sep, blockSteps,
     channels: own, pos, charges: channels.map(channel => channel.charge),
   };
   const out = pyramidKernels(spec);
@@ -122,9 +127,10 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
     refusal: null, D, n, K: channels.length, layout: L, groups, sizes, buffers, heads: spec.heads, heavyCells: spec.heavyCells,
     lawWords: spec.lawWords, values, channels,
     kernels: out.kernels, columns: out.columns, section: out.section,
-    // HIST, BOX, BIN, 3 scans, PLACE, ORDER, AGG0, a PYR per level, LOCAL (with the crowded
-    // cells' workgroups), and HEAVY in 3D
-    dispatches: 10 + levels + (spec.heavyCells ? 1 : 0),
+    // HIST, BOX, BIN, 3 scans, PLACE, ORDER, AGG0, PYRs, LOCAL (with the crowded cells'
+    // workgroups), and HEAVY in 3D
+    dispatches: 10 + pyrLevels(levels, blockSteps).length + (spec.heavyCells ? 1 : 0),
+    blockSteps,
     heavyGroups: out.heavyGroups,
   };
 }
@@ -136,6 +142,21 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
 export function pyramidMemory(D, n, channels, tableWords = 0) {
   const L = pyramidLayout(D, channels.map((channel, c) => ({ own: c === 0 || channel.centroid !== 'shared' })), tableWords);
   return layoutSizes(D, n, chooseGrid(n, D), L, channels.length, D === 3).buffers;
+}
+
+/**
+ * The TREE_PYR dispatches for `levels` levels above the finest cells: [{from, steps}], the level
+ * each starts from and how many it reduces. With `blockSteps` (UP in wgsl.js), TREE_AGG0 has done
+ * the first ones; without, one level a dispatch.
+ */
+export function pyrLevels(levels, blockSteps) {
+  const out = [];
+  if (!blockSteps) {
+    for (let l = 0; l < levels; l++) out.push({ from: l, steps: 1 });
+    return out;
+  }
+  for (let l = Math.min(blockSteps, levels); l < levels; l += blockSteps) out.push({ from: l, steps: Math.min(blockSteps, levels - l) });
+  return out;
 }
 
 // Grid sizes, offsets into the buffers, and bytes per buffer
