@@ -33,7 +33,7 @@ How it runs, by size and dimension:
 |---|---|
 | Up to 1,024 bodies (2,560 in 3D) | the whole step in one kernel when nothing splits it; repulsion and pair formulas exact over all pairs |
 | 2D and 3D, larger | repulsion through a grid pyramid (one group of tree passes per step above 16,384 bodies); pair formulas through a cell sort with a bounded work list (2D to 4D) |
-| The plain stock step in 2D, larger | today's grid kernels, byte for byte, while every link has the default length and stiffness and nothing is added to the step |
+| The plain stock step in 2D, larger | today's grid kernels, byte for byte, with today's origin: the same layout as today's module, step for step, while every link has the default length and stiffness and nothing is added to the step |
 | 4D and up | exact pairs, up to 16,384 bodies |
 | Grid fields | 2D and 3D |
 
@@ -173,7 +173,7 @@ A pair step that needs more than its cap runs in several submits ("slices") rath
 ## Known limits
 
 - **The plain stock 2D step above 1,024 bodies keeps today's grid kernels.** On relaxed layouts
-  with big hubs their force error is up to 2.76× the CPU tree's (megaStars), 1.25–1.28× on
+  with big hubs their force error is up to 3.19× the CPU tree's (megaStars), 1.25–1.28× on
   starOfStars, where the generic pyramid stays within 1.25×. The pyramid is as fast or faster
   from 2k to 100k bodies, but 1.26–1.45× slower on hub graphs (megaStars, EVA) from a random
   start. So the switch
@@ -185,9 +185,14 @@ A pair step that needs more than its cap runs in several submits ("slices") rath
   infinity are outside the contract. `tanh` is clamped (Metal's is NaN from 45).
 - **Bodies on one spot** are pushed apart along a small fixed direction where the CPU picks a
   random one.
-- **Some costs:** a pair formula in 3D costs about twice 2D (0.20–0.23 ms at 100k); laws that fall
-  slower than 1/r² cost 1.35–1.68× a stock step in 2D; a 3D grid field with quadratic weights
-  costs 0.73 ms at 1M bodies.
+- **Some costs:**
+  - a pair formula in 3D costs about twice 2D (0.20–0.23 ms at 100k);
+  - laws that fall slower than 1/r² cost 1.35–1.68× a stock step in 2D;
+  - a 3D grid field with quadratic weights costs 0.73 ms at 1M bodies;
+  - a grid field smoothed over diffuse / cell² ≥ 2 (ru-4's default is 16) keeps its field in two
+    32-bit words and refines it once a step, which costs ru-4-like grids 21–52% more (0.09 of
+    0.26 ms at 100k in 2D, 0.22 of 0.84 ms at 1M in 3D). Without it the smoothed field drifts to
+    9.6e-6 of its RMS at gamma 16, just under the 1e-5 tolerance; with it, 5e-7 at most.
 - **FIRE's state** is not handed back to the CPU's integrator on `stop()`.
 - **An uncaptured device error halts every runner on that device**: WebGPU reports errors per
   device.
