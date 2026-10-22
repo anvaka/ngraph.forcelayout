@@ -15,7 +15,7 @@
 // without it the grid has a uniform of its own (build.js setValues()).
 import formula from '../../../lib/formula.js';
 import { createPrinter, f32Problem } from '../wgsl/print.js';
-import { gridKernels, gridCapacity, tableSize, META, WG } from './wgsl.js';
+import { gridKernels, gridCapacity, gridChunkWords, tableSize, META, WG } from './wgsl.js';
 
 const AX = 'xyzw';
 // Numbers of the stage that the host works out per step (simulator.stageValues())
@@ -79,14 +79,19 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
 
   const capacity = gridCapacity(D, maxCells);
   const TS = tableSize(maxCells);
+  const keyWords = deposit ? 3 : 2, spWords = deposit && D === 3 ? 2 : 1;
   const size = bytes => Math.max(16, Math.ceil(bytes / 16) * 16);
   const buffers = {
     gridMeta: size((META.TABLE + 2 * TS) * 4),
-    // the deposit's 64-bit sums
+    gridCount: size(capacity * 4),
+    gridStart: size((capacity + capacity / 2048) * 4),
+    gridKey: size(keyWords * n * 4),
+    gridSp: size(spWords * n * 16),
+    gridChunk: size(gridChunkWords(n) * 4),
+    // crowded cells' 64-bit sums
     gridAcc: size(2 * capacity * 4),
     gridField: size(capacity * 4),
   };
-  if (deposit) buffers.gridValue = size(n * 4);
   // a smoothed field's low word (the refinement step, see residual() in wgsl.js)
   if (args.diffuse) buffers.gridLo = size(capacity * 4);
   const largest = Math.min(limits.maxStorageBufferBindingSize, limits.maxBufferSize);
@@ -109,9 +114,9 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
     refusal: null, D, n, label, maxCells, capacity, tableSize: TS, anchor: args.anchor,
     smooth: spec.smooth, deposit: !!deposit, buffers, kernels, values, own,
     slotNames: names,
-    // MINMAX, PARAMS, SCATTER, CONVERT, GATHER; with smoothing a sweep per axis, the residual and
-    // a sweep per axis again
-    dispatches: 5 + (spec.smooth ? 2 * D + 1 : 0),
+    // MINMAX, PARAMS, BIN, 2 scans, ORDER, CROWD, DEPOSIT, GATHER; with smoothing a sweep per
+    // axis, the residual and a sweep per axis again
+    dispatches: 9 + (spec.smooth ? 2 * D + 1 : 0),
   };
 }
 
@@ -169,13 +174,14 @@ export function gridIsDynamic(stage) {
 }
 
 /**
- * GPU time of one step of the grid at its worst, in ms, for the runner's bound on steps per
- * submit: every body piled into one cell (the scatter's atomics then queue on a few sums) and the
- * grid at maxCells. Measured on an M4 Max at 1M bodies: piled up 1.7 ms (linear weights) to
- * 4.4 ms (quadratic, 2D) and 6.4 ms (quadratic, 3D); a smoothed 2,026^2 grid 1.6 ms.
+ * GPU time of one step of the grid at its worst, in ms on an M4 Max (the engine scales it by the
+ * device's speed), for the runner's bound on steps per submit. Measured at 1M bodies: piled into
+ * one cell 1.0-1.1 ms (BIN's counter takes every body); about 64 bodies in every cell, the gather's
+ * longest threads, 0.38-0.68 ms; the grid at maxCells 0.63 ms (2,003^2 lattice), 0.88 ms (131^3)
+ * and 1.43 ms (2,050^2 box, smoothed and refined).
  */
 export function gridCappedMs(plan) {
-  return 7 * plan.n / 1e6 + 0.5 * plan.capacity / 1e6 * (plan.smooth ? 2 : 1);
+  return 0.1 + 1.2 * plan.n / 1e6 + 0.3 * plan.capacity / 1e6;
 }
 
 /**
@@ -185,12 +191,15 @@ export function gridCappedMs(plan) {
 export function gridStatus(words, plan, stageName) {
   const code = words[0];
   if (!code) return null;
-  // the CPU module's words for the same refusal (a smoothed lattice), numbers as it prints them
   const f = new Float32Array(new Uint32Array([words[1], words[2]]).buffer);
   const cells = Number.isFinite(f[0]) ? Math.round(f[0]) : f[0];
   const cell = +f[1].toPrecision(6);
   if (code === 1) {
-    return `Grid field ${stageName}: the layout spans ${cells} cells at cell ${cell}; maxCells is ${plan.maxCells}`;
+    // a smoothed lattice: the CPU module's words, numbers as it prints them (it stops too)
+    const spans = `Grid field ${stageName}: the layout spans ${cells} cells at cell ${cell}`;
+    if (plan.smooth) return `${spans}; maxCells is ${plan.maxCells}`;
+    // without smoothing the CPU keeps going past maxCells (in bricks of cells); the GPU's grid is dense
+    return `${spans}, more than the GPU's maxCells of ${plan.maxCells}; the CPU runs this lattice at any width. Raise maxCells, or run on the CPU`;
   }
   return `Grid field ${stageName}: the grid needs ${cells} cells, more than its buffers hold (${plan.capacity})`;
 }
