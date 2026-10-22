@@ -43,7 +43,7 @@ export function chooseGrid(n, D) {
  * numbers per step instead of the pyramid's uniform: {decl(binding), law(c, k), gravity}.
  * `grid` forces the cells per axis (for measurements).
  */
-export function planPyramid({ D, n, limits, channels, pos, values = null, grid = 0, heads, heavyCells, secondOrder, warn }) {
+export function planPyramid({ D, n, limits, channels, pos, values = null, grid = 0, heads, heavyCells, secondOrder, separation, warn }) {
   const refuse = (reason, buffers = {}) => ({ refusal: reason, buffers, kernels: {}, section: null, dispatches: 0 });
   if (D !== 2 && D !== 3) return refuse(`the grid pyramid is 2D and 3D; this layout is ${D}D`);
   if (!channels.length) return refuse('a tree pass needs at least one charge');
@@ -77,12 +77,14 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
     lawWords += Math.ceil(lawValueCount(group.law) / 4) * 4;
     group.value = values ? k => values.law(group.first, k) : k => `TP.law[${(group.base + k) >> 2}].${AX[(group.base + k) & 3]}`;
   });
-  // A law whose push falls slower than 1/r^2 gets second-order expansions in 2D, where its far
-  // field is the sum of many levels' small errors (a/r was 1.3 to 2.5 times the CPU tree's error
-  // at first order, 0.6 to 1.1 at second). Not for tables: their slope is piecewise constant.
+  // A law whose push falls slower than 1/r^2 has a far field that is the sum of every level's
+  // small errors: a/r in 2D was 1.3 to 2.5 times the CPU tree's error. Its channels get
+  // second-order expansions (not for tables: their slope is piecewise constant), and in 2D wider
+  // near cells (`sep` below): a/r is then 0.14 to 0.26 times, and in 3D (second order only) laws
+  // down to a constant push 0.32 to 0.62 times.
   groups.forEach(group => {
     group.second = secondOrder !== undefined ? !!secondOrder && !(group.tables || []).length :
-      D === 2 && !!group.law && !(group.tables || []).length && slowLaw(group.law, D);
+      !!group.law && !(group.tables || []).length && slowLaw(group.law, D);
   });
   const own = channels.map((channel, c) => {
     const group = groups.findIndex(g => g.channels.indexOf(c) >= 0);
@@ -92,9 +94,12 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
 
   const G = grid || chooseGrid(n, D);
   if (G ** D > (1 << 20)) return refuse(`the grid pyramid takes up to 2^20 cells; ${G}^${D} is more`);
-  // Heavy finest cells (hubs amid their leaves, see TREE_HEAVY): 3D needs them, 2D measured within
-  // the accuracy gate without
-  const heavy = heavyCells === undefined ? D === 3 : heavyCells;
+  // Wider near cells for a law that falls slower than 1/r^2, in 2D (see wgsl.js; in 3D they would
+  // cost 4.6 times the interaction lists). Heavy finest cells (hubs amid their leaves, see
+  // TREE_HEAVY): 3D needs them, 2D measured within the accuracy gate without; with wider near
+  // cells their ring is in the near cells already.
+  const sep = separation !== undefined ? separation : (D === 2 && groups.some(group => group.second) ? 2 : 1);
+  const heavy = (heavyCells === undefined ? D === 3 : heavyCells) && sep === 1;
   const { sizes, buffers } = layoutSizes(D, n, G, L, channels.length, heavy);
   const nCells = sizes.nCells, levels = sizes.levels;
 
@@ -109,6 +114,7 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
 
   const spec = {
     D, L, groups, lawWords: values ? 0 : lawWords, values, warn, heads: heads === undefined ? nCells > n : heads, heavyCells: heavy,
+    sep,
     channels: own, pos, charges: channels.map(channel => channel.charge),
   };
   const out = pyramidKernels(spec);

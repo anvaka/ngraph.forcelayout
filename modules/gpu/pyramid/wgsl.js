@@ -672,6 +672,10 @@ fn main(${LINEAR}) {
 }`;
 
   const lawCode = lawFunctions(spec) + tableWordFn(L);
+  // The near cells reach SEP cells around a body's cell (1: 3^D cells; 2 for laws that fall
+  // slower than 1/r^2 in 2D, whose far field is mostly monopoles at every level: a source cell
+  // then sits at least 3 cells away, not 2), and the interaction lists start past them.
+  const SEP = spec.sep || 1, SIDE = 2 * SEP + 1, NEAR = SIDE ** D;
   const lawGroups = spec.groups;
   // The centres channels act from: channel 0's (shared) and each own one
   const centres = [{ word: L.C[0], channels: [] }];
@@ -745,12 +749,12 @@ fn main(${LINEAR}) {
   const interactionList = (body, indent) => `
 ${indent}let poff = off + ${each(D, () => 'Gl', ' * ')};
 ${indent}let Gp = Gi / 2;
-${indent}${each(D, k => `let lo${k} = max((xl${k} >> 1u) - 1, 0); let hi${k} = min((xl${k} >> 1u) + 1, Gp - 1);`)}
+${indent}${each(D, k => `let lo${k} = max((xl${k} >> 1u) - ${SEP}, 0); let hi${k} = min((xl${k} >> 1u) + ${SEP}, Gp - 1);`)}
 ${boxLoops(D, `
 if (${countAt('poff + mm0')} == 0u) { continue; }
 for (var ch = 0u; ch < ${1 << D}u; ch++) {
   ${each(D, k => `let y${k} = 2 * x${k} + i32((ch >> ${k}u) & 1u);`)}
-  if (${each(D, k => `abs(y${k} - xl${k}) <= 1`, ' && ')}) { continue; }
+  if (${each(D, k => `abs(y${k} - xl${k}) <= ${SEP}`, ' && ')}) { continue; }
   let src = off + ((mm0 << ${D}u) | ch);
   ${loadVec4s('a', 'treeCells', `${L.TAB4}u + src * ${L.CS4}u`, L.CS4)}
   ${body}
@@ -793,10 +797,10 @@ var<workgroup> crowdPart: array<f32, ${WG * D}>;
 var<workgroup> crowdHead: vec4u;
 var<workgroup> crowdRange: vec4u;
 fn tree_count(b: u32) -> u32 { return select(TP.n, treeMeta[b + 1u], b + 1u < TP.nCells) - treeMeta[b]; }
-// cell b's neighbour at offset nu (base 3 digits, minus 1 per axis), or nCells off the grid
+// cell b's near cell number nu (base SIDE digits, minus SEP per axis), or nCells off the grid
 fn tree_near(b: u32, nu: u32) -> u32 {
   let Gi = i32(TP.G);
-  ${each(D, k => `let x${k} = i32(tree_compact(b >> ${k}u)) + i32((nu / ${3 ** k}u) % 3u) - 1;`)}
+  ${each(D, k => `let x${k} = i32(tree_compact(b >> ${k}u)) + i32((nu / ${SIDE ** k}u) % ${SIDE}u) - ${SEP};`)}
   if (${each(D, k => `x${k} < 0 || x${k} >= Gi`, ' || ')}) { return TP.nCells; }
   return ${each(D, k => `(tree_spread(u32(x${k})) << ${k}u)`, ' | ')};
 }
@@ -811,7 +815,7 @@ fn tree_crowd(w: u32, li: u32) {
       let nb = tree_count(b);
       biggest = max(biggest, nb);
       var targets = 0u;
-      for (var nu = 0u; nu < ${3 ** D}u; nu++) {
+      for (var nu = 0u; nu < ${NEAR}u; nu++) {
         let a = tree_near(b, nu);
         if (a < TP.nCells) { targets += tree_count(a); }
       }
@@ -830,7 +834,7 @@ fn tree_crowd(w: u32, li: u32) {
   // neighbour order: its bodies then take every crowded neighbour's push in that order, so the
   // sums do not depend on the order AGG0 listed the cells in.
   for (var l = 0u; l < head.x; l++) {
-    for (var nu = 0u; nu < ${3 ** D}u; nu++) {
+    for (var nu = 0u; nu < ${NEAR}u; nu++) {
       workgroupBarrier();
       if (li == 0u) {
         let b = atomicLoad(&treeLists[TP.crowdList + l]);
@@ -838,7 +842,7 @@ fn tree_crowd(w: u32, li: u32) {
         crowdRange = vec4u(0u);
         if (a < TP.nCells) {
           var first = TP.nCells;
-          for (var m = 0u; m < ${3 ** D}u; m++) {
+          for (var m = 0u; m < ${NEAR}u; m++) {
             let x = tree_near(a, m);
             if (x < TP.nCells && tree_count(x) > TP.nearCap) { first = x; break; }
           }
@@ -853,7 +857,7 @@ fn tree_crowd(w: u32, li: u32) {
         ${loadVec4s('me', 'treeSp', `t * ${L.SP4}u`, L.SP4)}
         ${each(D, k => `let p${k} = ${word('me', k)};`)}
         ${each(K, c => each(D, k => `var cr${c}_${k} = 0.0;`))}
-        for (var m = 0u; m < ${3 ** D}u; m++) {
+        for (var m = 0u; m < ${NEAR}u; m++) {
           let x = tree_near(tr.x, m);
           if (x >= TP.nCells) { continue; }
           let xs = treeMeta[x];
@@ -1069,7 +1073,7 @@ ${sourceCell(k => `ce${k}`, true)}
   // near field: exact pairs in my 3^D cells; a crowded cell's pushes come summed by TREE_LOCAL
   var crowded = false;
   {
-    ${each(D, k => `let lo${k} = max(cx${k} - 1, 0); let hi${k} = min(cx${k} + 1, Gi - 1);`, ' ')}
+    ${each(D, k => `let lo${k} = max(cx${k} - ${SEP}, 0); let hi${k} = min(cx${k} + ${SEP}, Gi - 1);`, ' ')}
 ${boxLoops(D, `
 let s0 = treeMeta[mm0];
 let e0 = select(TP.n, treeMeta[mm0 + 1u], mm0 + 1u < TP.nCells);

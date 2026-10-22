@@ -127,13 +127,16 @@ test('walk groups: the library\'s walks, else tree stages next to each other', (
     [['repulsion', 'own', 'mass', 'mass', true], ['core', 'own', 'mass', 'mass', true], ['leaves', 'shared', 'leafq', 'core', false]]);
 });
 
-test('laws that fall slower than 1/r^2 get second-order expansions in 2D', () => {
+test('laws that fall slower than 1/r^2 get second-order expansions, and wider near cells in 2D', () => {
   const law = spec => { const compiled = createRepulsionLaw(spec); compiled.update({ settings: { dimensions: 2 } }); return compiled; };
   const one = (D, compiled) => plan(D, 5000, [{ stage: 'repulsion', law: compiled, centroid: 'own', charge: column('H', 0) }]);
   const slow = { force: 'a / r', params: { a: 10 } };
   assert.equal(one(2, law(slow)).groups[0].second, true);
   assert.equal(one(2, law(slow)).layout.LSW, 2 + 2 + 3 + 4, 'centre, field, Jacobian, 4 second derivatives');
-  assert.equal(one(3, law(slow)).groups[0].second, false, '3D passes at first order');
+  assert.equal(one(3, law(slow)).groups[0].second, true);
+  assert.match(one(2, law(slow)).section.declarations, /max\(cx0 - 2, 0\)/, '5 x 5 near cells in 2D');
+  assert.match(one(3, law(slow)).section.declarations, /max\(cx0 - 1, 0\)/, '3 x 3 x 3 near cells in 3D');
+  assert.ok(!one(2, law(slow)).kernels.TREE_HEAVY && one(3, law(slow)).kernels.TREE_HEAVY);
   assert.equal(one(2, law({ force: 'exp(-r / L) / r^2', params: { L: 30 } })).groups[0].second, false);
   assert.equal(one(2, null).groups[0].second, false);
   assert.match(one(2, law(slow)).kernels.TREE_LOCAL, /fn tree_k123_0/);
