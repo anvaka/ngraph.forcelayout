@@ -327,9 +327,11 @@ test('setters fire settings; columns keep versions', function (t) {
   sim.step();
   t.equal(topology, 1, 'and the step does not fire it again');
   var columnsVersion = store.columnsVersion;
+  heavy = versions.heavy;
   store.remove('heavy');
-  t.notOk('heavy' in versions);
+  t.ok(versions.heavy > heavy, 'removing a column changes it');
   t.ok(store.columnsVersion > columnsVersion);
+  t.notOk('toString' in versions, 'versions has columns only');
   t.end();
 });
 
