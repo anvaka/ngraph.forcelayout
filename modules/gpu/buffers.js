@@ -5,8 +5,8 @@
 // so bodies close in space are close in memory; readbacks undo that on the GPU, so positions
 // always come back in the store's order.
 
-// Graphs at least this large are renumbered along a Hilbert curve (stock template)
-const HILBERT_MIN_NODES = 4096;
+// Graphs at least this large are renumbered along a Hilbert curve (2D) or in Morton order (3D)
+export const HILBERT_MIN_NODES = 4096;
 // Movement is measured on about this many bodies of a large graph, in runs of MOVEMENT_RUN rows
 // spread over it: one row in every k would cost a cache miss per row (twice as much on readback
 // memory that was just mapped)
@@ -79,31 +79,72 @@ export function writePositionsBack(simulator, bodies, data, D, origin, steps) {
 }
 
 /**
- * The same for positions in another order: row i's are at toInternal[i] of `data`. `mirror`, when
- * given, gets the f32 numbers in the store's order in the same pass (reading the readback in
- * this order costs a cache miss per row: twice would cost twice).
+ * The same for positions in another order: row i's are at toInternal[i] of `data` (D numbers a
+ * row). `mirror`, when given, gets the f32 numbers in the store's order in the same pass (reading
+ * the readback in this order costs a cache miss per row: twice would cost twice).
  */
-export function writePermutedBack(simulator, bodies, data, toInternal, origin, steps, mirror) {
+export function writePermutedBack(simulator, bodies, data, toInternal, origin, steps, mirror, D = 2) {
   const store = simulator.store, n = bodies.length;
   if (!n) return 0;
   const moved = rowsMoved(simulator, bodies);
-  const pos = store.pos, ox = origin[0], oy = origin[1];
-  let tx = 0, ty = 0;
+  const pos = store.pos;
+  const sums = new Float64Array(D);
   for (let i = 0; i < n; i++) {
-    const k = 2 * toInternal[i];
-    const fx = data[k], fy = data[k + 1];
-    const x = ox + fx, y = oy + fy;
+    const from = D * toInternal[i];
     if (moved) {
       const body = bodies[i];
-      if (body.store === store) { pos[2 * body.index] = x; pos[2 * body.index + 1] = y; }
+      if (body.store === store) for (let k = 0; k < D; k++) pos[D * body.index + k] = origin[k] + data[from + k];
       continue;
     }
-    tx += Math.abs(x - pos[2 * i]); ty += Math.abs(y - pos[2 * i + 1]);
-    pos[2 * i] = x; pos[2 * i + 1] = y;
-    if (mirror) { mirror[2 * i] = fx; mirror[2 * i + 1] = fy; }
+    for (let k = 0; k < D; k++) {
+      const f = data[from + k], x = origin[k] + f;
+      sums[k] += Math.abs(x - pos[D * i + k]);
+      pos[D * i + k] = x;
+      if (mirror) mirror[D * i + k] = f;
+    }
   }
-  tx /= steps; ty /= steps;
-  return moved ? null : (tx * tx + ty * ty) / n;
+  let total = 0;
+  for (let k = 0; k < D; k++) { const t = sums[k] / steps; total += t * t; }
+  return moved ? null : total / n;
+}
+
+/**
+ * The device's order of the rows of a large layout (`toDevice[row]`), or null to keep the store's:
+ * along a Hilbert curve in 2D, in Morton order in 3D, through a robust box of the positions, so
+ * bodies close in space are close in memory. At 1M bodies in 2D the generic step took 1.45 times
+ * today's template in the store's (random) order and 0.96 times in this one.
+ */
+export function bodyOrder(pos, n, D) {
+  if (n < HILBERT_MIN_NODES || n >= 16777216 || (D !== 2 && D !== 3)) return null;
+  if (D === 2) {
+    const xs = new Float64Array(n), ys = new Float64Array(n);
+    for (let i = 0; i < n; i++) { xs[i] = pos[2 * i]; ys[i] = pos[2 * i + 1]; }
+    return hilbertOrder(xs, ys, robustCenter(xs, ys));
+  }
+  // 3D: 9 bits an axis, so a key and a row (< 2^24) fit a double exactly
+  const box = [];
+  const stride = Math.max(1, Math.floor(n / 4096));
+  for (let k = 0; k < 3; k++) {
+    const sample = [];
+    for (let i = 0; i < n; i += stride) sample.push(pos[3 * i + k]);
+    sample.sort((a, b) => a - b);
+    const q = t => sample[Math.min(sample.length - 1, Math.max(0, Math.round(t * (sample.length - 1))))];
+    box.push([q(0.001), q(0.999)]);
+  }
+  const side = Math.max(...box.map(([lo, hi]) => hi - lo)) || 1, N = 512;
+  const keys = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    let code = 0;
+    for (let k = 0; k < 3; k++) {
+      const c = Math.min(N - 1, Math.max(0, Math.floor((pos[3 * i + k] - box[k][0]) / side * N)));
+      for (let b = 0; b < 9; b++) if (c & (1 << b)) code += 2 ** (3 * b + k);
+    }
+    keys[i] = code * 16777216 + i;
+  }
+  keys.sort();
+  const out = new Uint32Array(n);
+  for (let k = 0; k < n; k++) out[keys[k] % 16777216] = k;
+  return out;
 }
 
 /**

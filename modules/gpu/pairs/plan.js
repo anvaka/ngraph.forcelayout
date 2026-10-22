@@ -41,7 +41,7 @@ export function pairOutputs(stage, D, columns) {
  * `sumBuffer` (the buffer they live in); `slot`: {decl(binding), at(index)}; `origin(k)`: slot
  * index of the origin's k-th number; `cap`: pair tests per step (PAIR_WORK_CAP).
  */
-export function planPairs({ D, n, limits, stages, columns, sums = {}, sumBuffer = 'S', slot, pos, origin, cap = PAIR_WORK_CAP, warn }) {
+export function planPairs({ D, n, limits, stages, columns, sums = {}, sumBuffer = 'S', slot, pos, origin, row = null, cap = PAIR_WORK_CAP, warn }) {
   const refuse = reason => ({ refusal: reason, kernels: {}, bindings: {}, buffers: {}, sorts: [], stages: [] });
   if (D >= 5) {
     if (n <= MAX_PAIRS) return refuse(`the cell sort runs in 2 to 4 dimensions; ${D}D pair formulas run in the all-pairs loop`);
@@ -110,7 +110,7 @@ export function planPairs({ D, n, limits, stages, columns, sums = {}, sumBuffer 
   };
   for (const sort of sorts) {
     const names = sort.stages.map(entry => entry.stage.name);
-    const out = sortKernels({ D, layout: sort.layout, snapshot: sort.snapshot, pos, slot, radius: sort.radius, maxGroups });
+    const out = sortKernels({ D, layout: sort.layout, snapshot: sort.snapshot, pos, row, slot, radius: sort.radius, maxGroups });
     sort.kernels = {};
     sort.columns = out.ORDER.columns;
     Object.keys(out).forEach(part => {

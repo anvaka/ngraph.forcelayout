@@ -53,6 +53,7 @@ import { physicsStages } from '../program.js';
 import { planPyramid } from '../pyramid/plan.js';
 import { planPairs, pairOutputs } from '../pairs/plan.js';
 import { planGrid, gridNumbers } from '../grid/plan.js';
+import { HILBERT_MIN_NODES } from '../buffers.js';
 
 export const THREADS = 256;
 // Up to this many bodies the whole step is one kernel and repulsion is exact over all pairs
@@ -226,6 +227,16 @@ export function genericPlan(program, laws, options = {}) {
     const inS = name === 'velocity' || name === 'force' || writtenByStages.has(name);
     place(name, inS ? 'S' : 'H', width);
   });
+
+  // Large layouts keep their rows on the device in a spatial order (buffers.js bodyOrder), and the
+  // engine permutes on the way up and back. Pair formulas still take their roles from the store's
+  // rows (design 5.3): their sorts read them from a column of their own.
+  const permuted = options.renumber !== false && n >= HILBERT_MIN_NODES && n < 16777216 && (D === 2 || D === 3);
+  let rowColumn = null;
+  if (permuted && pairSections.some(s => s.sort)) {
+    rowColumn = { buffer: 'H', offset: hSize };
+    hSize += cap;
+  }
 
   // --- link columns: the host's in CSR order in H, the stages' in link order in S --------------
   const usedLinks = new Set(), linkWritten = new Set();
@@ -519,6 +530,7 @@ export function genericPlan(program, laws, options = {}) {
       slot: { decl: binding => `@group(0) @binding(${binding}) var<uniform> V: array<vec4f, ${done.floats / 4}>;`, at: slotValue },
       pos: { buffer: 'X', at: (row, k) => `X[${row} * ${D}u + ${k}u]` },
       origin: k => slot.add('setting', 'origin_' + k),
+      row: rowColumn ? { buffer: 'H', at: row => `u32(H[${rowColumn.offset}u + ${row}])` } : null,
     });
     if (pairs.refusal) return { refusal: pairs.refusal };
     Object.keys(pairs.kernelStages).forEach(name => { kernelStages[name] = pairs.kernelStages[name]; });
@@ -581,6 +593,8 @@ export function genericPlan(program, laws, options = {}) {
   return {
     template: 'generic',
     regime: pyramidWalk ? 'pyramid' : 'pairs',
+    permuted,
+    rowColumn,
     pyramid,
     D,
     nodes: n,

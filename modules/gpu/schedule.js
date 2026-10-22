@@ -31,7 +31,7 @@ export function schedule(program, laws, limits, options = {}) {
   if (!options.generic && nodes > (options.smallGraph || SMALL_GRAPH) && isStockStep(program, laws, data)) {
     return Object.assign(stockPlan(program, laws.repulsion || null), { dataKey: JSON.stringify(data) });
   }
-  const plan = genericPlan(program, laws, { limits, warn: options.warn, smallGraph: options.smallGraph, data });
+  const plan = genericPlan(program, laws, { limits, warn: options.warn, smallGraph: options.smallGraph, renumber: options.renumber, data });
   if (plan.refusal) return plan;
   const grids = plan.kernelList.filter(kernel => kernel.kind === 'grid');
   plan.buffers = Object.assign({
