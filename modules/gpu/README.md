@@ -5,7 +5,8 @@ layout's own simulator, and positions come back into the layout after every batc
 Today it runs, in any number of dimensions, the built in step (springs, repulsion with any law,
 drag, Euler or FIRE, any inertia column), extra repulsion passes with their own charge and
 sensitivity columns, node formulas, link formulas (that pull, add into body columns, or set their
-link's own columns, length and stiffness too), links with their own lengths and stiffness, and
+link's own columns, length and stiffness too), links with their own lengths and stiffness, pair
+formulas (every pair up to 1,024 bodies, a cell sort with a bounded work list above), and
 sums over bodies, for all of them or per group of a column the host sets, lookup tables in
 formulas and laws, and host steps (the batch stops at the steps where one runs, the host step
 runs on the host with the device's numbers in the store, then the step goes on), all in the CPU's
@@ -79,6 +80,7 @@ compiles that description; it never reads the library's internals.
 | `generic/links.js`, `generic/common.js` | Links: both ends of every link evaluate it with its true roles (in place, or by chunks of 8 links for hubs above 1,024 bodies), a thread per link for formulas that only write link columns; sums per group (runs of a group's rows, then each group's runs); what names mean in formulas, where columns live. |
 | `generic/values.js` | The per-step slot: settings, every stage's parameters, built in values, gate bits and law numbers, from `simulator.stageValues()` for each queued step. |
 | `generic/engine.js` | A generic plan on a device: buffers from the store, the ring of slots, encoding, readbacks of positions, columns, sums and FIRE's state. |
+| `pairs/` | Pair formulas above N* (2D to 4D): a cell sort per radius, a work list of chunks of 256 pair tests with a cap on a step's work (its status halts the runner), chunks and a gather per stage; the printer of a pair formula with the CPU's roles, which the all-pairs loop below N* uses too. |
 | `pyramid/` | The generic grid pyramid (2D and 3D, K charges, any law): its plan and buffers without a device (`plan.js`), the structure kernels and the section a node kernel fuses (`wgsl.js`), the buffers and dispatches on a device (`build.js`). A generic plan uses it above 1,024 bodies in 2D and 2,560 in 3D. |
 | `templates/grid.js`, `templates/stock.js` | Today's grid engine as the stock template, WGSL byte for byte (test/t4.js), and the engine around it: settings and law numbers into its uniforms, uploads, readbacks in the store's order. |
 | `buffers.js`, `rows.js` | Store to device and back: the f64 origin, Hilbert renumbering, readback into the store as f64; rows the host wrote between syncs, found and uploaded row by row (one scatter dispatch for many), kept from readbacks encoded before the upload. |
