@@ -174,7 +174,11 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   let parity = 0;   // positions of the next step are read from positions[parity]
   // What the module last put on the device or into the store, to find rows the host wrote
   const host = trackHostPositions(store, n, D, origin, startPositions);
-  let deviceVelocities = Float64Array.from(store.velocity.subarray(0, n * D));
+  // Columns stages write (velocity, and the formulas' own) live in S, and between syncs the device
+  // is ahead of the store: what the host writes into them then goes up row by row, found against
+  // the numbers the store last gave the device or had from it, so other rows keep the device's
+  const deviceColumns = Object.values(plan.columns).filter(column => column.buffer === 'S' && column.name !== 'force' && store[column.name]);
+  let hostCopies = copiesOf();
   let uploaded = versions();
   const bodies = simulator.bodies.slice();
   const kernels = dispatched.map(kernel => (kernel.kind === 'grid'
@@ -235,16 +239,18 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
         const relativePositions = relative(store.pos, n, D, origin);
         host.reset(relativePositions);
         device.queue.writeBuffer(positions[parity], 0, relativePositions);
-        uploadColumn('velocity');
-        uploadColumns(name => name !== 'velocity' && plan.columns[name].buffer !== 'X');
-        deviceVelocities = Float64Array.from(store.velocity.subarray(0, n * D));
+        uploadColumns(name => plan.columns[name].buffer !== 'X');
+        hostCopies = copiesOf();
       } else {
         if (now.pos !== uploaded.pos) {
           const rows = host.written();
           writeRows(positions[parity], 0, D, rows, host.uploaded(rows, steps));
         }
-        if (now.velocity !== uploaded.velocity) uploadVelocityRows(velocityRows());
-        uploadColumns(name => name !== 'velocity' && plan.columns[name].buffer !== 'X' && now.columns[name] !== uploaded.columns[name]);
+        if (now.velocity !== uploaded.velocity) uploadRows(plan.columns.velocity, changedRows(plan.columns.velocity));
+        deviceColumns.forEach(column => {
+          if (column.name !== 'velocity' && now.columns[column.name] !== uploaded.columns[column.name]) uploadRows(column, changedRows(column));
+        });
+        uploadColumns(name => plan.columns[name].buffer === 'H' && now.columns[name] !== uploaded.columns[name]);
       }
       Object.keys(plan.linkColumns).forEach(name => { if (hostOwns || now.links[name] !== uploaded.links[name]) uploadLinkColumn(name); });
       uploaded = now;
@@ -388,8 +394,14 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
         status,
         fireState: Array.from(s.subarray(plan.S.fire, plan.S.fire + 4)),
         apply() {
-          const keep = store.versions.velocity !== uploaded.velocity ? velocityRows() : [];
-          const saved = keep.map(i => Array.from(store.velocity.subarray(i * D, i * D + D)));
+          // rows the host wrote since the last upload keep its numbers (the next step uploads them)
+          const kept = deviceColumns.map(column => {
+            const version = column.name === 'velocity' ? store.versions.velocity : store.versions[column.name];
+            const was = column.name === 'velocity' ? uploaded.velocity : uploaded.columns[column.name];
+            const rows = version !== was ? changedRows(column) : [];
+            const w = column.width;
+            return { column, rows, values: rows.map(i => Array.from(store[column.name].subarray(i * w, i * w + w))) };
+          });
           stageColumns.forEach(column => {
             if (column.name === 'force') return;
             const target = store[column.name];
@@ -397,8 +409,11 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
             const count = n * column.width;
             for (let k = 0; k < count; k++) target[k] = s[column.offset + k];
           });
-          keep.forEach((i, j) => { for (let k = 0; k < D; k++) store.velocity[i * D + k] = saved[j][k]; });
-          deviceVelocities = Float64Array.from(store.velocity.subarray(0, n * D));
+          hostCopies = copiesOf();
+          kept.forEach(({ column, rows, values }) => {
+            const w = column.width, target = store[column.name];
+            rows.forEach((i, j) => { for (let k = 0; k < w; k++) target[i * w + k] = values[j][k]; });
+          });
           // link columns stages write (their versions do not move: these are the device's numbers)
           Object.values(plan.linkColumns).forEach(column => {
             const target = springs[column.name];
@@ -478,18 +493,28 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     Object.keys(plan.columns).forEach(name => { if (which(name)) uploadColumn(name); });
   }
 
-  function velocityRows() {
-    const v = store.velocity, rows = [];
-    for (let i = 0; i < n * D; i++) if (v[i] !== deviceVelocities[i] && rows[rows.length - 1] !== Math.floor(i / D)) rows.push(Math.floor(i / D));
+  function copiesOf() {
+    const out = Object.create(null);
+    deviceColumns.forEach(column => { out[column.name] = Float64Array.from(store[column.name].subarray(0, n * column.width)); });
+    return out;
+  }
+
+  // rows of a column the host wrote: where the store differs from its copy
+  function changedRows(column) {
+    const now = store[column.name], was = hostCopies[column.name], w = column.width, rows = [];
+    for (let i = 0; i < n * w; i++) {
+      const row = Math.floor(i / w);
+      if (!Object.is(now[i], was[i]) && rows[rows.length - 1] !== row) rows.push(row);
+    }
     return rows;
   }
 
-  function uploadVelocityRows(rows) {
-    const values = new Float32Array(rows.length * D), v = store.velocity;
+  function uploadRows(column, rows) {
+    const w = column.width, values = new Float32Array(rows.length * w), now = store[column.name], was = hostCopies[column.name];
     rows.forEach((i, r) => {
-      for (let k = 0; k < D; k++) values[r * D + k] = deviceVelocities[i * D + k] = v[i * D + k];
+      for (let k = 0; k < w; k++) values[r * w + k] = was[i * w + k] = now[i * w + k];
     });
-    writeRows(S, plan.columns.velocity.offset, D, rows, values);
+    writeRows(S, column.offset, w, rows, values);
   }
 }
 
