@@ -7,7 +7,7 @@
 import { getPipeline } from '../device.js';
 import { kernelCode, bindingsOf } from './emit.js';
 import { THREADS, GROUP_RUN, LINK_CHUNK } from './plan.js';
-import { buildPyramid, pyramidStatus, WORK_CAP } from '../pyramid/build.js';
+import { buildPyramid, WORK_CAP } from '../pyramid/build.js';
 import { buildPairs } from '../pairs/build.js';
 import { buildGrid } from '../grid/build.js';
 import { gridStatus, gridCappedMs } from '../grid/plan.js';
@@ -190,7 +190,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     });
   }
   if (tree && tree.status) {
-    statuses.push(Object.assign({ message: pyramidStatus, stages: plan.pyramid.channels.map(c => c.stage) }, tree.status));
+    statuses.push(Object.assign({ message: tree.statusMessage, stages: plan.pyramid.channels.map(c => c.stage) }, tree.status));
   }
   // Grid fields: positions (by parity), their columns in S and H, their numbers in the slot
   const grids = new Map();
