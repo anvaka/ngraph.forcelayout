@@ -17,7 +17,7 @@
 // The runner drives an engine (the stock grid template, templates/stock.js, or a generic plan,
 // generic/engine.js) through one interface: prepare(hostOwns, steps) uploads, run(count,
 // firstStep, …) encodes steps, copyPositions()/readPositions() read back, readDevice() syncs.
-import { watchDevice, submitCost } from './device.js';
+import { watchDevice, submitCost, deviceSlowdown } from './device.js';
 import { GUARD } from './program.js';
 import { DEVICE_LOST } from './check.js';
 import { createStockEngine } from './templates/stock.js';
@@ -27,15 +27,23 @@ const READBACK_BUFFERS = 3;
 const STATS_WINDOW = 30;
 // Steps per submit before a step has been timed (today's module always used 64)
 const DEFAULT_BATCH = 64;
+// The same with pair formulas above N*, whose steps can each come near the work cap
+const FIRST_PAIR_BATCH = 8;
 const MAX_BATCH = 1024;
 // A submit holds at most this much GPU work, far below the 2-second watchdog
 const MAX_SUBMIT_MS = 100;
+// ... and, should every step reach its structures' work caps, at most this much (engine.cappedMs)
+const CAPPED_SUBMIT_MS = 1000;
 // A readback followed this soon by a newer one (calls in one burst, as a frame that steps several
 // times) is not written into the store: the newer one is a batch away and replaces it. Writing a
 // large graph's positions costs milliseconds of the main thread.
 const BURST_MS = 4;
 // Settings that change the physics: a 'step' listener must not change them
-const PHYSICS_SETTINGS = ['gravity', 'springLength', 'springCoefficient', 'dragCoefficient', 'timeStep', 'maxVelocity', 'integrator', 'theta'];
+const PHYSICS_SETTINGS = ['gravity', 'springLength', 'springCoefficient', 'dragCoefficient', 'timeStep', 'maxVelocity', 'integrator', 'theta', 'nbody', 'adaptiveTimeStepWeight'];
+// Settings that shape the plan. Written straight into simulator.settings rather than through a
+// setter, they fire no 'settings' event and leave programVersion() as it is, yet the CPU follows
+// them: the runner compares them on every call (numbers the engines read on every call anyway)
+const PLAN_SETTINGS = ['integrator', 'nbody', 'inertia', 'repulsionCharge', 'repulsionSensitivity'];
 const LINK_COLUMNS = ['from', 'to', 'length', 'coefficient'];
 
 /**
@@ -83,12 +91,16 @@ function createRunner(layout, backend) {
   let pending = 0;         // steps asked for while the runner was busy
   let busy = null;         // a build or a sync point in progress
   let halted = null, stopped = false, released = false;
+  // after a structure's status (a work cap passed): the device's numbers hold steps computed
+  // without that work, and the store keeps the last readback from before
+  let untrusted = false;
   let hostOwns = false;    // after sync(): the store is the truth until the next step()
   let topologyChanged = false, settingsChanged = false;
   let structure = null;    // the stages the plan was made from, to notice changes cheaply
   let linkVersions = null; // link columns as built
   let fireState = null;    // FIRE's (alpha, steps downhill, ...) from the last sync
   let submitMs = 0;
+  let slowdown = 1;        // how much slower than the Mac the work caps were sized on (device.js)
   let marks = null;        // what a 'step' listener must not change
 
   // Readbacks: positions after a batch, and (with timestamp queries) its GPU time
@@ -109,6 +121,8 @@ function createRunner(layout, backend) {
   };
   const onDeviceError = error => {
     if (released) return;
+    // a submit that failed did not run: later readbacks would bring stale numbers
+    untrusted = true;
     if (error.lost) halt({ lost: true, message: error.message, kernel: null, stages: [] });
     else halt(attribute(error.message));
   };
@@ -130,7 +144,7 @@ function createRunner(layout, backend) {
     get lastMove() { return lastMove; },
     get halted() { return halted; },
     // For the test harness: the buffers the last kernel of every step writes
-    _debug: { get fence() { return engine ? engine.fence : []; } },
+    _debug: { get fence() { return engine ? engine.fence : []; }, get engine() { return engine; } },
   };
 
   return { start, api };
@@ -151,6 +165,7 @@ function createRunner(layout, backend) {
     }
     try {
       submitMs = await submitCost(device);
+      slowdown = backend.slowdown || await deviceSlowdown(device);
       await build();
     } catch (e) {
       release();
@@ -174,7 +189,7 @@ function createRunner(layout, backend) {
     linkVersions = LINK_COLUMNS.map(name => springStore.versions[name]);
     marks = markList(plan);
     const create = plan.template === 'grid' ? createStockEngine : createGenericEngine;
-    const next = store.n > 0 ? await create(device, { simulator, plan, fireState, warn: warnOnce }) : null;
+    const next = store.n > 0 ? await create(device, { simulator, plan, fireState, warn: warnOnce, slowdown, pairEstimate: backend.pairEstimate }) : null;
     if (released) { if (next) next.destroy(); return; }
     engine = next;
     hostOwns = false;
@@ -239,12 +254,12 @@ function createRunner(layout, backend) {
     const hostSteps = (lowering.plan && lowering.plan.hostSteps) || [];
     for (let s = 0; hostSteps.length && s < count; s++) {
       const at = firstStep + queued + s;
-      const holding = hostSteps.filter(name => simulator.stageValues(name, simulator.stepContext(at)).when);
-      if (!holding.length) continue;
+      // a step where no host step holds at its start runs no host step: none runs to change that
+      if (!hostSteps.some(name => simulator.stageValues(name, simulator.stepContext(at)).when)) continue;
       if (s > 0) runSteps(s);
       if (halted) return;
       pending += count - s - 1;
-      busy = hostStep(firstStep + queued, holding).then(() => {
+      busy = hostStep(firstStep + queued).then(() => {
         busy = null;
         if (pending && !halted && !stopped) {
           const rest = pending;
@@ -260,15 +275,16 @@ function createRunner(layout, backend) {
     runSteps(count);
   }
 
-  // One step at a host step: its kernels up to each host step that holds, the device's numbers
-  // back into the store, the host step on the host, what it wrote back up, then the rest of the
-  // step (whose numbers are read after the host step ran)
-  async function hostStep(at, holding) {
+  // One step at a host step: its kernels up to each host step, whose `when` is asked at its turn
+  // (after the host steps before it ran, as on the CPU); where it holds, the device's numbers back
+  // into the store, the host step on the host, what it wrote back up, then the rest of the step
+  // (whose numbers are read after the host step ran)
+  async function hostStep(at) {
     const names = lowering.plan.hostSteps;
     const from = engine;
     for (let part = 0; part < engine.segments; part++) {
       engine.run(1, at, { segment: part });
-      if (part === names.length || holding.indexOf(names[part]) < 0) continue;
+      if (part === names.length || !simulator.stageValues(names[part], simulator.stepContext(at)).when) continue;
       await readDevice();
       if (released || halted || from !== engine) return;
       simulator.iteration(at);
@@ -307,13 +323,16 @@ function createRunner(layout, backend) {
   }
 
   // Steps per submit: as many as fit in MAX_SUBMIT_MS of GPU time, and enough that the submit's
-  // own cost stays under 10% of the work
+  // own cost stays under 10% of the work. Steps timed fast can still reach their structures' work
+  // caps within a submit (a gate opens, a radius grows), so no more than fit CAPPED_SUBMIT_MS then.
   function stepsPerSubmit() {
     const ms = gpuMsPerStep();
-    if (!(ms > 0)) return DEFAULT_BATCH;
+    const capped = engine && engine.cappedMs ? Math.max(1, Math.floor(CAPPED_SUBMIT_MS / engine.cappedMs)) : MAX_BATCH;
+    // before a step is timed: pair formulas near their work cap could make 64 steps long
+    if (!(ms > 0)) return Math.min(capped, engine && engine.pairs ? FIRST_PAIR_BATCH : DEFAULT_BATCH);
     const most = Math.floor(MAX_SUBMIT_MS / ms);
     const least = Math.ceil(submitMs / (0.1 * ms));
-    return Math.max(1, Math.min(MAX_BATCH, Math.max(most, least)));
+    return Math.max(1, Math.min(MAX_BATCH, capped, Math.max(most, least)));
   }
 
   function readBack(rb, count, withTs) {
@@ -328,10 +347,12 @@ function createRunner(layout, backend) {
       const next = issuedAt.get(rb.serial + 1);
       const replaced = next !== undefined && next - issuedAt.get(rb.serial) < BURST_MS;
       issuedAt.delete(rb.serial);
-      if (rb.serial > appliedSerial && from === engine && !replaced) {
+      // the status first: with one, these positions hold steps computed without a structure's work
+      const status = from === engine && engine.statusBytes ? engine.statusMessage(new Uint32Array(rb.buffer.getMappedRange(timestampsAt(bytes) + 16, engine.statusBytes))) : null;
+      if (status) untrusted = true;
+      if (rb.serial > appliedSerial && from === engine && !replaced && !untrusted) {
         apply(rb.serial, rb.steps, new Float32Array(rb.buffer.getMappedRange(0, bytes)), rb.ordered);
       }
-      const status = from === engine && engine.statusBytes ? engine.statusMessage(new Uint32Array(rb.buffer.getMappedRange(timestampsAt(bytes) + 16, engine.statusBytes))) : null;
       if (withTs) {
         const t = new BigUint64Array(rb.buffer.getMappedRange(timestampsAt(bytes), 16));
         const ns = Number(t[1] - t[0]);
@@ -344,7 +365,7 @@ function createRunner(layout, backend) {
       rb.buffer.unmap();
       if (rb.engine === engine) free.push(rb); else rb.buffer.destroy();
       if (status) {
-        halt({ message: status.message, kernel: null, stages: status.stages || [] });
+        halt({ message: `${status.message} (by step ${firstStep + rb.steps})`, kernel: null, stages: status.stages || [], status: true });
         return;
       }
       afterReadback();
@@ -415,7 +436,7 @@ function createRunner(layout, backend) {
       step(count);
       while (busy) await busy;
     }
-    if (released || !engine || (halted && halted.lost)) { hostOwns = true; return; }
+    if (released || !engine || untrusted) { hostOwns = true; return; }
     await readDevice();
     hostOwns = true;
     afterReadback();
@@ -428,7 +449,12 @@ function createRunner(layout, backend) {
     issuedAt.set(serial, performance.now());
     const state = await engine.readDevice();
     issuedAt.delete(serial);
-    if (!state || released || from !== engine) return;
+    if (!state || released || from !== engine || untrusted) return;
+    if (state.status) {
+      untrusted = true;
+      halt({ message: `${state.status.message} (by step ${firstStep + steps})`, kernel: null, stages: state.status.stages || [], status: true });
+      return;
+    }
     if (serial > appliedSerial) apply(serial, steps, state.positions, true);
     state.apply();
     fireState = state.fireState;
@@ -438,7 +464,7 @@ function createRunner(layout, backend) {
   // again from the store
   function syncPoint() {
     busy = (async () => {
-      if (engine && !(halted && halted.lost)) await readDevice();
+      if (engine && !untrusted) await readDevice();
       dropEngine();
       await build();
     })().then(() => {
@@ -527,13 +553,20 @@ function createRunner(layout, backend) {
   // The step's structure, to notice a change cheaply on every call: the stages and their
   // functions (a stage added, removed or replaced), columns defined or removed, and, after a
   // 'settings' event, program().version (the law, the inertia, the integrator, charge columns,
-  // the adaptive time step)
+  // the adaptive time step); and settings written without a setter (planSettings())
   function stageSnapshot(version) {
     const names = simulator.stages();
-    return { names, runs: names.map(name => simulator.getStage(name)), columns: store.columnsVersion + springStore.columnsVersion, version };
+    return { names, runs: names.map(name => simulator.getStage(name)), columns: store.columnsVersion + springStore.columnsVersion, version, settings: planSettings() };
+  }
+
+  function planSettings() {
+    const settings = simulator.settings;
+    return PLAN_SETTINGS.map(key => settings[key]).concat(settings.adaptiveTimeStepWeight > 0);
   }
 
   function structureChanged() {
+    const settings = planSettings();
+    if (settings.some((value, i) => !Object.is(value, structure.settings[i]))) return true;
     if (simulator.programVersion) return simulator.programVersion() !== structure.version;
     const names = simulator.stages();
     if (names.length !== structure.names.length) return true;
@@ -564,13 +597,16 @@ function createRunner(layout, backend) {
   }
 
   function addSample(ms, steps) {
+    if (engine && engine.observeTiming) engine.observeTiming(ms / steps);
     samples.push({ ms, steps });
     if (samples.length > STATS_WINDOW) samples.shift();
   }
 
   /**
-   * {msPerStep, source, steps, engine, nodes, stepsPerSubmit, halted}: msPerStep is GPU time per
-   * step from timestamp queries when the device has them, else wall clock between readbacks.
+   * {msPerStep, source, steps, engine, nodes, stepsPerSubmit, slowdown, halted}: msPerStep is GPU
+   * time per step from timestamp queries when the device has them, else wall clock between
+   * readbacks; slowdown is how many times slower than the Mac the work caps were sized on the
+   * device measured.
    */
   function stats() {
     return {
@@ -580,6 +616,7 @@ function createRunner(layout, backend) {
       engine: engine ? engine.kind : 'none',
       nodes: engine ? engine.n : 0,
       stepsPerSubmit: stepsPerSubmit(),
+      slowdown,
       halted: halted ? halted.message : null,
     };
   }

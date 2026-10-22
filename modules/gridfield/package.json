@@ -1,0 +1,15 @@
+{
+  "name": "ngraph.forcelayout.gridfield",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A density of the bodies on a grid, sampled back at every body, for ngraph.forcelayout",
+  "type": "module",
+  "main": "index.js",
+  "exports": "./index.js",
+  "keywords": [
+    "ngraph",
+    "ngraphjs"
+  ],
+  "author": "Andrei Kashcha",
+  "license": "BSD-3-Clause"
+}

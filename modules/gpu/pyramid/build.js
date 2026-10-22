@@ -8,8 +8,8 @@
 //   // then the caller's node kernel, with tree.buffers bound as plan.section.bindings says
 import { getPipeline } from '../device.js';
 import { writeLawValues } from '../wgsl/print.js';
-import { boxLayout, WG, CROWD_GROUPS } from './wgsl.js';
-import { NEAR_CAP } from './plan.js';
+import { boxLayout, WG, CROWD_GROUPS, HUB_GROUPS, HIST_GROUPS } from './wgsl.js';
+import { NEAR_CAP, pyrLevels } from './plan.js';
 
 const PARAM_WORDS = 20;
 // Pair evaluations a step may spend on crowded cells (cells past the near cap) before the step
@@ -34,7 +34,7 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
   const jobs = Object.keys(kernels).map(name => {
     const options = { code: kernels[name], label: name };
     const stepBinding = step ? [step.dynamic ? 'dynamic' : 'uniform'] : [];
-    if (name === 'TREE_LOCAL' && step) options.bindings = ['uniform', 'storage', 'read', 'storage', 'read'].concat(stepBinding);
+    if (name === 'TREE_LOCAL' && step) options.bindings = ['uniform', 'storage', plan.hubs ? 'storage' : 'read', 'storage', 'read'].concat(stepBinding);
     if (name === 'TREE_HEAVY' && step) options.bindings = ['uniform', 'read', 'read', 'storage', 'read'].concat(stepBinding);
     return getPipeline(device, options).then(pipeline => [name, pipeline]);
   });
@@ -80,6 +80,7 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
   const localThreads = plan.heads ? sizes.n + sizes.localCells - sizes.nCells : sizes.localCells;
   const localGroups = Math.ceil(localThreads / WG);
   pu[12] = localGroups; pu[13] = sizes.crowdOff; pf[14] = workCap; pu[15] = sizes.crowdList; pu[16] = sizes.occList;
+  pu[17] = sizes.hubOff; pu[18] = sizes.hubList;
 
   const bind = (name, list, pipeline = pipes[name]) => device.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
@@ -100,17 +101,18 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     TREE_SCAN_ADD: bind('TREE_SCAN_ADD', [TP, treeMeta, treeBlocks]),
     TREE_PLACE: bind('TREE_PLACE', [TP, treeMeta, treeWork]),
     TREE_ORDER: both('TREE_ORDER', p => [TP].concat(cols('TREE_ORDER', p), [treeWork, treeMeta, treeSp])),
-    TREE_AGG0: bind('TREE_AGG0', [TP, treeSp, treeMeta, treeCells, treeLists]),
+    TREE_AGG0: bind('TREE_AGG0', [TP, treeSp, treeMeta, treeCells, treeLists].concat(plan.hubs ? [treeBox] : [])),
     TREE_LOCAL: bind('TREE_LOCAL', [TP, treeCells, treeMeta, treeLists, treeSp].concat(stepEntry)),
   };
   if (plan.heavyCells) groups.TREE_HEAVY = bind('TREE_HEAVY', [TP, treeSp, treeMeta, treeCells, treeLists].concat(stepEntry));
-  const levels = [];
-  for (let l = 0; l < sizes.levels; l++) {
-    const count = (sizes.G >> (l + 1)) ** D;
+  // TREE_PYR's dispatches: a block of levels each (blockSteps), else a level each
+  const levels = pyrLevels(sizes.levels, plan.blockSteps).map(({ from, steps }) => {
     const u = buf(16, U | CD);
-    device.queue.writeBuffer(u, 0, new Uint32Array([count, sizes.levelOff[l], sizes.levelOff[l + 1], sizes.metaCount]));
-    levels.push({ count, group: bind('TREE_PYR', [u, treeCells].concat(plan.layout.CNT < 0 ? [treeMeta] : [])) });
-  }
+    const count = plan.blockSteps ? (sizes.G >> from) ** D : (sizes.G >> (from + 1)) ** D;
+    device.queue.writeBuffer(u, 0, new Uint32Array(plan.blockSteps ? [count, sizes.levelOff[from], steps, sizes.metaCount] :
+      [count, sizes.levelOff[from], sizes.levelOff[from + 1], sizes.metaCount]));
+    return { count, group: bind('TREE_PYR', [u, treeCells].concat(plan.layout.CNT < 0 ? [treeMeta] : [], plan.hubs ? [treeBox] : [])) };
+  });
   const errors = await Promise.all([device.popErrorScope(), device.popErrorScope()]);
   const setupError = errors.find(Boolean);
   if (setupError) {
@@ -128,8 +130,9 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     return [x, Math.ceil(w / x)];
   }
   const nodes = grid(sizes.n), cells = grid(sizes.nCells);
-  const locals = grid((localGroups + CROWD_GROUPS) * WG);
-  const histGroups = Math.min(nodes[0] * nodes[1], 128);
+  // LOCAL's own workgroups, the crowded cells' and the hubs'
+  const locals = grid((localGroups + CROWD_GROUPS + (plan.hubs ? HUB_GROUPS : 0)) * WG);
+  const histGroups = Math.min(nodes[0] * nodes[1], HIST_GROUPS);
   let parity = 0;
   function dispatch(pass, name, size) {
     pass.setPipeline(pipes[name]);
@@ -185,8 +188,11 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     },
     boxBuffer: treeBox,
     // Copy these 16 bytes into a readback and give the 4 words to pyramidStatus(): non-null means
-    // the step's crowded cells were refused and the runner should halt with that message
+    // a step since the buffers were made had its crowded cells refused (the words keep the first
+    // such step's numbers), and the runner should halt with that message
     status: { buffer: treeLists, offset: 0, size: 16 },
+    // pyramidStatus() with this pyramid's cap
+    statusMessage: words => pyramidStatus(words, workCap),
     destroy() {
       for (const b of owned) b.destroy();
     },
@@ -207,12 +213,13 @@ function writeTables(device, treeCells, plan) {
 /**
  * The message to halt with for the 4 status words of a step (tree.status), or null. Cells of more
  * than NEAR_CAP bodies are summed exactly in workgroups; past `workCap` pair evaluations a step
- * (a layout piled into a few cells), they are refused rather than sampled.
+ * (a layout piled into a few cells; buildPyramid's), they are refused rather than sampled.
  */
-export function pyramidStatus(words) {
+export function pyramidStatus(words, workCap = WORK_CAP) {
   const biggest = words[2];
   if (!biggest) return null;
+  const cap = workCap / 1e9;
   return `the tree pass: a grid cell holds ${biggest.toLocaleString('en-US')} bodies, and the crowded cells need about ` +
-    `${(words[3] / 1000).toFixed(1)} billion pair evaluations a step, more than the GPU takes (${WORK_CAP / 1e9} billion); ` +
+    `${(words[3] / 1000).toFixed(1)} billion pair evaluations a step, more than the GPU takes (${cap >= 1 ? cap.toFixed(0) : cap.toFixed(2)} billion); ` +
     'the layout is piled too densely in one place for the grid';
 }

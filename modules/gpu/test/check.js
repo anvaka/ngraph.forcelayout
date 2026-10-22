@@ -95,6 +95,7 @@ test('what does not run yet is named', () => {
   sim.addLinkFormula('pullsAndMarks', { formula: 'coefficient = 1; pull = r' });
   sim.addLinkFormula('writesKind', { formula: 'kind = 2' });
   sim.addPairFormula('apart', { radius: 5, formula: 'push = 1' });
+  sim.addPairFormula('tabled', { radius: 5, formula: 'push = T(r)', tables: { T: { from: 0, to: 5, values: [1, 0] } } });
   sim.addSum('perGroup', { formula: 'mass', group: 'group' });
   sim.addSum('overLinks', { formula: 'r', over: 'links' });
   sim.addSum('largest', { formula: 'mass', reduce: 'max' });
@@ -111,7 +112,7 @@ test('what does not run yet is named', () => {
   assert.deepEqual(words, {
     pullsAndMarks: 'WebGPU does not run link formulas that both move bodies and write link columns yet',
     writesKind: 'WebGPU does not run formulas that write the i32 link column kind yet',
-    apart: 'WebGPU does not run pair formulas yet',
+    tabled: 'WebGPU does not run lookup tables in pair formulas yet',
     // a formula writes the group ids
     perGroup: 'WebGPU runs sums per group only with group ids set by the host',
     overLinks: 'WebGPU does not run sums over links yet',
@@ -185,6 +186,29 @@ test('adaptive step, per-link springs, the shape of the step, settings', () => {
   assert.deepEqual(reasons({ simulator: other }), ['the setting gravity: the number 1e+300 does not fit a 32-bit float']);
 });
 
+test('hub gathers carry the force a link formula adds at its ends; groups up to one dispatch', () => {
+  // a star: one body with 1,999 links, so gathers above N* go through chunks
+  const graph = createGraph();
+  for (let i = 1; i < 2000; i++) graph.addLink(0, i);
+  const sim = createLayout(graph).simulator;
+  sim.addLinkFormula('lean', { formula: 'force_i += 0.5 * axis(1) * mass_j; force_j -= 0.25 * axis(0)' });
+  const plan = planOf({ simulator: sim });
+  assert.ok(plan.chunked);
+  const section = plan.sections.find(s => s.stage && s.stage.name === 'lean');
+  assert.deepEqual(section.chunks.parts.map(part => part.column), ['force']);
+  assert.ok(/fn main/.test(plan.kernels()[plan.kernelList.find(k => k.kind === 'chunks' && k.section === section).name]));
+
+  const many = layoutOf(20).simulator;
+  const group = many.store.define('group', Int32Array, 1, 0);
+  group[3] = 16777000;
+  many.addSum('perGroup', { formula: '1', group: 'group' });
+  // (with buffers large enough for that many groups)
+  const large = { maxStorageBufferBindingSize: 2 ** 31, maxBufferSize: 2 ** 31 };
+  assert.deepEqual(reasons({ simulator: many }, large), ['perGroup: WebGPU sums up to 16,776,960 groups (one thread each); the largest group id is 16,777,000']);
+  group[3] = 16776959;
+  assert.deepEqual(reasons({ simulator: many }, large), []);
+});
+
 test("the guard stage runs; 'step' listeners are a warning", () => {
   const layout = layoutOf(20);
   layout.simulator.addStage(GUARD, () => {}, { before: 'clear', describe: { shape: 'guard', how: 'guards' } });
@@ -225,7 +249,7 @@ test('plan() and the runner use the same lowering', () => {
   const backend = gpuCapabilities(WIDE);
   const lowering = backend.lower(layout.simulator.program(), layout.simulator);
   assert.ok(lowering.runs && lowering.plan.template === 'generic');
-  layout.simulator.addPairFormula('apart', { radius: 5, formula: 'push = 1' });
+  layout.simulator.addStage('js', () => {});
   const refused = backend.lower(layout.simulator.program(), layout.simulator);
   assert.equal(refused.plan, null);
   assert.equal(refused.runs, false);

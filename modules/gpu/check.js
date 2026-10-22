@@ -21,7 +21,9 @@
 import formula from '../../lib/formula.js';
 import { createPrinter, emitLaw, lawValueProblem, lawValueWarnings, f32Problem, F32_MAX } from './wgsl/print.js';
 import { schedule } from './schedule.js';
+import { checkGrid } from './grid/plan.js';
 import { physicsStages, isGuard } from './program.js';
+import { printPairFormula } from './pairs/formula.js';
 
 // Limits the module asks a device for, and plans against
 export const LIMIT_NAMES = [
@@ -109,7 +111,7 @@ export function lower(program, simulator, limits, options = {}) {
   const facts = programFacts(program);
   const data = storeFacts(program, simulator);
   program.stages.forEach(stage => {
-    const verdict = checkStage(stage, program, simulator, printer, laws, facts);
+    const verdict = checkStage(stage, program, simulator, printer, laws, facts, limits);
     stages[stage.name] = verdict.runs ? { runs: true, how: verdict.how } : { runs: false, reason: verdict.reason };
     if (verdict.warnings && verdict.warnings.length) stages[stage.name].warnings = verdict.warnings;
   });
@@ -176,7 +178,7 @@ function storeFacts(program, simulator) {
 }
 
 // The lowering table: what each kind of stage needs to run here
-function checkStage(stage, program, simulator, printer, laws, facts) {
+function checkStage(stage, program, simulator, printer, laws, facts, limits) {
   if (isGuard(stage)) return runs('stops layout.step() while the GPU runs the layout');
   const columnProblem = columnsProblem(stage, facts);
   switch (stage.builtIn || stage.shape) {
@@ -203,7 +205,9 @@ function checkStage(stage, program, simulator, printer, laws, facts) {
     case 'link':
       return columnProblem ? refuse(columnProblem) : checkLink(stage, facts, printer);
     case 'pair':
-      return refuse('WebGPU does not run pair formulas yet');
+      return columnProblem ? refuse(columnProblem) : checkPair(stage, facts, printer);
+    case 'grid':
+      return columnProblem ? refuse(columnProblem) : checkGrid(stage, program.dims, program.spaces.nodes, limits, printer);
     case 'host':
       return runs(`on the host, on the steps where its \`when\` holds: the step stops there and reads back ${(stage.reads || []).map(r => r.column).join(', ') || 'nothing'}`);
     case 'js':
@@ -296,6 +300,26 @@ function checkLink(stage, facts, printer) {
   return runs('part of the step');
 }
 
+// A pair formula: its WGSL must print (the pair track's printer; tables are not taken yet)
+function checkPair(stage, facts, printer) {
+  if (typeof stage.args.radius === 'object' && stage.args.radius.kind === 'number') {
+    const problem = f32Problem(stage.args.radius.value);
+    if (problem) return refuse('the radius: ' + problem);
+  }
+  try {
+    printPairFormula(stage, {
+      D: facts.D, printer, columns: facts.columns,
+      read: (column, who, k) => `${who}_${column}_${k}`,
+      param: name => 'p_' + name, builtIn: name => 'b_' + name,
+      sumWidth: name => (facts.sums[name] && !facts.sums[name].group ? (facts.sums[name].width === 'D' ? facts.D : facts.sums[name].width) : 0),
+      sum: (name, k) => `g_${name}_${k}`,
+    });
+  } catch (e) {
+    return refuse(e.message);
+  }
+  return runs('part of the step');
+}
+
 // Prints a formula with a scope that knows every name the stage can read, to find literals and
 // builtins the GPU cannot take. A link formula (`link`) knows r, pull, the link's values and
 // columns, and body columns at either end (name_i, name_j).
@@ -359,6 +383,10 @@ function budgets(plan, limits, reasons, printer) {
   });
   const most = limits.maxComputeWorkgroupsPerDimension * THREADS;
   if (plan.nodes > most) reasons.push(`WebGPU runs up to ${most.toLocaleString('en-US')} bodies (one thread each); this layout has ${plan.nodes.toLocaleString('en-US')}`);
+  // GROUP_SUM: a thread per group
+  Object.values(plan.sums || {}).forEach(sum => {
+    if (sum.grouped && sum.count > most) reasons.push(`${sum.name}: WebGPU sums up to ${most.toLocaleString('en-US')} groups (one thread each); the largest group id is ${(sum.count - 1).toLocaleString('en-US')}`);
+  });
 }
 
 // Why lookup tables do not fit 32-bit floats, or null (values beyond f32; tiny ones may become 0,

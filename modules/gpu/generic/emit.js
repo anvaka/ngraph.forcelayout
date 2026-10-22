@@ -10,7 +10,7 @@ import formula from '../../../lib/formula.js';
 import WGSL, { emitLaw, lawPrologue } from '../wgsl/print.js';
 import { THREADS, readsOf, writesOf, slotValue } from './plan.js';
 import { header, BINDINGS, bindingsOf, u32, columnRef, local, locals, settingsLines, scopeOf, NUDGE, AXES, withTables } from './common.js';
-import { gatherCode, chunkKernel, linkKernel, groupValueCode, groupRunsKernel, groupSumKernel } from './links.js';
+import { gatherCode, chunkKernel, linkKernel, pairCode, groupValueCode, groupRunsKernel, groupSumKernel } from './links.js';
 
 export { BINDINGS, bindingsOf };
 
@@ -119,7 +119,8 @@ function nodeKernel(plan, kernel, printer) {
 
 function sectionCode(plan, kernel, section, index, printer) {
   const code = sectionBody(plan, kernel, section, index, printer);
-  if (section.gate === undefined || section.kind === 'pairs' || section.kind === 'tree') return code;
+  // tree passes gate their channels, the pair track's section its stage
+  if (section.gate === undefined || section.kind === 'pairs' || section.kind === 'tree' || (section.kind === 'pairformula' && section.sort)) return code;
   // a stage's `when`: the same branch for every thread
   return [`if (${slotValue(section.gate)} != 0.0) {`].concat(code.map(line => '  ' + line), ['}']);
 }
@@ -138,6 +139,8 @@ function sectionBody(plan, kernel, section, index, printer) {
       return gatherCode(plan, section, printer);
     case 'groupsum':
       return groupValueCode(plan, kernel, section, printer);
+    case 'pairformula':
+      return pairCode(plan, section, printer);
     case 'pairs':
       return pairsCode(plan, section, index, pos, force, printer);
     case 'tree':

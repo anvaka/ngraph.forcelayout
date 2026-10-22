@@ -31,13 +31,23 @@ export function schedule(program, laws, limits, options = {}) {
   if (!options.generic && nodes > (options.smallGraph || SMALL_GRAPH) && isStockStep(program, laws, data)) {
     return Object.assign(stockPlan(program, laws.repulsion || null), { dataKey: JSON.stringify(data) });
   }
-  const plan = genericPlan(program, laws, { limits, warn: options.warn, smallGraph: options.smallGraph, data });
+  const plan = genericPlan(program, laws, { limits, warn: options.warn, smallGraph: options.smallGraph, renumber: options.renumber, data });
   if (plan.refusal) return plan;
+  const grids = plan.kernelList.filter(kernel => kernel.kind === 'grid');
   plan.buffers = Object.assign({
     S: plan.S.size * 4, H: plan.H.size * 4, X: plan.cap * plan.D * 4, Y: plan.cap * plan.D * 4,
     L: lBytes(plan), V: plan.slot.bytes,
   }, plan.pyramid ? plan.pyramid.buffers : {});
-  plan.kernels = printer => Object.assign(kernelCode(plan, printer), plan.pyramid ? plan.pyramid.kernels : {});
+  // grid fields: their buffers and kernels under their kernel's name
+  grids.forEach(kernel => {
+    const grid = kernel.section.grid;
+    Object.keys(grid.buffers).forEach(name => { plan.buffers[`${kernel.name} ${name}`] = grid.buffers[name]; });
+  });
+  plan.kernels = printer => {
+    const out = Object.assign(kernelCode(plan, printer), plan.pyramid ? plan.pyramid.kernels : {});
+    grids.forEach(kernel => Object.entries(kernel.section.grid.kernels).forEach(([name, k]) => { out[name] = k.code; }));
+    return out;
+  };
   plan.how = genericHow(plan);
   plan.reads = Object.keys(plan.columns);
   return plan;
@@ -104,6 +114,11 @@ function genericHow(plan) {
   const nodeKernels = plan.kernelList.filter(k => k.kind === 'node').length;
   plan.kernelList.forEach((kernel, index) => {
     if (kernel.kind === 'link') kernel.sections.forEach(section => { how[section.stage.name] = `a thread per link, in ${kernel.name}`; });
+    if (kernel.kind === 'grid') {
+      const grid = kernel.section.grid, args = kernel.section.stage.args;
+      how[kernel.section.stage.name] = `a ${args.anchor} grid of up to ${args.maxCells.toLocaleString('en-US')} cells per axis, ${args.weights} weights` +
+        `${grid.smooth ? ', smoothed' : ''}: ${grid.dispatches} dispatches (${kernel.name})${kernel.hoisted ? ', at the start of the step' : ''}`;
+    }
     if (kernel.kind !== 'node') return;
     const where = nodeKernels === 1 && plan.kernelList.length === 1 ? 'the step kernel (one dispatch)' : kernel.name;
     const reduce = plan.kernelList.slice(index + 1).find(k => k.kind === 'reduce');

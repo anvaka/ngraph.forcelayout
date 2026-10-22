@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { planPyramid, chooseGrid, pyramidMemory } from '../pyramid/plan.js';
+import { planPyramid, chooseGrid, pyramidMemory, pyrLevels } from '../pyramid/plan.js';
 import { walkGroups, walkChannels } from '../pyramid/channels.js';
 import { pyramidStatus } from '../pyramid/build.js';
 import { SPEC_LIMITS } from '../check.js';
@@ -16,8 +16,8 @@ const createRepulsionLaw = require('../../../lib/repulsionLaw.js');
 const pos = D => ({ buffer: 'S', at: (row, k) => `S[${row} * ${D}u + ${k}u]` });
 const column = (buffer, block) => ({ buffer, at: row => `${buffer}[${block}u * TP.n + ${row}]` });
 
-function plan(D, n, channels, limits = SPEC_LIMITS) {
-  return planPyramid({ D, n, limits, pos: pos(D), channels });
+function plan(D, n, channels, options = {}) {
+  return planPyramid(Object.assign({ D, n, limits: SPEC_LIMITS, pos: pos(D), channels }, options));
 }
 
 const stock = [{ stage: 'repulsion', law: null, centroid: 'own', charge: column('H', 0) }];
@@ -38,9 +38,25 @@ test('grids: 2D as the stock template, 3D with about two cells per body', () => 
   const p = plan(3, 100000, stock);
   assert.equal(p.refusal, null);
   assert.deepEqual([p.sizes.G, p.sizes.levels, p.sizes.nCells], [64, 6, 262144]);
-  assert.equal(p.dispatches, 17, '10 + 6 levels, and the heavy cells');
+  assert.equal(p.dispatches, 13, '10, 2 PYR for 6 levels (2 a workgroup, AGG0 the first 2), and the heavy cells');
+  assert.deepEqual(pyrLevels(7, 4), [{ from: 4, steps: 3 }], '2D at 10k: AGG0 does 4 levels, one PYR the other 3');
+  assert.deepEqual(pyrLevels(10, 4), [{ from: 4, steps: 4 }, { from: 8, steps: 2 }]);
+  assert.equal(pyrLevels(3, 4).length, 0);
+  assert.equal(pyrLevels(6, 0).length, 6, 'without blocks, one level a dispatch');
   assert.ok(p.kernels.TREE_HEAVY, 'heavy cells: 3D only');
   assert.equal(plan(2, 100000, stock).kernels.TREE_HEAVY, undefined);
+});
+
+test('hubs: 2D lists heavy bodies in AGG0 and gives them their own far field in TREE_LOCAL', () => {
+  const p2 = plan(2, 10000, stock), p3 = plan(3, 10000, stock);
+  assert.equal(p2.hubs, true);
+  assert.equal(p3.hubs, false, '3D has its heavy cells');
+  assert.match(p2.kernels.TREE_HIST, /qpart/, 'HIST sums |charge| per workgroup');
+  assert.match(p2.kernels.TREE_AGG0, /heavyQ/);
+  assert.match(p2.kernels.TREE_LOCAL, /fn tree_hub/);
+  assert.match(p2.section.declarations, /let hub = \(raw >> 20u\)/);
+  assert.doesNotMatch(p3.kernels.TREE_LOCAL, /tree_hub/);
+  assert.equal(plan(2, 10000, stock, { hubs: false }).kernels.TREE_LOCAL.includes('tree_hub'), false);
 });
 
 test('every kernel fits 8 storage buffers, with columns in up to three buffers', () => {
@@ -97,7 +113,7 @@ test('refusals name what does not fit, with the numbers', () => {
     'the grid pyramid takes up to 2^20 cells; 128^3 is more');
   const big = plan(2, 1000000, v25());
   assert.equal(big.refusal, 'the tree pass with 6 charges in 2D at 1,000,000 bodies needs 259 MiB for its cells; this device allows 128 MiB per buffer');
-  assert.equal(plan(2, 1000000, v25(), Object.assign({}, SPEC_LIMITS, { maxStorageBufferBindingSize: 2 ** 32 - 4, maxBufferSize: 2 ** 32 - 4 })).refusal, null);
+  assert.equal(plan(2, 1000000, v25(), { limits: Object.assign({}, SPEC_LIMITS, { maxStorageBufferBindingSize: 2 ** 32 - 4, maxBufferSize: 2 ** 32 - 4 }) }).refusal, null);
   const bytes = pyramidMemory(2, 1000000, v25());
   assert.equal(bytes.treeCells, big.buffers.treeCells);
 });
@@ -145,6 +161,7 @@ test('laws that fall slower than 1/r^2 get second-order expansions, and wider ne
 test('crowded cells: a status word turns into a halt message', () => {
   assert.equal(pyramidStatus([0, 3, 0, 120]), null);
   assert.match(pyramidStatus([0, 2, 100000, 20000]), /a grid cell holds 100,000 bodies.*20\.0 billion pair evaluations/);
+  assert.match(pyramidStatus([0, 2, 100000, 20000], 4e8), /more than the GPU takes \(0\.40 billion\)/, 'the device\'s own cap');
   const p = plan(2, 100000, stock);
   assert.ok(p.buffers.treeLists >= (4 + Math.floor(100000 / 1025) + 1) * 4, 'room for every crowded cell');
   assert.match(p.section.declarations, /if \(crowded\)/);
