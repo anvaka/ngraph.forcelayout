@@ -21,9 +21,6 @@
 import findGroups from './findGroups.js';
 
 const EVERY = 25;      // steps between updates
-// The groups are measured at the start of steps 0, 25, 50, ... (the demo attaches ideas to a
-// new layout, whose steps count from 0), and the new stiffness applies from that step on
-const UPDATE_STEP = `step - floor(step / ${EVERY}) * ${EVERY} == 0`;
 const MIN_SHARE = 0.05; // weakest a link between groups can get, as a share of its stiffness
 // Group colors, largest group first, then the list repeats
 const PALETTE = [0xf28e2bff, 0xe15759ff, 0xedc948ff, 0x59a14fff, 0xff9da7ff,
@@ -89,10 +86,16 @@ get pulled apart as well.</p>`,
 
     const gap = Math.max(0, numberOr(params.gap, 2.5));
     const simulator = layout.simulator;
+    // The groups are measured at the start of the step the idea is attached at and of every 25th
+    // step after it, and the new stiffness applies from that step on. The text has no params, so
+    // the stages share one test of it per step.
+    const updateStep = `step - floor(step / ${EVERY}) * ${EVERY} == ${simulator.iteration() % EVERY}`;
     const store = simulator.store, springs = simulator.springStore;
     // The group of every node (-1: in none); for every link between two groups those two groups
     // (the smaller first) and how many links join them; and every link's own stiffness from
-    // before (0 or less: the setting), which links inside groups keep
+    // before (0 or less: the setting). A link formula sets every link, so links inside groups get
+    // their own stiffness from attach time back on every update: a stiffness given to such a link
+    // later lasts only until the next update.
     store.define('group', Int32Array, 1, -1);
     springs.define('groupA', Int32Array, 1, -1);
     springs.define('groupB', Int32Array, 1, -1);
@@ -111,7 +114,7 @@ get pulled apart as well.</p>`,
 
     // Each group's size, mass, centre and width (root mean square distance of its nodes from the
     // centre), measured at the start of the step
-    const measure = { group: 'group', when: UPDATE_STEP, before: 'clear' };
+    const measure = { group: 'group', when: updateStep, before: 'clear' };
     simulator.addSum('groupCount', { ...measure, formula: '1' });
     simulator.addSum('groupMass', { ...measure, formula: 'mass' });
     simulator.addSum('groupPos', { ...measure, formula: 'pos' });
@@ -121,7 +124,7 @@ get pulled apart as well.</p>`,
     // A target no farther than the rest length (gap 0 with springLength 0) has no balance, and
     // neither has a stiffness of 0 or less: keep k (f = 1). The link's stiffness becomes f * k.
     simulator.addLinkFormula('bridgeStiffness', {
-      when: UPDATE_STEP,
+      when: updateStep,
       before: 'clear',
       params: { gap, minShare: MIN_SHARE },
       formula: `
@@ -150,8 +153,10 @@ get pulled apart as well.</p>`,
         SUMS.concat('bridgeStiffness').forEach(name => {
           if (simulator.getStage(name)) simulator.removeStage(name);
         });
-        // every link gets its own stiffness back
-        springs.coefficient.set(springs.ownCoefficient.subarray(0, springs.n));
+        // links between groups get their own stiffness back
+        for (let s = 0; s < springs.n; ++s) {
+          if (springs.groupA[s] >= 0) springs.coefficient[s] = springs.ownCoefficient[s];
+        }
         springs.changed('coefficient');
         store.remove('group');
         ['groupA', 'groupB', 'bridges', 'ownCoefficient'].forEach(name => springs.remove(name));
