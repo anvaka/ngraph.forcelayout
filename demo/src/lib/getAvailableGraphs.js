@@ -1,5 +1,6 @@
 // One or two graphs per look. Names with a slash are downloaded from the
-// SuiteSparse collection mirror; the rest are generated in loadGraph.js.
+// SuiteSparse collection mirror, "Benchmark: " names are files in demo/public/graphs,
+// and the rest are generated in loadGraph.js.
 export default function getAvailableGraphs() {
   return [
     'Miserables',
@@ -65,5 +66,32 @@ export default function getAvailableGraphs() {
     'Watts-Strogatz (10k)',
     'Gset/G43',
     'HB/bcsstk02',
+
+    // The layout benchmark's graphs, served from demo/public/graphs (see loadGraph.js).
+    // The prototypes were judged on these.
+    'Benchmark: starOfStars',
+    'Benchmark: megaStars',
+    'Benchmark: hubLeaves5k',
+    'Benchmark: EVA',
+    'Benchmark: paTree3k',
+    'Benchmark: yeast',
+    'Benchmark: sciMet',
+    'Benchmark: erdos992',
+    'Benchmark: CSphd',
+    'Benchmark: protein',
+    'Benchmark: caterpillars',
+    'Benchmark: forest5k',
+    'Benchmark: gridIsolates',
+    'Benchmark: npmMix4',
+    'Benchmark: communities',
+    'Benchmark: sbm8x50',
+    'Benchmark: grid20',
+    'Benchmark: binTree8',
+    'Benchmark: cliqueCircle',
+    'Benchmark: ba500',
+    'Benchmark: er1000',
+    'Benchmark: rgg1500',
+    'Benchmark: powerGrid',
+    'Benchmark: java',
   ];
 }

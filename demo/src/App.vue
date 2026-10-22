@@ -11,6 +11,27 @@
         <a href="#" @click.prevent='toggleLayoutRun' class='btn'>{{isRunning ? 'Pause' : 'Run'}}</a>
         <a href="#" @click.prevent='restart' class='btn restart' title='Start over from initial positions'>Reset</a>
       </div>
+      <div class='buttons idea-bar' v-if='prototypes.length'>
+        <label class='graph-picker' title='Layout idea to try'>
+          <select v-model='prototypeId'>
+            <option v-for='option in prototypeOptions' :key='option.value' :value='option.value'>{{option.label}}</option>
+          </select>
+        </label>
+        <label class='idea-toggle' :class='{inactive: !prototype}'
+          title='Turn the idea off and on: the layout restarts from the same start, so you can compare'>
+          <input type='checkbox' v-model='prototypeOn' :disabled='!prototype'> on
+        </label>
+        <help-icon @show='aboutOpen = !aboutOpen' :class='{open: aboutOpen}'></help-icon>
+      </div>
+      <div class='about idea-about' v-if='aboutOpen && prototypes.length'>
+        <div v-if='prototype' v-html='prototype.description'></div>
+        <template v-else>
+          Experimental changes to the layout, one per folder in <code>demo/src/prototypes</code>.
+          Picking an idea restarts the layout from the same start as <b>none</b>; the <b>on</b> box
+          turns it off and on again, so you can compare the two. Its parameters are under Settings;
+          changing one carries on from the current drawing, and Reset starts over.
+        </template>
+      </div>
       <div class='stats'>
         <div v-if='loading'>Loading graph...</div>
         <div v-else-if='stats'>
@@ -100,14 +121,37 @@
         places each node at random near its already placed neighbours.
       </input-select>
       <input-select label='Run on' v-model='backend' :options='backendOptions' :note='gpuMessage'>
-        <b>WebGPU</b> runs the layout's own simulation on the GPU, in any number of dimensions, when
-        it can run all of it; otherwise the layout stays on the CPU and the note under the stats says why.
+        <b>WebGPU</b> runs the layout's own simulation on the GPU when it can run all of it (for now
+        the built in physics with any repulsion law, node formulas and sums, in any number of
+        dimensions); otherwise the layout stays on the CPU and the note under the stats says why.
         Repulsion is exact over all pairs up to 1,024 nodes; larger layouts use a grid pyramid
         instead of a tree (in 2D and 3D), so Theta and Repulsion settings do not apply. It is hundreds of times faster on large graphs, so raise
         Steps per frame (e.g. 20) to see it: with one step per frame, drawing the graph is the
         bottleneck. This is a separate module, <code>modules/gpu</code> in this repository;
         ngraph.forcelayout itself always runs on the CPU.
       </input-select>
+
+      <template v-if='prototype'>
+        <div class='section'>
+          Idea settings
+          <small><a href='https://github.com/anvaka/ngraph.forcelayout/tree/main/demo/src/prototypes'>ideas to try, not part of the library</a></small>
+        </div>
+        <div class='prototype'>
+          <div v-if='!prototypeOn' class='off-note'>The idea is off: turn it on at the top to use these.</div>
+          <div v-else-if='stats && stats.gpuReasons' class='off-note'>Runs on the CPU: {{stats.gpuReasons}}.</div>
+          <div v-if='prototype.tryGraphs' class='try'>
+            Try on:
+            <a href='#' v-for='name in prototype.tryGraphs' :key='name' @click.prevent='selectedGraph = name'>{{shortGraphName(name)}}</a>
+          </div>
+          <input-value v-for='param in prototype.params || []' :key='param.key'
+            :label='param.label' :step='param.step || "0.1"' v-model='prototypeParams[param.key]'>
+            {{param.help}}
+          </input-value>
+          <a href='#' v-if='stats && stats.canFinishPrototype' class='finish' @click.prevent='finishPrototype'>
+            {{prototype.finishLabel || 'Run final step'}}
+          </a>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -121,6 +165,8 @@ import queryState from 'query-state';
 import InputValue from './components/InputValue.vue';
 import InputFlag from './components/InputFlag.vue';
 import InputSelect from './components/InputSelect.vue';
+import HelpIcon from './components/HelpIcon.vue';
+import prototypes from './prototypes';
 
 const librarySpeedSettings = {maxVelocity: 4, integrator: 'euler', nbody: 'quadtree'};
 const fastSpeedSettings = {maxVelocity: 4, integrator: 'fire', nbody: 'dualtree'};
@@ -140,14 +186,33 @@ let appState = queryState({
   placement: 'default',
   backend: 'cpu',
   stepsPerFrame: 1,
+  prototype: 'none',
 }, { useSearch: true });
+
+// Prototype parameters live in the URL as p.<key>
+const PARAM_PREFIX = 'p.';
+
+function findPrototype(id) {
+  return prototypes.find(p => p.id === id) || null;
+}
+
+function getPrototypeParams(prototype, fromUrl) {
+  let params = {};
+  if (!prototype) return params;
+  (prototype.params || []).forEach(param => {
+    let saved = fromUrl ? appState.get(PARAM_PREFIX + param.key) : undefined;
+    params[param.key] = Number.isFinite(saved) ? saved : param.value;
+  });
+  return params;
+}
 
 export default {
   name: 'app',
   components: {
     InputValue,
     InputFlag,
-    InputSelect
+    InputSelect,
+    HelpIcon
   },
   computed: {
     onGpu() {
@@ -165,6 +230,21 @@ export default {
     placementOptions() {
       return [{value: 'default', label: 'library default'}, {value: 'pivot', label: 'pivot MDS (add-on)'}];
     },
+    prototype() {
+      return findPrototype(this.prototypeId);
+    },
+    // The idea the layout runs: the picked one, unless it is turned off
+    activePrototype() {
+      return this.prototypeOn ? this.prototype : null;
+    },
+    prototypeOptions() {
+      return [{value: 'none', label: 'none'}].concat(prototypes.map(p => ({value: p.id, label: p.title})));
+    },
+    // One value for the watcher, so picking an idea (which also resets its parameters) restarts once
+    prototypeConfig() {
+      if (!this.activePrototype) return {id: 'none', params: {}};
+      return {id: this.prototypeId, params: {...this.prototypeParams}};
+    },
     backendOptions() {
       return [{value: 'cpu', label: 'CPU (library)'}, {value: 'webgpu', label: 'WebGPU (add-on)', disabled: this.gpuAvailable === false}];
     }
@@ -176,6 +256,16 @@ export default {
 
     restart() {
       this.scene.restart();
+    },
+
+    finishPrototype() {
+      // A final step means little while the layout keeps moving the nodes
+      if (this.isRunning) this.toggleLayoutRun();
+      this.scene.finishPrototype();
+    },
+
+    shortGraphName(name) {
+      return name.replace(/^Benchmark: /, '');
     },
 
     formatMs(ms) {
@@ -245,6 +335,40 @@ export default {
     selectedGraph(newGraph) {
       appState.set('graph', newGraph);
       this.loadNewGraph(newGraph);
+    },
+    prototypeId(newId, oldId) {
+      let old = findPrototype(oldId);
+      if (old) (old.params || []).forEach(param => appState.unset(PARAM_PREFIX + param.key));
+      appState.set('prototype', newId);
+      this.prototypeParams = getPrototypeParams(this.prototype, false);
+      // A newly picked idea starts on
+      this.prototypeOn = true;
+    },
+    prototypeOn(on) {
+      if (on) appState.unset('ideaOff');
+      else appState.set('ideaOff', true);
+    },
+    prototypeParams: {
+      deep: true,
+      handler(params) {
+        Object.entries(params).forEach(([key, value]) => {
+          if (Number.isFinite(value)) appState.set(PARAM_PREFIX + key, value);
+        });
+      }
+    },
+    prototypeConfig: {
+      deep: true,
+      handler(config, oldConfig) {
+        clearTimeout(this.paramsTimer);
+        // Wait while a parameter is being typed (an empty input gives NaN)
+        if (!Object.values(config.params).every(Number.isFinite)) return;
+        if (oldConfig && config.id === oldConfig.id) {
+          // Same idea, new values: carry on from the current drawing once the typing stops
+          this.paramsTimer = setTimeout(() => this.scene.setPrototypeParams(config.params), 300);
+        } else {
+          this.scene.setPrototype(this.activePrototype, config.params);
+        }
+      }
     }
   },
   data() {
@@ -271,6 +395,11 @@ export default {
       // WebGPU is turned on after the first graph is loaded (see mounted)
       backend: 'cpu',
       stepsPerFrame: appState.get('stepsPerFrame'),
+      prototypes,
+      prototypeId: findPrototype(appState.get('prototype')) ? appState.get('prototype') : 'none',
+      prototypeParams: getPrototypeParams(findPrototype(appState.get('prototype')), true),
+      prototypeOn: appState.get('ideaOff') !== true,
+      aboutOpen: false,
       gpuAvailable: typeof navigator !== 'undefined' && !!navigator.gpu,
       gpuMessage: '',
       stats: null,
@@ -283,6 +412,7 @@ export default {
       placement: this.placement,
       stepsPerFrame: this.stepsPerFrame
     });
+    if (this.activePrototype) this.scene.setPrototype(this.activePrototype, this.prototypeParams);
     this.loadNewGraph(this.selectedGraph);
     bus.on('load-graph', this.onGraphLoaded);
     if (appState.get('backend') === 'webgpu') this.backend = 'webgpu';
@@ -291,6 +421,7 @@ export default {
 
   beforeUnmount() {
     clearInterval(this.statsTimer);
+    clearTimeout(this.paramsTimer);
     if (this.scene) {
       this.scene.dispose();
     }
@@ -343,6 +474,79 @@ a {
   }
   a {
     color: #267fcd;
+  }
+}
+.about {
+  font-size: 14px;
+  p {
+    margin: 6px 0;
+  }
+  p:first-child {
+    margin-top: 0;
+  }
+  p:last-child {
+    margin-bottom: 0;
+  }
+}
+.idea-bar {
+  label.idea-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 8px;
+    border-left: 1px solid;
+    font-size: 14px;
+    white-space: nowrap;
+    cursor: pointer;
+    &.inactive {
+      opacity: 0.5;
+      cursor: default;
+    }
+  }
+  a.help-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    flex-shrink: 0;
+    border-left: 1px solid;
+    &.open {
+      background: #004499;
+      svg {
+        fill: white;
+      }
+    }
+  }
+  select:disabled {
+    opacity: 0.5;
+  }
+}
+.idea-about {
+  padding: 8px;
+  background: #004499;
+  border-top: 1px solid;
+}
+.prototype {
+  font-size: 14px;
+  a {
+    color: #267fcd;
+  }
+  .off-note {
+    margin: 6px 0;
+    opacity: 0.7;
+  }
+  .try {
+    margin: 6px 0;
+    a {
+      margin-left: 6px;
+    }
+  }
+  .finish {
+    display: block;
+    margin-top: 8px;
+    padding: 6px 0;
+    text-align: center;
+    border: 1px solid #267fcd;
   }
 }
 .buttons {

@@ -10,6 +10,7 @@ import placeNodes from 'ngraph.forcelayout.pivot';
 import {createWebGPUBackend, runOnGpu} from 'ngraph.forcelayout.gpu';
 import createGraph from 'ngraph.graph';
 
+const NODE_COLOR = 0x90f8fcff;
 const layoutProps = ['timeStep', 'springLength', 'springCoefficient', 'dimensions', 'dragCoefficient', 'gravity', 'theta', 'maxVelocity', 'integrator', 'nbody'];
 
 export default function createGraphScene(canvas, layoutSettings = {}, sceneSettings = {}) {
@@ -20,9 +21,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   let graph, layout;
   let scene, nodes, lines, guide;
 
-  // With WebGPU picked, the GPU runs the layout's own simulator (`gpu`, from runOnGpu()) whenever
-  // its plan says it can; otherwise the layout stays on the CPU and `gpuReasons` says why. The
-  // layout keeps the positions, read back after each batch of steps.
+  // With WebGPU picked, the GPU runs the layout's own simulator whenever its plan says it can
+  // (`gpu`); otherwise the layout stays on the CPU and `gpuReasons` says why.
   let backend = 'cpu';
   let gpuBackend, gpu = null;
   let gpuReasons = '', gpuError = '';
@@ -35,6 +35,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   let stepsPerFrame = sceneSettings.stepsPerFrame || 1;
   let placement = sceneSettings.placement || 'default';
   let placementChoice = '';
+  // An experimental idea from demo/src/prototypes, attached to every new layout
+  let prototype = null, prototypeParams = {}, prototypeControl = null;
   let stats = createStats();
 
   bus.on('load-graph', loadGraph);
@@ -47,6 +49,9 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     setStepsPerFrame,
     setPlacement,
     setBackend,
+    setPrototype,
+    setPrototypeParams,
+    finishPrototype,
     restart,
     getStats,
   };
@@ -55,6 +60,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     if (scene) {
       scene.dispose();
       gpu = null; // disposing the layout stops it
+      detachPrototype();
       layout.dispose();
       scene = null
       cancelAnimationFrame(rafHandle);
@@ -71,6 +77,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     // this is a standard force layout
     layout = createForceLayout(graph, layoutSettings);
     applyPlacement();
+    attachPrototype();
     changeLayout(null);
     stats.reset();
 
@@ -84,12 +91,52 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   function restart() {
     // Fresh layout keeps the settings, but forgets positions and velocities.
     gpu = null; // disposing the layout stops it
+    detachPrototype();
     layout.dispose();
     layout = createForceLayout(graph, layoutSettings);
     applyPlacement();
+    attachPrototype();
     changeLayout(null);
     stats.reset();
     fitView();
+  }
+
+  function setPrototype(newPrototype, params) {
+    prototype = newPrototype || null;
+    prototypeParams = {...params};
+    if (graph) restart();
+  }
+
+  // New values for the same idea: it carries on from the current drawing instead of starting over
+  function setPrototypeParams(params) {
+    prototypeParams = {...params};
+    if (!graph || !prototype) return;
+    changeLayout(() => continueLayout(layoutSettings.dimensions));
+  }
+
+  // `steps` tells the idea how many steps the drawing has already run (0 for a fresh start)
+  function attachPrototype(steps = 0) {
+    if (!prototype) return;
+    prototypeControl = prototype.attach({
+      layout,
+      graph,
+      params: {...prototypeParams},
+      settings: {...layoutSettings},
+      steps
+    }) || null;
+  }
+
+  function detachPrototype() {
+    if (prototypeControl && prototypeControl.dispose) prototypeControl.dispose();
+    prototypeControl = null;
+  }
+
+  // The final step works on the store: on WebGPU it gets every step done so far first, and the
+  // next GPU step uploads what the idea changed
+  async function finishPrototype() {
+    if (!prototypeControl || !prototypeControl.finish) return;
+    if (gpu) await gpu.sync();
+    prototypeControl.finish();
   }
 
   function applyPlacement() {
@@ -126,7 +173,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   }
 
   // Runs `change` (which may replace the layout) with the GPU stopped, then starts the GPU again
-  // when WebGPU is picked. Stopping the GPU leaves the latest positions in the layout.
+  // when WebGPU is picked and the layout's plan runs there. Changes run one at a time.
   function changeLayout(change) {
     changes = changes.then(async () => {
       changing = true;
@@ -187,6 +234,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
       steps: stats.steps,
       msPerStep: gpu ? gpu.stats().msPerStep : stats.msPerStep(),
       placement: placementChoice,
+      canFinishPrototype: !!(prototypeControl && prototypeControl.finish),
       // why the layout runs on the CPU although WebGPU is picked
       gpuReasons: backend === 'webgpu' && !gpu && !changing ? gpuReasons : '',
       gpuError
@@ -222,30 +270,34 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     if (!layout) return;
 
     if (layoutSettings.dimensions !== previousDimensions) {
-      // a new layout in the new dimensions, back on the GPU when its plan runs there
-      changeLayout(() => {
-        let prevLayout = layout;
-        layout = createForceLayout(graph, layoutSettings)
-        graph.forEachNode(node => {
-          // a plain {x, y, ...} copy: positions are views into the layout's arrays
-          let prevPos = prevLayout.getNodePosition(node.id).toJSON();
-          let positions = Object.keys(prevPos).map(name => prevPos[name]);
-          for (let i = previousDimensions; i < layoutSettings.dimensions; ++i) {
-            // If new layout has more dimensions than the previous layout, fill those with random values:
-            positions.push(Math.random());
-          }
-          positions.unshift(node.id);
-          layout.setNodePosition.apply(layout, positions);
-        });
-
-        prevLayout.dispose();
-      });
+      changeLayout(() => continueLayout(previousDimensions));
     } else {
       // the GPU, if it runs the layout, reads them at its next step
       props.forEach(name => {
         layout.simulator[name](layoutSettings[name]);
       });
     }
+  }
+
+  // A new layout that starts where the nodes are now, with the idea attached again
+  function continueLayout(previousDimensions) {
+    let prevLayout = layout;
+    detachPrototype();
+    layout = createForceLayout(graph, layoutSettings)
+    graph.forEachNode(node => {
+      // a plain {x, y, ...} copy: positions are views into the layout's arrays
+      let prevPos = prevLayout.getNodePosition(node.id).toJSON();
+      let positions = Object.keys(prevPos).map(name => prevPos[name]);
+      for (let i = previousDimensions; i < layoutSettings.dimensions; ++i) {
+        // If new layout has more dimensions than the previous layout, fill those with random values:
+        positions.push(Math.random());
+      }
+      positions.unshift(node.id);
+      layout.setNodePosition.apply(layout, positions);
+    });
+
+    prevLayout.dispose();
+    attachPrototype(stats.steps);
   }
 
   function setFixedViewBox(isFixed) {
@@ -272,7 +324,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
         if (!node.data) node.data = {};
         node.data.size = size;
       }
-      node.ui = {size, position: [point.x, point.y, point.z || 0], color: 0x90f8fcff};
+      node.ui = {size, position: [point.x, point.y, point.z || 0], color: NODE_COLOR};
       node.uiId = nodes.add(node.ui);
     });
 
@@ -332,6 +384,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     //   if (pos.c6 < minB) minB = pos.c6;
     //   if (pos.c6 > maxB) maxB = pos.c6;
     // });
+    // A prototype may color nodes, e.g. by the groups it found
+    let nodeColor = prototypeControl && prototypeControl.nodeColor;
 
     graph.forEachNode(node => {
       let pos = layout.getNodePosition(node.id);
@@ -348,6 +402,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
       //   (pos.c6 - minB) / (maxB - minB)
       // );
       // node.ui.color = (0x000000FF | r | g | b);
+      node.ui.color = (nodeColor && nodeColor(node.id)) || NODE_COLOR;
       nodes.update(node.uiId, node.ui)
     });
 
@@ -387,6 +442,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
 
     if (gpu) gpu.stop();
     gpu = null;
+    detachPrototype();
     scene.dispose();
     bus.off('load-graph', loadGraph);
   }

@@ -16,10 +16,13 @@ const generatedGraphs = {
   'Many pieces (300)': () => manyPieces(300),
 };
 
+const BENCHMARK = 'Benchmark: ';
+
 export default function loadGraph(name) {
   if (name === 'Miserables') return Promise.resolve(miserables);
   if (name === 'Binary') return Promise.resolve(generate.balancedBinTree(10));
   if (generatedGraphs[name]) return Promise.resolve(generatedGraphs[name]());
+  if (name.startsWith(BENCHMARK)) return loadBenchmarkGraph(name.slice(BENCHMARK.length));
 
   let mtxObject = cache.get(name);
   if (mtxObject) return Promise.resolve(renderGraph(mtxObject.links, mtxObject.recordsPerEdge));
@@ -33,6 +36,19 @@ export default function loadGraph(name) {
     return renderGraph(mtxObject.links, mtxObject.recordsPerEdge);
   });
 }
+// Benchmark graphs are {n, edges: [from, to, from, to, ...]} with node ids 0..n-1.
+function loadBenchmarkGraph(id) {
+  return fetch(`${import.meta.env.BASE_URL}graphs/${id}.json`)
+    .then(x => x.json())
+    .then(({n, edges}) => {
+      let graph = createGraph();
+      // Some benchmark graphs have isolated nodes, which a list of links alone would drop
+      for (let i = 0; i < n; i++) graph.addNode(i);
+      for (let i = 0; i + 1 < edges.length; i += 2) graph.addLink(edges[i], edges[i + 1]);
+      return graph;
+    });
+}
+
 function renderGraph (edges, recordsPerEdge) {
   let graph = createGraph();
   for(var i = 0; i < edges.length - 1; i += recordsPerEdge) {
