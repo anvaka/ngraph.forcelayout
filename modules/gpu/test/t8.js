@@ -13,8 +13,9 @@ import { pathToFileURL } from 'node:url';
 import { gpuCapabilities } from '../index.js';
 
 // Active ideas that run, by dimension, when this module was last changed (M3: tables, host steps,
-// pair formulas, grid fields), on a demo with the ideas track's and the gridfield track's rewrites
-const EXPECTED = { 2: 18, 3: 8 };
+// pair formulas, grid fields; M4: K-charge tree walks), on a demo with the ideas track's, the
+// gridfield track's and the K-charge tree's rewrites
+const EXPECTED = { 2: 21, 3: 8 };
 const PROFILES = {
   'default (8)': {},
   'wide (10)': { maxStorageBuffersPerShaderStage: 10, maxComputeInvocationsPerWorkgroup: 1024, maxComputeWorkgroupSizeX: 1024, maxComputeWorkgroupStorageSize: 32768 },
