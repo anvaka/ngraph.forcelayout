@@ -15,12 +15,6 @@ import { slotFiller } from './values.js';
 import { chooseOrigin, relativePositions as relative, writePositionsBack, writePermutedBack, rowsMoved, bodyOrder } from '../buffers.js';
 import { createRowWriter, trackHostPositions } from '../rows.js';
 
-// GPU time of a step of the pyramid's crowded cells at their work cap, per charge, on the M4 Max
-// the cap was sized on (gpu-critic-2 measured about 28 ms with one charge and 53 with five, at
-// the cap of 2e9 evaluations); on other devices the cap and this time scale with the device's
-// slowdown (device.js). A structure that measures itself (pairs; the pyramid and the grids once
-// they have cappedMs()) gives its own. The runner bounds steps per submit by them (cappedMs).
-const PYRAMID_CAPPED_MS = 30;
 
 // Integers above this are not exact in f32
 const F32_INTEGER = 16777216;
@@ -190,7 +184,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     });
   }
   if (tree && tree.status) {
-    statuses.push(Object.assign({ message: tree.statusMessage, observe: tree.observe ? words => tree.observe(words) : null, stages: plan.pyramid.channels.map(c => c.stage) }, tree.status));
+    statuses.push(Object.assign({ message: tree.statusMessage, observe: words => tree.observe(words), stages: plan.pyramid.channels.map(c => c.stage) }, tree.status));
   }
   // Grid fields: positions (by parity), their columns in S and H, their numbers in the slot
   const grids = new Map();
@@ -499,10 +493,11 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     // GPU time of a step whose structures all work at their caps: a step can get there within a
     // submit (a gate opens, a radius grows, the layout piles up), so the runner keeps submits
     // below the watchdog with it rather than with the steps it timed
+    // (the pairs and the pyramid measure theirs on the device; a grid's is its estimate for an M4
+    // Max times the device's slowdown, unless it measures its own)
     get cappedMs() {
-      const treeMs = tree ? (tree.cappedMs ? tree.cappedMs() : PYRAMID_CAPPED_MS * plan.pyramid.channels.length * slowdown) : 0;
       const gridMs = [...grids].reduce((total, [kernel, grid]) => total + (grid.cappedMs ? grid.cappedMs() : gridCappedMs(kernel.section.grid) * slowdown), 0);
-      return (pairs ? plan.pairs.stages.length * pairStageMs() : 0) + treeMs + gridMs;
+      return (pairs ? plan.pairs.stages.length * pairStageMs() : 0) + (tree ? tree.cappedMs() : 0) + gridMs;
     },
     // slices each pair sort's last encoded step ran in (0: one submit), for tests
     pairSlices: () => (pairs ? pairs.slices() : []),
@@ -510,7 +505,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     // device's rate from it, for their caps and capped times
     observeTiming(msPerStep) {
       if (pairs) pairs.observeTime(msPerStep);
-      if (tree && tree.observeTime) tree.observeTime(msPerStep);
+      if (tree) tree.observeTime(msPerStep);
       grids.forEach(grid => { if (grid.observeTime) grid.observeTime(msPerStep); });
     },
 
