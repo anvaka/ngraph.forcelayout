@@ -167,7 +167,7 @@ A pair step that needs more than its cap runs in several submits ("slices") rath
   with big hubs their force error is up to 2.76× the CPU tree's (megaStars), 1.25–1.28× on
   starOfStars, where the generic pyramid stays within 1.25×. The pyramid is as fast or faster
   from 2k to 100k bodies, but 1.26–1.45× slower on hub graphs (megaStars, EVA) from a random
-  start, and slower at 1M until it renumbers bodies along a Hilbert curve. So the switch
+  start. So the switch
   (`isStockStep()` in `schedule.js`) still sends that one step to the old kernels.
 - **32-bit floats.** Positions go up as f32 relative to an f64 origin and come back as f64. One
   step matches the CPU to 1e-5 of the column's RMS (1e-4 with `exp`, `log`, `pow`, `sqrt`,
@@ -197,7 +197,7 @@ the same lowering, so they cannot disagree.
 
 | File | Part |
 |---|---|
-| `index.js` | Public API: `createWebGPUBackend`, `runOnGpu`, `gpuCapabilities`. Test options: `generic`, `smallGraph`, `pairEstimate`, `slowdown`. |
+| `index.js` | Public API: `createWebGPUBackend`, `runOnGpu`, `gpuCapabilities`. Test options: `generic`, `smallGraph`, `pairEstimate`, `slowdown`, `renumber`. |
 | `device.js` | The device: limits, `uncapturederror` and loss watching, pipelines compiled with `createComputePipelineAsync` and cached per device by their WGSL text, the submit cost, the speed probe. |
 | `wgsl/print.js` | The WGSL printer of the formula language: prefixed user names, safe builtins, f32 literal rules, the law helpers. |
 | `check.js` | The lowering table: what each stage needs, checked against a set of limits with no device; budgets (storage buffers per kernel, buffer sizes, workgroup memory). |
@@ -206,12 +206,12 @@ the same lowering, so they cannot disagree.
 | `generic/emit.js` | The WGSL of a generic plan: node kernels, the exact all-pairs tile loop for any law, charge and sensitivity, fixed-order reductions for sums and FIRE. |
 | `generic/links.js`, `generic/common.js` | Links (both ends evaluate a link with its true roles; chunks of 8 links for hubs), link-column kernels, pair formulas over all pairs, sums per group; names and column places. |
 | `generic/values.js` | The per-step slot: settings, parameters, built-in values, gates and law numbers from `simulator.stageValues()` for each queued step. |
-| `generic/engine.js` | A generic plan on a device: buffers, the ring of slots, encoding, status words, readbacks, uploads row by row. |
+| `generic/engine.js` | A generic plan on a device: buffers, the ring of slots, encoding, status words, readbacks, uploads row by row. Layouts of 4,096 bodies or more keep their rows in a spatial order on the device; uploads, links and groups go through it, and readbacks come back in the store's order. |
 | `pyramid/` | The grid pyramid for tree passes (2D and 3D, K charges, any law): exact crowded cells under a cap, far fields of their own for hubs. |
 | `pairs/` | Pair formulas above N*: a cell sort per radius, a work list of 256-test chunks with a cap and slices, a gather per stage; the pair-formula printer both regimes share. |
 | `grid/` | Grid fields: a deposit into 64-bit fixed-point sums, smoothing, the value and slope gathered back per body; a lattice wider than `maxCells` halts. |
 | `templates/grid.js`, `templates/stock.js` | Today's grid kernels, WGSL byte for byte, and the engine around them. |
-| `buffers.js`, `rows.js` | Store to device and back: the f64 origin, Hilbert order for the template, rows the host wrote found and uploaded one by one (one scatter dispatch for many). |
+| `buffers.js`, `rows.js` | Store to device and back: the f64 origin, the device's row order (a Hilbert curve in 2D, Morton order in 3D), rows the host wrote found and uploaded one by one (one scatter dispatch for many). |
 | `runner.js` | `runOnGpu`: the guard stage, uploads, batching, readbacks, `sync`, `stop`, events, the listener check, status and device errors, sync points. It drives either engine through one interface. |
 | `program.js` | Reading the step as data; the guard stage's name. |
 

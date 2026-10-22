@@ -354,15 +354,17 @@ fn main(${LINEAR}) {
   };
 
   // The snapshot of a body: its position (relative, as the device keeps it), the columns the
-  // sort's formulas read, its index; as u32 words, so the index stays exact
+  // sort's formulas read, its store row (the formulas' roles; `spec.row` when the device keeps
+  // the rows in another order); as u32 words, so the row stays exact
   const words = [];
   for (let k = 0; k < D; k++) words.push(`bitcast<u32>(${spec.pos.at('i', k)})`);
   spec.snapshot.forEach(c => { for (let k = 0; k < c.width; k++) words.push(`bitcast<u32>(${c.ref.at('i', k)})`); });
   while (words.length < layout.index) words.push('0u');
-  words.push('i');
+  words.push(spec.row ? spec.row.at('i') : 'i');
   while (words.length < layout.snap4 * 4) words.push('0u');
   const columnBuffers = [];
   spec.snapshot.forEach(c => { if (columnBuffers.indexOf(c.ref.buffer) < 0) columnBuffers.push(c.ref.buffer); });
+  if (spec.row && columnBuffers.indexOf(spec.row.buffer) < 0) columnBuffers.push(spec.row.buffer);
   out.ORDER = orderKernel(spec, words, columnBuffers, false);
   out.ORDER_S = orderKernel(spec, words, columnBuffers, true);
 

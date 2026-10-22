@@ -1,7 +1,9 @@
 // The device side of a generic plan (plan.js, emit.js): buffers from the store, the pipelines, a
-// ring of per-step slots, the pyramid when the plan has one, and the encoding of steps. Rows keep
-// the store's order; positions are f32 relative to an f64 origin near the middle of the drawing,
-// and swap between X and Y every step.
+// ring of per-step slots, the pyramid when the plan has one, and the encoding of steps. Positions
+// are f32 relative to an f64 origin near the middle of the drawing, and swap between X and Y every
+// step. Rows keep the store's order, except in large layouts (plan.permuted): there they follow a
+// space-filling curve through the positions (buffers.js bodyOrder), so bodies close in space are
+// close in memory, and every upload, readback and row list goes through that order.
 import { getPipeline } from '../device.js';
 import { kernelCode, bindingsOf } from './emit.js';
 import { THREADS, GROUP_RUN, LINK_CHUNK } from './plan.js';
@@ -10,7 +12,7 @@ import { buildPairs } from '../pairs/build.js';
 import { buildGrid } from '../grid/build.js';
 import { gridStatus, gridCappedMs } from '../grid/plan.js';
 import { slotFiller } from './values.js';
-import { chooseOrigin, relativePositions as relative, writePositionsBack, rowsMoved } from '../buffers.js';
+import { chooseOrigin, relativePositions as relative, writePositionsBack, writePermutedBack, rowsMoved, bodyOrder } from '../buffers.js';
 import { createRowWriter, trackHostPositions } from '../rows.js';
 
 // GPU time of a step of the pyramid's crowded cells at their work cap on the M4 Max the cap was
@@ -24,6 +26,23 @@ const PYRAMID_CAPPED_MS = 20;
 const F32_INTEGER = 16777216;
 // Slots of the ring when numbers change from step to step: a submit holds at most this many steps
 const RING_SLOTS = 1024;
+// Calls with at least this many steps put positions back in the store's order on the GPU for their
+// readback (its cost is spread over the steps); shorter ones do it on the CPU
+const ORDER_ON_GPU = 16;
+
+// Positions back in the store's order: out[row] = pos[toDevice[row]], `count.y` numbers a row
+const UNPERMUTE = `@group(0) @binding(0) var<uniform> count: vec4u;
+@group(0) @binding(1) var<storage, read> pos: array<f32>;
+@group(0) @binding(2) var<storage, read> toDevice: array<u32>;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let row = gid.x;
+  if (row >= count.x) { return; }
+  let D = count.y;
+  let src = toDevice[row] * D;
+  for (var k = 0u; k < D; k++) { out[row * D + k] = pos[src + k]; }
+}`;
 
 /**
  * Builds a generic plan's buffers and pipelines from the store of `simulator`. Resolves to the
@@ -36,12 +55,16 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   const pipelineOf = {};
   const dispatched = plan.kernelList.filter(kernel => kernel.kind !== 'host');
   // grid fields build their own pipelines (buildGrid below)
-  const [writeRows] = await Promise.all([createRowWriter(device)].concat(dispatched.filter(kernel => kernel.kind !== 'grid').map(kernel =>
-    getPipeline(device, { code: code[kernel.name], label: kernel.name, bindings: bindingsOf(kernel) })
-      .then(pipeline => { pipelineOf[kernel.name] = pipeline; }))));
+  const [writeRows, unpermute] = await Promise.all([createRowWriter(device), plan.permuted ? getPipeline(device, { code: UNPERMUTE, label: 'UNPERMUTE' }) : null]
+    .concat(dispatched.filter(kernel => kernel.kind !== 'grid').map(kernel =>
+      getPipeline(device, { code: code[kernel.name], label: kernel.name, bindings: bindingsOf(kernel) })
+        .then(pipeline => { pipelineOf[kernel.name] = pipeline; }))));
 
   // --- data from the store ------------------------------------------------------------------------
   const origin = chooseOrigin(store.pos, n, D);
+  // the device's row of each store row in a large layout, else null (the store's order)
+  const toDevice = plan.permuted ? bodyOrder(store.pos, n, D) : null;
+  const deviceRow = toDevice ? i => toDevice[i] : i => i;
   const SB = GPUBufferUsage.STORAGE, CD = GPUBufferUsage.COPY_DST, CS = GPUBufferUsage.COPY_SRC;
   const owned = [];
   device.pushErrorScope('validation');
@@ -55,8 +78,8 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   const S = buffer(plan.S.size * 4, SB | CD | CS, 'S');
   const H = buffer(plan.H.size * 4, SB | CD, 'H');
   const positions = [buffer(cap * D * 4, SB | CD | CS, 'X'), buffer(cap * D * 4, SB | CD | CS, 'Y')];
-  const links = linkTable(springs, n);
-  const groupData = plan.groupColumns.map(name => groupBlock(store[name], n));
+  const links = linkTable(springs, n, toDevice);
+  const groupData = plan.groupColumns.map(name => groupBlock(store[name], n, toDevice));
   const groupProblem = plan.groupColumns.find((name, k) => groupData[k].count !== countOf(plan, name));
   if (groupProblem) throw new Error(`the groups of ${groupProblem} changed while the plan was made`);
   const chunkData = plan.chunked ? chunkBlock(links, n) : null;
@@ -74,7 +97,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     const target = column.buffer === 'S' ? sData : hData;
     const source = store[column.name];
     const count = n * column.width;
-    for (let k = 0; k < count; k++) target[column.offset + k] = source[k];
+    placeRows(target, column.offset, source, n, column.width, toDevice);
     if (column.type !== 'f64' && column.type !== 'f32') {
       for (let k = 0; k < count; k++) if (Math.abs(source[k]) > F32_INTEGER) { integerProblem = column.name; break; }
     }
@@ -85,6 +108,8 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   });
   if (integerProblem) throw new Error(`the column ${integerProblem} holds integers above 2^24, which 32-bit floats cannot hold exactly`);
   plan.tables.forEach(table => hData.set(table.values, table.offset));
+  // the store's row of each device row, where pair formulas take their roles from it
+  if (plan.rowColumn) for (let i = 0; i < n; i++) hData[plan.rowColumn.offset + deviceRow(i)] = i;
   const results = simulator.sums();
   // the sums' last results: a gated sum is read with them until it runs again
   Object.values(plan.sums).forEach(sum => {
@@ -99,7 +124,20 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   device.queue.writeBuffer(S, 0, sData);
   device.queue.writeBuffer(H, 0, hData);
   const startPositions = relative(store.pos, n, D, origin);
-  device.queue.writeBuffer(positions[0], 0, startPositions);
+  device.queue.writeBuffer(positions[0], 0, toDevice ? permuteRows(startPositions, n, D, toDevice) : startPositions);
+  // readbacks in the store's order, put back on the GPU (see copyPositions)
+  let ordered = null, unpermuteGroups = null;
+  if (toDevice) {
+    const countBuffer = buffer(16, GPUBufferUsage.UNIFORM | CD, 'unpermute count');
+    const indexBuffer = buffer(n * 4, SB | CD, 'toDevice');
+    ordered = buffer(n * D * 4, SB | CS, 'ordered positions');
+    device.queue.writeBuffer(countBuffer, 0, new Uint32Array([n, D, 0, 0]));
+    device.queue.writeBuffer(indexBuffer, 0, toDevice);
+    unpermuteGroups = [0, 1].map(p => device.createBindGroup({
+      layout: unpermute.getBindGroupLayout(0),
+      entries: [countBuffer, positions[p], indexBuffer, ordered].map((b, binding) => ({ binding, resource: { buffer: b } })),
+    }));
+  }
 
   // The ring of per-step slots, read at a dynamic offset
   const slots = slotFiller(simulator, plan, warn, origin);
@@ -247,13 +285,14 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
       if (hostOwns) {
         const relativePositions = relative(store.pos, n, D, origin);
         host.reset(relativePositions);
-        device.queue.writeBuffer(positions[parity], 0, relativePositions);
+        device.queue.writeBuffer(positions[parity], 0, toDevice ? permuteRows(relativePositions, n, D, toDevice) : relativePositions);
         uploadColumns(name => plan.columns[name].buffer !== 'X');
         hostCopies = copiesOf();
       } else {
         if (now.pos !== uploaded.pos) {
           const rows = host.written();
-          writeRows(positions[parity], 0, D, rows, host.uploaded(rows, steps));
+          const values = host.uploaded(rows, steps);
+          writeRows(positions[parity], 0, D, toDevice ? rows.map(deviceRow) : rows, values);
         }
         if (now.velocity !== uploaded.velocity) uploadRows(plan.columns.velocity, changedRows(plan.columns.velocity));
         deviceColumns.forEach(column => {
@@ -348,10 +387,20 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
       return { ran, halt: filled.halt };
     },
 
-    // positions after every step encoded so far
-    copyPositions(enc, dst, offset) {
+    // Encodes the copy of positions after every step so far into `dst`; true when they are in the
+    // store's order (else in the device's)
+    copyPositions(enc, dst, offset, count = ORDER_ON_GPU) {
+      if (toDevice && count >= ORDER_ON_GPU) {
+        const pass = enc.beginComputePass();
+        pass.setPipeline(unpermute);
+        pass.setBindGroup(0, unpermuteGroups[parity]);
+        pass.dispatchWorkgroups(Math.ceil(n / 256));
+        pass.end();
+        enc.copyBufferToBuffer(ordered, 0, dst, offset, n * D * 4);
+        return true;
+      }
       enc.copyBufferToBuffer(positions[parity], 0, dst, offset, n * D * 4);
-      return true;
+      return !toDevice;
     },
 
     /**
@@ -361,6 +410,10 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
      * the rows since.
      */
     readPositions(data, steps, inStoreOrder, through) {
+      if (!inStoreOrder) {
+        if (rowsMoved(simulator, bodies)) return writePermutedBack(simulator, bodies, data, toDevice, origin, steps, null, D);
+        return host.readBack(through, store.versions.pos !== uploaded.pos, () => writePermutedBack(simulator, bodies, data, toDevice, origin, steps, host.mirror, D));
+      }
       const write = () => writePositionsBack(simulator, bodies, data, D, origin, steps);
       if (rowsMoved(simulator, bodies)) return write();
       return host.readBack(through, store.versions.pos !== uploaded.pos, () => {
@@ -382,7 +435,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
       const statusAt = Math.ceil((sAt + plan.S.size * 4) / 8) * 8;
       const read = device.createBuffer({ size: Math.max(16, statusAt + statusBytes), usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
       const enc = device.createCommandEncoder();
-      enc.copyBufferToBuffer(positions[parity], 0, read, 0, posBytes);
+      this.copyPositions(enc, read, 0, ORDER_ON_GPU);
       enc.copyBufferToBuffer(S, 0, read, sAt, plan.S.size * 4);
       if (statusBytes) copyStatus(enc, read, statusAt);
       device.queue.submit([enc.finish()]);
@@ -415,8 +468,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
             if (column.name === 'force') return;
             const target = store[column.name];
             if (!target) return;
-            const count = n * column.width;
-            for (let k = 0; k < count; k++) target[k] = s[column.offset + k];
+            unplaceRows(target, s, column.offset, n, column.width, toDevice);
           });
           hostCopies = copiesOf();
           kept.forEach(({ column, rows, values }) => {
@@ -501,8 +553,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   function uploadColumn(name) {
     const column = plan.columns[name];
     const data = new Float32Array(n * column.width);
-    const source = store[name];
-    for (let k = 0; k < data.length; k++) data[k] = source[k];
+    placeRows(data, 0, store[name], n, column.width, toDevice);
     device.queue.writeBuffer(column.buffer === 'S' ? S : H, column.offset * 4, data);
   }
 
@@ -531,8 +582,40 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     rows.forEach((i, r) => {
       for (let k = 0; k < w; k++) values[r * w + k] = was[i * w + k] = now[i * w + k];
     });
-    writeRows(S, column.offset, w, rows, values);
+    writeRows(S, column.offset, w, toDevice ? rows.map(deviceRow) : rows, values);
   }
+}
+
+// Rows of `source` (`width` numbers each, the store's order) into `target` from `offset`, each at
+// its device row
+function placeRows(target, offset, source, n, width, toDevice) {
+  if (!toDevice) {
+    for (let k = 0, count = n * width; k < count; k++) target[offset + k] = source[k];
+    return;
+  }
+  for (let i = 0; i < n; i++) {
+    const at = offset + toDevice[i] * width;
+    for (let k = 0; k < width; k++) target[at + k] = source[i * width + k];
+  }
+}
+
+// The reverse: rows read from the device (from `offset` of `data`) into `target` in the store's order
+function unplaceRows(target, data, offset, n, width, toDevice) {
+  if (!toDevice) {
+    for (let k = 0, count = n * width; k < count; k++) target[k] = data[offset + k];
+    return;
+  }
+  for (let i = 0; i < n; i++) {
+    const at = offset + toDevice[i] * width;
+    for (let k = 0; k < width; k++) target[i * width + k] = data[at + k];
+  }
+}
+
+// f32 rows in the device's order
+function permuteRows(values, n, width, toDevice) {
+  const out = new Float32Array(values.length);
+  placeRows(out, 0, values, n, width, toDevice);
+  return out;
 }
 
 function sameSlot(data, last, floats) {
@@ -542,9 +625,15 @@ function sameSlot(data, last, floats) {
 }
 
 // Links as rows of entries: every link at both of its bodies (a link from a body to itself twice),
-// in link order within a row, with its index and the body's role (bit 31: the to end)
-function linkTable(springs, n) {
-  const from = springs.from, to = springs.to, m = springs.n;
+// in link order within a row, with its index and the body's role (bit 31: the to end). Rows are the
+// device's: links keep their order, their ends move with the bodies.
+function linkTable(springs, n, toDevice) {
+  const m = springs.n;
+  let from = springs.from, to = springs.to;
+  if (toDevice) {
+    from = Uint32Array.from(from.subarray(0, m), i => toDevice[i]);
+    to = Uint32Array.from(to.subarray(0, m), i => toDevice[i]);
+  }
   const starts = new Uint32Array(n + 1);
   for (let s = 0; s < m; s++) { starts[from[s] + 1]++; starts[to[s] + 1]++; }
   for (let i = 0; i < n; i++) starts[i + 1] += starts[i];
@@ -623,8 +712,9 @@ function writeLinkColumn(column, source, target, links) {
 
 // The rows of a group column in group order (rows of a negative or missing group left out), cut
 // into runs of at most GROUP_RUN rows of one group: [runs, groups, rows, the rows, the first row of
-// each run (runs + 1), the first run of each group (groups + 1)]
-function groupBlock(column, n) {
+// each run (runs + 1), the first run of each group (groups + 1)]. The rows are the device's, in the
+// store's order within a group, so groups add up in the CPU's order.
+function groupBlock(column, n, toDevice) {
   const rows = [];
   for (let i = 0; i < n; i++) if (column[i] >= 0) rows.push(i);
   // by group, then by row: the order the CPU adds them up in, within a group
@@ -646,7 +736,7 @@ function groupBlock(column, n) {
   for (let q = group + 1; q <= count; q++) groupRuns[q] = runs;
   const words = new Uint32Array(3 + rows.length + runs + 1 + count + 1);
   words[0] = runs; words[1] = count; words[2] = rows.length;
-  words.set(rows, 3);
+  words.set(toDevice ? rows.map(i => toDevice[i]) : rows, 3);
   words.set(runStarts, 3 + rows.length);
   words.set(groupRuns, 3 + rows.length + runs + 1);
   return { words, runs, count };
