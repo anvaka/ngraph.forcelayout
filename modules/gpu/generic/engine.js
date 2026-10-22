@@ -5,7 +5,7 @@
 import { getPipeline } from '../device.js';
 import { kernelCode, bindingsOf } from './emit.js';
 import { THREADS, GROUP_RUN, LINK_CHUNK } from './plan.js';
-import { buildPyramid } from '../pyramid/build.js';
+import { buildPyramid, pyramidStatus } from '../pyramid/build.js';
 import { slotFiller } from './values.js';
 import { chooseOrigin, relativePositions as relative, writePositionsBack, rowsMoved } from '../buffers.js';
 import { createRowWriter, trackHostPositions } from '../rows.js';
@@ -109,6 +109,9 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   // Structures with status words on the device (work caps passed, ...): {buffer, offset, size,
   // message(words), stages}
   const statuses = [];
+  if (tree && tree.status) {
+    statuses.push(Object.assign({ message: pyramidStatus, stages: plan.pyramid.channels.map(c => c.stage) }, tree.status));
+  }
   // Bind groups per layout and parity
   const bindGroups = kernel => [0, 1].map(p => device.createBindGroup({
     layout: pipelineOf[kernel.name].getBindGroupLayout(0),
