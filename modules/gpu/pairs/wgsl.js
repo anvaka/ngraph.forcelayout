@@ -41,11 +41,15 @@ export const CELL_GROWTH = 1 + 1 / 1024;
 // Cell coordinates are clamped here, so that adding the neighbour offsets cannot overflow
 const CELL_LIMIT = 1073741823;
 
-// Words of pairArgs
+// A step whose pair work is over the cap runs in slices of at most the cap, each in its own
+// submit (see build.js); at most this many per step
+export const MAX_SLICES = 64;
+// Words of pairArgs; a sliced step's indirect dispatch sizes per slice from SLICE_EVAL and
+// SLICE_RANK (3 words each)
 export const ARGS = {
   RANK_X: 0, RANK_Y: 1, RANK_Z: 2, EVAL_X: 3, EVAL_Y: 4, EVAL_Z: 5,
   RANK_TOTAL: 6, FLAGS: 7, ALLOC: 8, OK: 9, EVAL_COUNT: 10, RANK_COUNT: 11,
-  WORDS: 16,
+  SLICE_EVAL: 16, SLICE_RANK: 16 + 3 * MAX_SLICES, WORDS: 16 + 6 * MAX_SLICES,
 };
 const OVER = 1, CROWDED = 2;
 // Words per body in pairBody: bucket, slot, rank, first chunk, chunks, first rank chunk, then the
@@ -66,6 +70,11 @@ function u32(value) {
 
 const LINEAR = '@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u';
 const linearId = wg => `gid.x + gid.y * nwg.x * ${u32(wg)}`;
+
+// A sliced step's numbers, at a dynamic offset: the slices of the step (k), or which slice this
+// dispatch works on (index; its chunks start at index * PP.cap)
+const SLICE = binding => `struct PairSlice { k: u32, index: u32, pad0: u32, pad1: u32 };
+@group(0) @binding(${binding}) var<uniform> SL: PairSlice;`;
 
 const PARAMS = `struct PairParams { n: u32, mask: u32, size: u32, blocks: u32, cap: u32, sort: u32, owners: u32, home: u32 };
 @group(0) @binding(0) var<uniform> PP: PairParams;`;
@@ -287,13 +296,13 @@ fn main(${LINEAR}) {
 
   // One thread: rank work over the cap stops the step's pair work, and the status keeps the first
   // stage and count that went over until the runner reads it
-  const stop = (count, code) => `pairArgs[${ARGS.OK}] = 0u;
+  const stop = (count, code, capacity = 'PP.cap') => `pairArgs[${ARGS.OK}] = 0u;
     if (pairStatus[0] == 0u) {
       pairStatus[0] = ${u32(code)};
       pairStatus[1] = PP.sort;
       // a total at or under the cap has wrapped past 2^32
-      pairStatus[2] = select(0xffffffffu, ${count}, ${count} > PP.cap);
-      pairStatus[3] = PP.cap;
+      pairStatus[2] = select(0xffffffffu, ${count}, ${count} > ${capacity});
+      pairStatus[3] = ${capacity};
     }`;
   out.ARGS_RANK = {
     bindings: ['uniform', 'storage', 'storage'],
@@ -354,8 +363,217 @@ fn main(${LINEAR}) {
   while (words.length < layout.snap4 * 4) words.push('0u');
   const columnBuffers = [];
   spec.snapshot.forEach(c => { if (columnBuffers.indexOf(c.ref.buffer) < 0) columnBuffers.push(c.ref.buffer); });
-  out.ORDER = {
-    bindings: ['uniform', 'storage', 'read', 'storage', 'storage', 'storage', 'read'].concat(columnBuffers.map(() => 'read')),
+  out.ORDER = orderKernel(spec, words, columnBuffers, false);
+  out.ORDER_S = orderKernel(spec, words, columnBuffers, true);
+
+  out.ARGS = {
+    bindings: ['uniform', 'storage', 'storage'],
+    code: `${PARAMS}
+@group(0) @binding(1) var<storage, read_write> pairArgs: array<u32>;
+@group(0) @binding(2) var<storage, read_write> pairStatus: array<u32>;
+@compute @workgroup_size(1)
+fn main() {
+  let total = pairArgs[${ARGS.ALLOC}];
+  pairStatus[4u + PP.sort] = total;
+  pairArgs[${ARGS.EVAL_X}] = 0u; pairArgs[${ARGS.EVAL_Y}] = 1u; pairArgs[${ARGS.EVAL_Z}] = 1u;
+  pairArgs[${ARGS.EVAL_COUNT}] = 0u;
+  if ((pairArgs[${ARGS.FLAGS}] & ${u32(OVER)}) != 0u || total > PP.cap) {
+    ${stop('total', 1)}
+  } else if (pairArgs[${ARGS.OK}] != 0u) {
+    ${gridArgs('eval', 'total', EVAL_WG, ARGS.EVAL_X, spec.maxGroups)}
+    pairArgs[${ARGS.EVAL_COUNT}] = total;
+  }
+  pairArgs[${ARGS.FLAGS}] = 0u; pairArgs[${ARGS.ALLOC}] = 0u;
+}
+`,
+  };
+  Object.assign(out, slicedSortKernels(spec, stop));
+  return out;
+}
+
+// The kernels a sliced step adds to its sort (ORDER_S is ORDER's variant). Its pair work and rank
+// work run in slices of at most PP.cap chunks, each in a submit of its own; owner lists are
+// written per slice, so memory stays at one slice:
+//   PLACE_S        PLACE, without writing rank chunk owners
+//   ARGS_RANK_S    ARGS_RANK against the step's slices (SL.k of them); a dispatch size per slice
+//   RANK_OWNERS_S  per body of a crowded bucket: the owners of its rank chunks in this slice
+//   RANK_S         RANK over this slice's rank chunks
+//   ARGS_S         ARGS against the step's slices; a dispatch size per slice
+//   EVAL_OWNERS_S  per body: the owners (its place in bucket order) of its chunks in this slice
+function slicedSortKernels(spec, stop) {
+  const { layout } = spec;
+  const B = layout.body;
+  const out = {};
+  // a slice's chunks, from `first` for `count`, clipped to slice SL.index
+  const clip = (first, count) => `let base = SL.index * PP.cap;
+  let lo = max(${first}, base);
+  let hi = min(${first} + ${count}, base + PP.cap);`;
+  // the indirect dispatch size of each slice of `total` chunks, `wg` threads a workgroup
+  const sliceArgs = (total, wg, at) => `for (var s = 0u; s < SL.k; s++) {
+      let count = select(0u, min(PP.cap, ${total} - s * PP.cap), ${total} > s * PP.cap);
+      let w = (count + ${u32(wg - 1)}) / ${u32(wg)};
+      pairArgs[${u32(at)} + 3u * s] = min(w, ${u32(spec.maxGroups)});
+      pairArgs[${u32(at)} + 3u * s + 1u] = (w + ${u32(spec.maxGroups - 1)}) / ${u32(spec.maxGroups)};
+      pairArgs[${u32(at)} + 3u * s + 2u] = 1u;
+    }`;
+  const zeroArgs = at => `for (var s = 0u; s < SL.k; s++) { pairArgs[${u32(at)} + 3u * s] = 0u; pairArgs[${u32(at)} + 3u * s + 1u] = 1u; pairArgs[${u32(at)} + 3u * s + 2u] = 1u; }`;
+
+  out.PLACE_S = {
+    bindings: ['uniform', 'read', 'storage', 'storage', 'storage'],
+    code: `${PARAMS}
+@group(0) @binding(1) var<storage, read> pairStart: array<u32>;
+@group(0) @binding(2) var<storage, read_write> pairBody: array<u32>;
+@group(0) @binding(3) var<storage, read_write> pairList: array<u32>;
+@group(0) @binding(4) var<storage, read_write> pairArgs: array<atomic<u32>>;
+${START_FN}
+@compute @workgroup_size(${WG})
+fn main(${LINEAR}) {
+  let i = ${linearId(WG)};
+  if (i >= PP.n) { return; }
+  let record = i * ${u32(B)};
+  let h = pairBody[record + ${u32(BODY.BUCKET)}];
+  let s = pair_start(h);
+  let k = pair_start(h + 1u) - s;
+  pairList[s + pairBody[record + ${u32(BODY.SLOT)}]] = i;
+  if (k > ${u32(RANK_DIRECT)}) {
+    atomicOr(&pairArgs[${ARGS.FLAGS}], ${u32(CROWDED)});
+    pairBody[record + ${u32(BODY.RANK_FIRST)}] = atomicAdd(&pairArgs[${ARGS.RANK_TOTAL}], (k + ${u32(CHUNK - 1)}) / ${u32(CHUNK)});
+  }
+}
+`,
+  };
+
+  out.ARGS_RANK_S = {
+    bindings: ['uniform', 'storage', 'storage', 'dynamic'],
+    code: `${PARAMS}
+@group(0) @binding(1) var<storage, read_write> pairArgs: array<u32>;
+@group(0) @binding(2) var<storage, read_write> pairStatus: array<u32>;
+${SLICE(3)}
+@compute @workgroup_size(1)
+fn main() {
+  let ranks = pairArgs[${ARGS.RANK_TOTAL}];
+  let crowded = (pairArgs[${ARGS.FLAGS}] & ${u32(CROWDED)}) != 0u;
+  let capacity = SL.k * PP.cap;
+  pairArgs[${ARGS.OK}] = 1u;
+  pairArgs[${ARGS.RANK_COUNT}] = 0u;
+  ${zeroArgs(ARGS.SLICE_RANK)}
+  if (crowded && ranks > capacity) {
+    ${stop('ranks', 4, 'capacity')}
+  } else if (crowded) {
+    ${sliceArgs('ranks', RANK_WG, ARGS.SLICE_RANK)}
+    pairArgs[${ARGS.RANK_COUNT}] = ranks;
+  }
+  pairArgs[${ARGS.RANK_TOTAL}] = 0u;
+}
+`,
+  };
+
+  out.RANK_OWNERS_S = {
+    bindings: ['uniform', 'read', 'read', 'read', 'storage', 'dynamic'],
+    code: `${PARAMS}
+@group(0) @binding(1) var<storage, read> pairArgs: array<u32>;
+@group(0) @binding(2) var<storage, read> pairStart: array<u32>;
+@group(0) @binding(3) var<storage, read> pairBody: array<u32>;
+@group(0) @binding(4) var<storage, read_write> pairList: array<u32>;
+${SLICE(5)}
+${START_FN}
+@compute @workgroup_size(${WG})
+fn main(${LINEAR}) {
+  let i = ${linearId(WG)};
+  if (i >= PP.n || pairArgs[${ARGS.RANK_COUNT}] == 0u) { return; }
+  let record = i * ${u32(B)};
+  let h = pairBody[record + ${u32(BODY.BUCKET)}];
+  let k = pair_start(h + 1u) - pair_start(h);
+  if (k <= ${u32(RANK_DIRECT)}) { return; }
+  ${clip(`pairBody[record + ${u32(BODY.RANK_FIRST)}]`, `(k + ${u32(CHUNK - 1)}) / ${u32(CHUNK)}`)}
+  for (var c = lo; c < hi; c++) { pairList[PP.n + c - base] = i; }
+}
+`,
+  };
+
+  out.RANK_S = {
+    bindings: ['uniform', 'read', 'read', 'storage', 'read', 'dynamic'],
+    indirect: ARGS.SLICE_RANK,
+    code: `${PARAMS}
+@group(0) @binding(1) var<storage, read> pairArgs: array<u32>;
+@group(0) @binding(2) var<storage, read> pairStart: array<u32>;
+@group(0) @binding(3) var<storage, read_write> pairBody: array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read> pairList: array<u32>;
+${SLICE(5)}
+${START_FN}
+@compute @workgroup_size(${RANK_WG})
+fn main(${LINEAR}) {
+  let t = ${linearId(RANK_WG)};
+  let chunk = SL.index * PP.cap + t;
+  if (t >= PP.cap || chunk >= pairArgs[${ARGS.RANK_COUNT}]) { return; }
+  let i = pairList[PP.n + t];
+  let record = i * ${u32(B)};
+  let c = chunk - atomicLoad(&pairBody[record + ${u32(BODY.RANK_FIRST)}]);
+  let h = atomicLoad(&pairBody[record + ${u32(BODY.BUCKET)}]);
+  let lo = pair_start(h) + c * ${u32(CHUNK)};
+  let hi = min(pair_start(h + 1u), lo + ${u32(CHUNK)});
+  var lower = 0u;
+  for (var at = lo; at < hi; at++) { lower += select(0u, 1u, pairList[at] < i); }
+  if (lower > 0u) { atomicAdd(&pairBody[record + ${u32(BODY.RANK)}], lower); }
+}
+`,
+  };
+
+  out.ARGS_S = {
+    bindings: ['uniform', 'storage', 'storage', 'dynamic'],
+    code: `${PARAMS}
+@group(0) @binding(1) var<storage, read_write> pairArgs: array<u32>;
+@group(0) @binding(2) var<storage, read_write> pairStatus: array<u32>;
+${SLICE(3)}
+@compute @workgroup_size(1)
+fn main() {
+  let total = pairArgs[${ARGS.ALLOC}];
+  let capacity = SL.k * PP.cap;
+  pairStatus[4u + PP.sort] = total;
+  pairArgs[${ARGS.EVAL_COUNT}] = 0u;
+  ${zeroArgs(ARGS.SLICE_EVAL)}
+  if ((pairArgs[${ARGS.FLAGS}] & ${u32(OVER)}) != 0u || total > capacity) {
+    ${stop('total', 3, 'capacity')}
+  } else if (pairArgs[${ARGS.OK}] != 0u) {
+    ${sliceArgs('total', EVAL_WG, ARGS.SLICE_EVAL)}
+    pairArgs[${ARGS.EVAL_COUNT}] = total;
+  }
+  pairArgs[${ARGS.FLAGS}] = 0u; pairArgs[${ARGS.ALLOC}] = 0u;
+}
+`,
+  };
+
+  out.EVAL_OWNERS_S = {
+    bindings: ['uniform', 'read', 'read', 'storage', 'dynamic'],
+    code: `${PARAMS}
+@group(0) @binding(1) var<storage, read> pairArgs: array<u32>;
+@group(0) @binding(2) var<storage, read> pairBody: array<u32>;
+@group(0) @binding(3) var<storage, read_write> pairList: array<u32>;
+${SLICE(4)}
+@compute @workgroup_size(${WG})
+fn main(${LINEAR}) {
+  let i = ${linearId(WG)};
+  if (i >= PP.n || pairArgs[${ARGS.EVAL_COUNT}] == 0u) { return; }
+  let record = i * ${u32(B)};
+  let p = pairList[PP.home + PP.n * ${u32(layout.home)} + i];
+  ${clip(`pairBody[record + ${u32(BODY.FIRST)}]`, `pairBody[record + ${u32(BODY.COUNT)}]`)}
+  for (var c = lo; c < hi; c++) { pairList[PP.owners + c - base] = p; }
+}
+`,
+  };
+  return out;
+}
+
+// ORDER (see the top of this file). `words`: the snapshot's words, `columnBuffers`: the buffers
+// its columns come from. Sliced, it checks the claimed chunks against the step's slices and
+// keeps each body's place in bucket order for the slices' owner lists, instead of writing them
+function orderKernel(spec, words, columnBuffers, sliced) {
+  const { D, layout } = spec;
+  const B = layout.body;
+  // a sliced step may claim up to its slices' chunks, and leaves the chunk owners to each slice
+  const capacity = sliced ? 'capacity' : 'PP.cap';
+  return {
+    bindings: ['uniform', 'storage', 'read', 'storage', 'storage', 'storage', 'read'].concat(columnBuffers.map(() => 'read'), sliced ? ['dynamic'] : []),
     columns: columnBuffers,
     code: `${PARAMS}
 @group(0) @binding(1) var<storage, read_write> pairArgs: array<atomic<u32>>;
@@ -364,11 +582,11 @@ fn main(${LINEAR}) {
 @group(0) @binding(4) var<storage, read_write> pairList: array<u32>;
 @group(0) @binding(5) var<storage, read_write> pairSnap: array<vec4u>;
 @group(0) @binding(6) var<storage, read> X: array<f32>;
-${columnBuffers.map((name, k) => `@group(0) @binding(${7 + k}) var<storage, read> ${name}: array<f32>;`).join('\n')}
+${columnBuffers.map((name, k) => `@group(0) @binding(${7 + k}) var<storage, read> ${name}: array<f32>;`).join('\n')}${sliced ? '\n' + SLICE(7 + columnBuffers.length) : ''}
 var<workgroup> claimed: atomic<u32>;
 var<workgroup> base: u32;
 var<workgroup> fits: u32;
-${hash}
+${hashFn(D)}
 ${START_FN}
 @compute @workgroup_size(${WG})
 fn main(${LINEAR}, @builtin(local_invocation_index) li: u32) {
@@ -402,8 +620,8 @@ ${countNeighbours(D, '    ')}
   workgroupBarrier();
   if (li == 0u) {
     let total = atomicLoad(&claimed);
-    base = atomicAdd(&pairArgs[${ARGS.ALLOC}], total);
-    fits = select(0u, 1u, base <= PP.cap && base + total <= PP.cap);
+    base = atomicAdd(&pairArgs[${ARGS.ALLOC}], total);${sliced ? '\n    let capacity = SL.k * PP.cap;' : ''}
+    fits = select(0u, 1u, base <= ${capacity} && base + total <= ${capacity});
     if (fits == 0u) { atomicOr(&pairArgs[${ARGS.FLAGS}], ${u32(OVER)}); }
   }
   workgroupBarrier();
@@ -416,34 +634,11 @@ ${countNeighbours(D, '    ')}
     pairList[home] = first;
     ${each(D, k => `pairList[home + ${u32(1 + k)}] = bitcast<u32>(c${k});`)}
     ${each(layout.maskWords, w => `pairList[home + ${u32(1 + D + w)}] = home${w};`)}
-    for (var c = 0u; c < chunks; c++) { pairList[PP.owners + first + c] = p; }
+    ${sliced ? `pairList[PP.home + PP.n * ${u32(layout.home)} + i] = p;` : 'for (var c = 0u; c < chunks; c++) { pairList[PP.owners + first + c] = p; }'}
   }
 }
 `,
   };
-
-  out.ARGS = {
-    bindings: ['uniform', 'storage', 'storage'],
-    code: `${PARAMS}
-@group(0) @binding(1) var<storage, read_write> pairArgs: array<u32>;
-@group(0) @binding(2) var<storage, read_write> pairStatus: array<u32>;
-@compute @workgroup_size(1)
-fn main() {
-  let total = pairArgs[${ARGS.ALLOC}];
-  pairStatus[4u + PP.sort] = total;
-  pairArgs[${ARGS.EVAL_X}] = 0u; pairArgs[${ARGS.EVAL_Y}] = 1u; pairArgs[${ARGS.EVAL_Z}] = 1u;
-  pairArgs[${ARGS.EVAL_COUNT}] = 0u;
-  if ((pairArgs[${ARGS.FLAGS}] & ${u32(OVER)}) != 0u || total > PP.cap) {
-    ${stop('total', 1)}
-  } else if (pairArgs[${ARGS.OK}] != 0u) {
-    ${gridArgs('eval', 'total', EVAL_WG, ARGS.EVAL_X, spec.maxGroups)}
-    pairArgs[${ARGS.EVAL_COUNT}] = total;
-  }
-  pairArgs[${ARGS.FLAGS}] = 0u; pairArgs[${ARGS.ALLOC}] = 0u;
-}
-`,
-  };
-  return out;
 }
 
 /**
@@ -477,9 +672,11 @@ export function stageKernels(spec) {
   accumulators.forEach(a => { for (let k = 0; k < a.width; k++) totals.push(accumulatorName(a.column, k, a.width)); });
   const load = (who, base) => each(layout.snap4, w => `let ${who}${w} = pairSnap[${base} * ${u32(layout.snap4)} + ${u32(w)}];`, ' ');
 
-  const EVAL = {
-    bindings: ['uniform', 'dynamic', 'read', 'read', 'read', 'read', 'storage'].concat(sumsRead ? ['read'] : []),
-    indirect: ARGS.EVAL_X,
+  // A sliced step's chunk kernel works on the chunks of one slice: thread t on chunk
+  // SL.index * PP.cap + t, its owner and partial at t
+  const evalKernel = sliced => ({
+    bindings: ['uniform', 'dynamic', 'read', 'read', 'read', 'read', 'storage'].concat(sumsRead ? ['read'] : [], sliced ? ['dynamic'] : []),
+    indirect: sliced ? ARGS.SLICE_EVAL : ARGS.EVAL_X,
     partialWords,
     code: `${PARAMS}
 ${slot.decl(1)}
@@ -488,13 +685,14 @@ ${slot.decl(1)}
 @group(0) @binding(4) var<storage, read> pairList: array<u32>;
 @group(0) @binding(5) var<storage, read> pairSnap: array<vec4u>;
 @group(0) @binding(6) var<storage, read_write> pairPartial: array<f32>;
-${sumsRead ? `@group(0) @binding(7) var<storage, read> ${spec.sums.buffer}: array<f32>;` : ''}
+${sumsRead ? `@group(0) @binding(7) var<storage, read> ${spec.sums.buffer}: array<f32>;` : ''}${sliced ? '\n' + SLICE(sumsRead ? 8 : 7) : ''}
 ${hashFn(D)}
 ${START_FN}
 @compute @workgroup_size(${EVAL_WG})
 fn main(${LINEAR}) {
   let t = ${linearId(EVAL_WG)};
-  if (t >= pairArgs[${ARGS.EVAL_COUNT}]) { return; }
+  ${sliced ? `let chunk = SL.index * PP.cap + t;
+  if (t >= PP.cap || chunk >= pairArgs[${ARGS.EVAL_COUNT}]) { return; }` : `if (t >= pairArgs[${ARGS.EVAL_COUNT}]) { return; }`}
   let p = pairList[PP.owners + t];
   ${load('me', 'p')}
   let me = me${layout.index >> 2}.${AX[layout.index & 3]};
@@ -506,7 +704,7 @@ fn main(${LINEAR}) {
   // margin that drops only pairs the exact test drops
   let reach2 = radius * radius * 1.0001;
   ${totals.map(name => `var ${name} = 0.0;`).join(' ')}
-  var skip = (t - pairList[home]) * ${u32(CHUNK)};
+  var skip = (${sliced ? 'chunk' : 't'} - pairList[home]) * ${u32(CHUNK)};
   var left = ${u32(CHUNK)};
 ${forNeighbourBuckets(D, [
     'let s = pair_start(pb);',
@@ -529,7 +727,7 @@ ${forNeighbourBuckets(D, [
   ${totals.map((name, w) => `pairPartial[out + ${u32(w)}] = ${name};`).join(' ')}
 }
 `,
-  };
+  });
 
   const outputBuffers = [];
   const outputs = [];
@@ -564,5 +762,40 @@ fn main(${LINEAR}) {
 }
 `,
   };
-  return { EVAL, GATHER, accumulators, partialWords };
+
+  // A slice's gather adds the body's chunks in this slice onto what the slices before added (the
+  // first slice starts from 0): the same additions in the same order as GATHER
+  const GATHER_S = {
+    bindings: ['uniform', 'read', 'read', 'read'].concat(outputBuffers.map(() => 'storage'), ['dynamic']),
+    columns: outputBuffers,
+    code: `${PARAMS}
+@group(0) @binding(1) var<storage, read> pairArgs: array<u32>;
+@group(0) @binding(2) var<storage, read> pairBody: array<u32>;
+@group(0) @binding(3) var<storage, read> pairPartial: array<f32>;
+${outputBuffers.map((name, k) => `@group(0) @binding(${4 + k}) var<storage, read_write> ${name}: array<f32>;`).join('\n')}
+${SLICE(4 + outputBuffers.length)}
+@compute @workgroup_size(${WG})
+fn main(${LINEAR}) {
+  let i = ${linearId(WG)};
+  if (i >= PP.n) { return; }
+  let opening = SL.index == 0u;
+  ${outputs.map((ref, w) => `var total${w} = select(${ref}, 0.0, opening);`).join(' ')}
+  var added = false;
+  if (pairArgs[${ARGS.EVAL_COUNT}] != 0u) {
+    let record = i * ${u32(B)};
+    let first = pairBody[record + ${u32(BODY.FIRST)}];
+    let base = SL.index * PP.cap;
+    let lo = max(first, base);
+    let hi = min(first + pairBody[record + ${u32(BODY.COUNT)}], base + PP.cap);
+    for (var c = lo; c < hi; c++) {
+      let at = (c - base) * ${u32(partialWords)};
+      ${outputs.map((_, w) => `total${w} += pairPartial[at + ${u32(w)}];`).join(' ')}
+      added = true;
+    }
+  }
+  if (opening || added) { ${outputs.map((ref, w) => `${ref} = total${w};`).join(' ')} }
+}
+`,
+  };
+  return { EVAL: evalKernel(false), GATHER, EVAL_S: evalKernel(true), GATHER_S, accumulators, partialWords };
 }
