@@ -33,7 +33,7 @@ How it runs, by size and dimension:
 |---|---|
 | Up to 1,024 bodies (2,560 in 3D) | the whole step in one kernel when nothing splits it; repulsion and pair formulas exact over all pairs |
 | 2D and 3D, larger | repulsion through a grid pyramid (one group of tree passes per step above 16,384 bodies); pair formulas through a cell sort with a bounded work list (2D to 4D) |
-| The plain stock step in 2D, larger | today's grid kernels, byte for byte, while every link has the default length and stiffness and nothing is added to the step |
+| The plain stock step in 2D, larger | today's grid kernels, byte for byte, with today's origin: the same layout as today's module, step for step, while every link has the default length and stiffness and nothing is added to the step |
 | 4D and up | exact pairs, up to 16,384 bodies |
 | Grid fields | 2D and 3D |
 
@@ -173,7 +173,7 @@ A pair step that needs more than its cap runs in several submits ("slices") rath
 ## Known limits
 
 - **The plain stock 2D step above 1,024 bodies keeps today's grid kernels.** On relaxed layouts
-  with big hubs their force error is up to 2.76× the CPU tree's (megaStars), 1.25–1.28× on
+  with big hubs their force error is up to 3.19× the CPU tree's (megaStars), 1.25–1.28× on
   starOfStars, where the generic pyramid stays within 1.25×. The pyramid is as fast or faster
   from 2k to 100k bodies, but 1.26–1.45× slower on hub graphs (megaStars, EVA) from a random
   start. So the switch
