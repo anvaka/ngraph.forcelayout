@@ -5,7 +5,7 @@
 // The stock template for small graphs, with today's WGSL byte for byte (test/t4.js). The
 // one-kernel step of design section 6.1 replaces it (M1).
 import { LAW_VALUES } from './grid.js';
-import { emitLaw, lawPrologue, lawValueCount, writeLawValues } from '../wgsl/print.js';
+import { emitLaw, lawPrologue, lawValueCount } from '../wgsl/print.js';
 import { getPipeline } from '../device.js';
 
 export const SMALL_MAX_NODES = 1024;
@@ -216,12 +216,11 @@ export async function createSmallEngine(device, { n, edges, init, mass, law = nu
       pu[2] = s.integrator === 'fire' ? 1 : 0;
       pf[4] = s.gravity; pf[5] = s.springLength; pf[6] = s.springCoefficient; pf[7] = s.dragCoefficient;
       pf[8] = s.timeStep; pf[9] = s.maxVelocity;
-      if (law) writeLawValues(law, pf, 12);
       device.queue.writeBuffer(params, 0, paramBuf);
     },
-    // After law.update(): the law's numbers for the next steps
-    setLawValues() {
-      writeLawValues(law, pf, 12);
+    // The law's numbers for the next steps (see writeLawValues in ../wgsl/print.js)
+    setLawValues(values) {
+      pf.set(values, 12);
       device.queue.writeBuffer(params, 48, paramBuf, 48);
     },
     resetFire,

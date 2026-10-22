@@ -23,7 +23,7 @@
 // size, and its WGSL is today's text byte for byte (test/t4.js). Its JS side takes the masses
 // from the simulator's store, compiles pipelines asynchronously, and can feed LOCAL and FORCE a
 // different copy of P per step (the law-variant pipelines, see run()).
-import { emitLaw, lawPrologue, lawValueCount, writeLawValues } from '../wgsl/print.js';
+import { emitLaw, lawPrologue, lawValueCount } from '../wgsl/print.js';
 import { getPipeline } from '../device.js';
 
 const WG = 256;
@@ -897,12 +897,11 @@ export async function createGridEngine(device, { n, edges, init, mass, law = nul
       pf[4] = s.gravity; pf[5] = s.springLength; pf[6] = s.springCoefficient; pf[7] = s.dragCoefficient;
       pf[8] = s.timeStep; pf[9] = s.maxVelocity; pu[11] = s.integrator === 'fire' ? 1 : 0;
       fireMode = pu[11] === 1;
-      if (law) writeLawValues(law, pf, 16);
       device.queue.writeBuffer(params, 0, paramBuf);
     },
-    // After law.update(): the law's numbers for the next steps
-    setLawValues() {
-      writeLawValues(law, pf, 16);
+    // The law's numbers for the next steps (see writeLawValues in ../wgsl/print.js)
+    setLawValues(values) {
+      pf.set(values, 16);
       device.queue.writeBuffer(params, 64, paramBuf, 64);
     },
     resetFire,

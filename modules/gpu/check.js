@@ -169,7 +169,7 @@ function checkRepulsion(stage, simulator, printer) {
   if (described.functions.length) return refuse('laws with JavaScript functions run on the CPU only');
   if (described.isDefault) return Object.assign(runs('part of the step'), { law: null });
   // The law the CPU runs, compiled; its numbers as of this step
-  const law = simulator.stageValues(stage.name).law;
+  const { law, lawValues } = simulator.stageValues(stage.name);
   const count = lawValueCount(law);
   if (count > LAW_VALUES) return refuse(`WebGPU takes laws with up to ${LAW_VALUES} numbers for now; this one has ${count}`);
   try {
@@ -177,9 +177,10 @@ function checkRepulsion(stage, simulator, printer) {
   } catch (e) {
     return refuse('the law: ' + e.message);
   }
-  const problem = lawValueProblem(law);
+  const values = lawValues || law.values;
+  const problem = lawValueProblem(law, values);
   if (problem) return refuse(`the law's ${problem.name} is ${problem.problem}`);
-  return Object.assign(runs('part of the step'), { law, warnings: lawValueWarnings(law) });
+  return Object.assign(runs('part of the step'), { law, warnings: lawValueWarnings(law, values) });
 }
 
 function checkIntegrate(stage) {
