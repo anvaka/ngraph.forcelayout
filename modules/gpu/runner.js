@@ -17,7 +17,7 @@
 // The runner drives an engine (the stock grid template, templates/stock.js, or a generic plan,
 // generic/engine.js) through one interface: prepare(hostOwns, steps) uploads, run(count,
 // firstStep, …) encodes steps, copyPositions()/readPositions() read back, readDevice() syncs.
-import { watchDevice, submitCost } from './device.js';
+import { watchDevice, submitCost, deviceSlowdown } from './device.js';
 import { GUARD } from './program.js';
 import { DEVICE_LOST } from './check.js';
 import { createStockEngine } from './templates/stock.js';
@@ -39,7 +39,11 @@ const CAPPED_SUBMIT_MS = 1000;
 // large graph's positions costs milliseconds of the main thread.
 const BURST_MS = 4;
 // Settings that change the physics: a 'step' listener must not change them
-const PHYSICS_SETTINGS = ['gravity', 'springLength', 'springCoefficient', 'dragCoefficient', 'timeStep', 'maxVelocity', 'integrator', 'theta'];
+const PHYSICS_SETTINGS = ['gravity', 'springLength', 'springCoefficient', 'dragCoefficient', 'timeStep', 'maxVelocity', 'integrator', 'theta', 'nbody', 'adaptiveTimeStepWeight'];
+// Settings that shape the plan. Written straight into simulator.settings rather than through a
+// setter, they fire no 'settings' event and leave programVersion() as it is, yet the CPU follows
+// them: the runner compares them on every call (numbers the engines read on every call anyway)
+const PLAN_SETTINGS = ['integrator', 'nbody', 'inertia', 'repulsionCharge', 'repulsionSensitivity'];
 const LINK_COLUMNS = ['from', 'to', 'length', 'coefficient'];
 
 /**
@@ -96,6 +100,7 @@ function createRunner(layout, backend) {
   let linkVersions = null; // link columns as built
   let fireState = null;    // FIRE's (alpha, steps downhill, ...) from the last sync
   let submitMs = 0;
+  let slowdown = 1;        // how much slower than the Mac the work caps were sized on (device.js)
   let marks = null;        // what a 'step' listener must not change
 
   // Readbacks: positions after a batch, and (with timestamp queries) its GPU time
@@ -160,6 +165,7 @@ function createRunner(layout, backend) {
     }
     try {
       submitMs = await submitCost(device);
+      slowdown = backend.slowdown || await deviceSlowdown(device);
       await build();
     } catch (e) {
       release();
@@ -183,7 +189,7 @@ function createRunner(layout, backend) {
     linkVersions = LINK_COLUMNS.map(name => springStore.versions[name]);
     marks = markList(plan);
     const create = plan.template === 'grid' ? createStockEngine : createGenericEngine;
-    const next = store.n > 0 ? await create(device, { simulator, plan, fireState, warn: warnOnce }) : null;
+    const next = store.n > 0 ? await create(device, { simulator, plan, fireState, warn: warnOnce, slowdown, pairEstimate: backend.pairEstimate }) : null;
     if (released) { if (next) next.destroy(); return; }
     engine = next;
     hostOwns = false;
@@ -320,9 +326,9 @@ function createRunner(layout, backend) {
   // caps within a submit (a gate opens, a radius grows), so no more than fit CAPPED_SUBMIT_MS then.
   function stepsPerSubmit() {
     const ms = gpuMsPerStep();
+    const capped = engine && engine.cappedMs ? Math.max(1, Math.floor(CAPPED_SUBMIT_MS / engine.cappedMs)) : MAX_BATCH;
     // before a step is timed: pair formulas near their work cap could make 64 steps long
-    if (!(ms > 0)) return engine && engine.pairs ? FIRST_PAIR_BATCH : DEFAULT_BATCH;
-    const capped = engine && engine.cappedMs ? Math.floor(CAPPED_SUBMIT_MS / engine.cappedMs) : MAX_BATCH;
+    if (!(ms > 0)) return Math.min(capped, engine && engine.pairs ? FIRST_PAIR_BATCH : DEFAULT_BATCH);
     const most = Math.floor(MAX_SUBMIT_MS / ms);
     const least = Math.ceil(submitMs / (0.1 * ms));
     return Math.max(1, Math.min(MAX_BATCH, capped, Math.max(most, least)));
@@ -546,13 +552,20 @@ function createRunner(layout, backend) {
   // The step's structure, to notice a change cheaply on every call: the stages and their
   // functions (a stage added, removed or replaced), columns defined or removed, and, after a
   // 'settings' event, program().version (the law, the inertia, the integrator, charge columns,
-  // the adaptive time step)
+  // the adaptive time step); and settings written without a setter (planSettings())
   function stageSnapshot(version) {
     const names = simulator.stages();
-    return { names, runs: names.map(name => simulator.getStage(name)), columns: store.columnsVersion + springStore.columnsVersion, version };
+    return { names, runs: names.map(name => simulator.getStage(name)), columns: store.columnsVersion + springStore.columnsVersion, version, settings: planSettings() };
+  }
+
+  function planSettings() {
+    const settings = simulator.settings;
+    return PLAN_SETTINGS.map(key => settings[key]).concat(settings.adaptiveTimeStepWeight > 0);
   }
 
   function structureChanged() {
+    const settings = planSettings();
+    if (settings.some((value, i) => !Object.is(value, structure.settings[i]))) return true;
     if (simulator.programVersion) return simulator.programVersion() !== structure.version;
     const names = simulator.stages();
     if (names.length !== structure.names.length) return true;
@@ -583,13 +596,16 @@ function createRunner(layout, backend) {
   }
 
   function addSample(ms, steps) {
+    if (engine && engine.observeTiming) engine.observeTiming(ms / steps);
     samples.push({ ms, steps });
     if (samples.length > STATS_WINDOW) samples.shift();
   }
 
   /**
-   * {msPerStep, source, steps, engine, nodes, stepsPerSubmit, halted}: msPerStep is GPU time per
-   * step from timestamp queries when the device has them, else wall clock between readbacks.
+   * {msPerStep, source, steps, engine, nodes, stepsPerSubmit, slowdown, halted}: msPerStep is GPU
+   * time per step from timestamp queries when the device has them, else wall clock between
+   * readbacks; slowdown is how many times slower than the Mac the work caps were sized on the
+   * device measured.
    */
   function stats() {
     return {
@@ -599,6 +615,7 @@ function createRunner(layout, backend) {
       engine: engine ? engine.kind : 'none',
       nodes: engine ? engine.n : 0,
       stepsPerSubmit: stepsPerSubmit(),
+      slowdown,
       halted: halted ? halted.message : null,
     };
   }

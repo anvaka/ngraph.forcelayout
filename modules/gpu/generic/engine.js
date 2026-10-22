@@ -5,18 +5,19 @@
 import { getPipeline } from '../device.js';
 import { kernelCode, bindingsOf } from './emit.js';
 import { THREADS, GROUP_RUN, LINK_CHUNK } from './plan.js';
-import { buildPyramid, pyramidStatus } from '../pyramid/build.js';
+import { buildPyramid, pyramidStatus, WORK_CAP } from '../pyramid/build.js';
 import { buildPairs } from '../pairs/build.js';
 import { buildGrid } from '../grid/build.js';
-import { gridStatus } from '../grid/plan.js';
+import { gridStatus, gridCappedMs } from '../grid/plan.js';
 import { slotFiller } from './values.js';
 import { chooseOrigin, relativePositions as relative, writePositionsBack, rowsMoved } from '../buffers.js';
 import { createRowWriter, trackHostPositions } from '../rows.js';
 
-// GPU time of one step at a structure's work cap, measured on an M4 Max: a pair stage at the pair
-// cap (3.6-6.3 ms whatever the formula, gpu-critic-2's pairs review) and the pyramid's crowded cells
-// at theirs (about 20 ms). The runner bounds steps per submit by them (see cappedMs).
-const PAIR_STAGE_CAPPED_MS = 6.5;
+// GPU time of a step of the pyramid's crowded cells at their work cap on the M4 Max the cap was
+// sized on (about 20 ms); on other devices the cap and this time scale with the device's
+// slowdown (device.js), so that a capped step takes about as long. A pair stage's comes from the
+// pairs' measured rate, a grid field's from its size and body count (gridCappedMs()). The runner
+// bounds steps per submit by them (see cappedMs).
 const PYRAMID_CAPPED_MS = 20;
 
 // Integers above this are not exact in f32
@@ -28,7 +29,7 @@ const RING_SLOTS = 1024;
  * Builds a generic plan's buffers and pipelines from the store of `simulator`. Resolves to the
  * engine the runner drives (see runner.js), or rejects naming the kernel that failed.
  */
-export async function createGenericEngine(device, { simulator, plan, fireState, warn }) {
+export async function createGenericEngine(device, { simulator, plan, fireState, warn, slowdown = 1, pairEstimate = 1 }) {
   const store = simulator.store, springs = simulator.springStore;
   const D = plan.D, n = store.n, cap = plan.cap;
   const code = kernelCode(plan);
@@ -114,7 +115,9 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   let tree = null;
   if (plan.pyramid) {
     try {
-      tree = await buildPyramid(device, plan.pyramid, { buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes, dynamic: true } });
+      tree = await buildPyramid(device, plan.pyramid, {
+        buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes, dynamic: true }, workCap: WORK_CAP / slowdown,
+      });
     } catch (e) {
       owned.forEach(b => b.destroy());
       throw e;
@@ -128,13 +131,19 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   if (plan.pairs) {
     try {
       // the store's positions let it count the first step's work on the host (slices, see run())
-      pairs = await buildPairs(device, plan.pairs, { buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes }, positions: store.pos });
+      pairs = await buildPairs(device, plan.pairs, { buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes }, positions: store.pos, estimateScale: pairEstimate });
     } catch (e) {
       owned.forEach(b => b.destroy());
       if (tree) tree.destroy();
       throw e;
     }
+    // a slower device than the one the cap was sized on gets a smaller cap from the start; the
+    // pairs lower it further once they have timed a dense step
+    if (slowdown > 1) pairs.setCap(plan.pairs.cap / slowdown);
   }
+  // a capped pair pass's GPU ms before the pairs have timed one is the speed probe's guess
+  const pairsUnmeasured = pairs ? pairs.cappedMs() : 0;
+  const pairStageMs = () => (pairs.cappedMs() === pairsUnmeasured ? pairsUnmeasured * slowdown : pairs.cappedMs());
   const statuses = [];
   if (pairs) {
     statuses.push({
@@ -174,7 +183,11 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   let parity = 0;   // positions of the next step are read from positions[parity]
   // What the module last put on the device or into the store, to find rows the host wrote
   const host = trackHostPositions(store, n, D, origin, startPositions);
-  let deviceVelocities = Float64Array.from(store.velocity.subarray(0, n * D));
+  // Columns stages write (velocity, and the formulas' own) live in S, and between syncs the device
+  // is ahead of the store: what the host writes into them then goes up row by row, found against
+  // the numbers the store last gave the device or had from it, so other rows keep the device's
+  const deviceColumns = Object.values(plan.columns).filter(column => column.buffer === 'S' && column.name !== 'force' && store[column.name]);
+  let hostCopies = copiesOf();
   let uploaded = versions();
   const bodies = simulator.bodies.slice();
   const kernels = dispatched.map(kernel => (kernel.kind === 'grid'
@@ -235,16 +248,18 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
         const relativePositions = relative(store.pos, n, D, origin);
         host.reset(relativePositions);
         device.queue.writeBuffer(positions[parity], 0, relativePositions);
-        uploadColumn('velocity');
-        uploadColumns(name => name !== 'velocity' && plan.columns[name].buffer !== 'X');
-        deviceVelocities = Float64Array.from(store.velocity.subarray(0, n * D));
+        uploadColumns(name => plan.columns[name].buffer !== 'X');
+        hostCopies = copiesOf();
       } else {
         if (now.pos !== uploaded.pos) {
           const rows = host.written();
           writeRows(positions[parity], 0, D, rows, host.uploaded(rows, steps));
         }
-        if (now.velocity !== uploaded.velocity) uploadVelocityRows(velocityRows());
-        uploadColumns(name => name !== 'velocity' && plan.columns[name].buffer !== 'X' && now.columns[name] !== uploaded.columns[name]);
+        if (now.velocity !== uploaded.velocity) uploadRows(plan.columns.velocity, changedRows(plan.columns.velocity));
+        deviceColumns.forEach(column => {
+          if (column.name !== 'velocity' && now.columns[column.name] !== uploaded.columns[column.name]) uploadRows(column, changedRows(column));
+        });
+        uploadColumns(name => plan.columns[name].buffer === 'H' && now.columns[name] !== uploaded.columns[name]);
       }
       Object.keys(plan.linkColumns).forEach(name => { if (hostOwns || now.links[name] !== uploaded.links[name]) uploadLinkColumn(name); });
       uploaded = now;
@@ -388,8 +403,14 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
         status,
         fireState: Array.from(s.subarray(plan.S.fire, plan.S.fire + 4)),
         apply() {
-          const keep = store.versions.velocity !== uploaded.velocity ? velocityRows() : [];
-          const saved = keep.map(i => Array.from(store.velocity.subarray(i * D, i * D + D)));
+          // rows the host wrote since the last upload keep its numbers (the next step uploads them)
+          const kept = deviceColumns.map(column => {
+            const version = column.name === 'velocity' ? store.versions.velocity : store.versions[column.name];
+            const was = column.name === 'velocity' ? uploaded.velocity : uploaded.columns[column.name];
+            const rows = version !== was ? changedRows(column) : [];
+            const w = column.width;
+            return { column, rows, values: rows.map(i => Array.from(store[column.name].subarray(i * w, i * w + w))) };
+          });
           stageColumns.forEach(column => {
             if (column.name === 'force') return;
             const target = store[column.name];
@@ -397,8 +418,11 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
             const count = n * column.width;
             for (let k = 0; k < count; k++) target[k] = s[column.offset + k];
           });
-          keep.forEach((i, j) => { for (let k = 0; k < D; k++) store.velocity[i * D + k] = saved[j][k]; });
-          deviceVelocities = Float64Array.from(store.velocity.subarray(0, n * D));
+          hostCopies = copiesOf();
+          kept.forEach(({ column, rows, values }) => {
+            const w = column.width, target = store[column.name];
+            rows.forEach((i, j) => { for (let k = 0; k < w; k++) target[i * w + k] = values[j][k]; });
+          });
           // link columns stages write (their versions do not move: these are the device's numbers)
           Object.values(plan.linkColumns).forEach(column => {
             const target = springs[column.name];
@@ -423,9 +447,17 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     // GPU time of a step whose structures all work at their caps: a step can get there within a
     // submit (a gate opens, a radius grows, the layout piles up), so the runner keeps submits
     // below the watchdog with it rather than with the steps it timed
-    cappedMs: (pairs ? plan.pairs.stages.length * PAIR_STAGE_CAPPED_MS : 0) + (tree ? PYRAMID_CAPPED_MS : 0),
+    get cappedMs() {
+      return (pairs ? plan.pairs.stages.length * pairStageMs() : 0) + (tree ? PYRAMID_CAPPED_MS * slowdown : 0) +
+        [...grids.keys()].reduce((total, kernel) => total + gridCappedMs(kernel.section.grid) * slowdown, 0);
+    },
     // slices each pair sort's last encoded step ran in (0: one submit), for tests
     pairSlices: () => (pairs ? pairs.slices() : []),
+    // the runner's measured GPU ms a step: the pairs take the device's rate from it, for their cap
+    // and the pair work of a submit
+    observeTiming(msPerStep) {
+      if (pairs) pairs.observeTime(msPerStep);
+    },
 
     destroy() {
       owned.forEach(b => b.destroy());
@@ -478,18 +510,28 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     Object.keys(plan.columns).forEach(name => { if (which(name)) uploadColumn(name); });
   }
 
-  function velocityRows() {
-    const v = store.velocity, rows = [];
-    for (let i = 0; i < n * D; i++) if (v[i] !== deviceVelocities[i] && rows[rows.length - 1] !== Math.floor(i / D)) rows.push(Math.floor(i / D));
+  function copiesOf() {
+    const out = Object.create(null);
+    deviceColumns.forEach(column => { out[column.name] = Float64Array.from(store[column.name].subarray(0, n * column.width)); });
+    return out;
+  }
+
+  // rows of a column the host wrote: where the store differs from its copy
+  function changedRows(column) {
+    const now = store[column.name], was = hostCopies[column.name], w = column.width, rows = [];
+    for (let i = 0; i < n * w; i++) {
+      const row = Math.floor(i / w);
+      if (!Object.is(now[i], was[i]) && rows[rows.length - 1] !== row) rows.push(row);
+    }
     return rows;
   }
 
-  function uploadVelocityRows(rows) {
-    const values = new Float32Array(rows.length * D), v = store.velocity;
+  function uploadRows(column, rows) {
+    const w = column.width, values = new Float32Array(rows.length * w), now = store[column.name], was = hostCopies[column.name];
     rows.forEach((i, r) => {
-      for (let k = 0; k < D; k++) values[r * D + k] = deviceVelocities[i * D + k] = v[i * D + k];
+      for (let k = 0; k < w; k++) values[r * w + k] = was[i * w + k] = now[i * w + k];
     });
-    writeRows(S, plan.columns.velocity.offset, D, rows, values);
+    writeRows(S, column.offset, w, rows, values);
   }
 }
 
