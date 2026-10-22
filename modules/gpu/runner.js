@@ -39,7 +39,11 @@ const CAPPED_SUBMIT_MS = 1000;
 // large graph's positions costs milliseconds of the main thread.
 const BURST_MS = 4;
 // Settings that change the physics: a 'step' listener must not change them
-const PHYSICS_SETTINGS = ['gravity', 'springLength', 'springCoefficient', 'dragCoefficient', 'timeStep', 'maxVelocity', 'integrator', 'theta'];
+const PHYSICS_SETTINGS = ['gravity', 'springLength', 'springCoefficient', 'dragCoefficient', 'timeStep', 'maxVelocity', 'integrator', 'theta', 'nbody', 'adaptiveTimeStepWeight'];
+// Settings that shape the plan. Written straight into simulator.settings rather than through a
+// setter, they fire no 'settings' event and leave programVersion() as it is, yet the CPU follows
+// them: the runner compares them on every call (numbers the engines read on every call anyway)
+const PLAN_SETTINGS = ['integrator', 'nbody', 'inertia', 'repulsionCharge', 'repulsionSensitivity'];
 const LINK_COLUMNS = ['from', 'to', 'length', 'coefficient'];
 
 /**
@@ -548,13 +552,20 @@ function createRunner(layout, backend) {
   // The step's structure, to notice a change cheaply on every call: the stages and their
   // functions (a stage added, removed or replaced), columns defined or removed, and, after a
   // 'settings' event, program().version (the law, the inertia, the integrator, charge columns,
-  // the adaptive time step)
+  // the adaptive time step); and settings written without a setter (planSettings())
   function stageSnapshot(version) {
     const names = simulator.stages();
-    return { names, runs: names.map(name => simulator.getStage(name)), columns: store.columnsVersion + springStore.columnsVersion, version };
+    return { names, runs: names.map(name => simulator.getStage(name)), columns: store.columnsVersion + springStore.columnsVersion, version, settings: planSettings() };
+  }
+
+  function planSettings() {
+    const settings = simulator.settings;
+    return PLAN_SETTINGS.map(key => settings[key]).concat(settings.adaptiveTimeStepWeight > 0);
   }
 
   function structureChanged() {
+    const settings = planSettings();
+    if (settings.some((value, i) => !Object.is(value, structure.settings[i]))) return true;
     if (simulator.programVersion) return simulator.programVersion() !== structure.version;
     const names = simulator.stages();
     if (names.length !== structure.names.length) return true;
