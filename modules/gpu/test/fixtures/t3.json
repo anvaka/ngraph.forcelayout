@@ -1,0 +1,503 @@
+{
+ "source": "today's law.emitWGSL() and law.wgslPrologue() (lib/repulsionLaw.js of PR #105), recorded by the GPU harness (fixtures/make.mjs)",
+ "pairs": {
+  "00-default-2": {
+   "law": null,
+   "D": 2,
+   "wgsl": "let k1_0 = 1.0 / (r * r); let k1_1 = (-2.0) * k1_0 / r * 1.0; let k1 = k1_0 / r; let k2 = (k1 - k1_1) / (r * r);let lawH0 = v[0];",
+   "k1": "let k1_0 = 1.0 / (r * r); let k1 = k1_0 / r;",
+   "valueCount": 1,
+   "values": [
+    0
+   ]
+  },
+  "01-rpow_2-2": {
+   "law": "r^-2",
+   "D": 2,
+   "wgsl": "let k1_0 = 1.0 / (r * r); let k1_1 = (-2.0) * k1_0 / r * 1.0; let k1 = k1_0 / r; let k2 = (k1 - k1_1) / (r * r);let lawH0 = v[0];",
+   "k1": "let k1_0 = 1.0 / (r * r); let k1 = k1_0 / r;",
+   "valueCount": 1,
+   "values": [
+    0
+   ]
+  },
+  "02-rpow_1-2": {
+   "law": "r^-1",
+   "D": 2,
+   "wgsl": "let k1_0 = 1.0 / (r); let k1_1 = (-1.0) * k1_0 / r * 1.0; let k1 = k1_0 / r; let k2 = (k1 - k1_1) / (r * r);let lawH0 = v[0];",
+   "k1": "let k1_0 = 1.0 / (r); let k1 = k1_0 / r;",
+   "valueCount": 1,
+   "values": [
+    -1
+   ]
+  },
+  "03-exp_r_L_rpow2-2": {
+   "law": "exp(-r / L) / r^2",
+   "D": 2,
+   "wgsl": "let k1_0 = -r; let k1_1 = -1.0; let k1_2 = k1_0 * lawH0; let k1_3 = k1_1 * lawH0; let k1_4 = exp(k1_2); let k1_5 = k1_4 * k1_3; let k1_6 = (r * r); let k1_7 = 2.0 * k1_6 / r * 1.0; let k1_8 = k1_4 / k1_6; let k1_9 = (k1_5 - k1_8 * k1_7) / k1_6; let k1 = k1_4 / (k1_6 * r); let k2 = (k1 - k1_9) / (r * r);let law_L = v[0]; let lawH0 = v[1];",
+   "k1": "let k1_0 = -r; let k1_2 = k1_0 * lawH0; let k1_3 = exp(k1_2); let k1_4 = (r * r); let k1 = k1_3 / (k1_4 * r);",
+   "valueCount": 2,
+   "values": [
+    1.5,
+    0.6666666865348816
+   ]
+  },
+  "04-sqrt_1_K_r_r_rpow2-2": {
+   "law": "sqrt(1 + K * r * r) / r^2",
+   "D": 2,
+   "wgsl": "let k1_0 = law_K * r; let k1_1 = law_K * 1.0; let k1_2 = k1_0 * r; let k1_3 = k1_1 * r + k1_0 * 1.0; let k1_4 = 1.0 + k1_2; let k1_5 = sqrt(k1_4); let k1_6 = k1_3 / (2.0 * k1_5); let k1_7 = (r * r); let k1_8 = 2.0 * k1_7 / r * 1.0; let k1_9 = k1_5 / k1_7; let k1_10 = (k1_6 - k1_9 * k1_8) / k1_7; let k1 = k1_5 / (k1_7 * r); let k2 = (k1 - k1_10) / (r * r);let law_K = v[0];",
+   "k1": "let k1_0 = law_K * r; let k1_1 = k1_0 * r; let k1_2 = 1.0 + k1_1; let k1_3 = sqrt(k1_2); let k1_4 = (r * r); let k1 = k1_3 / (k1_4 * r);",
+   "valueCount": 1,
+   "values": [
+    1.5
+   ]
+  },
+  "05-rpow_1_D_Lpow_D_3-2": {
+   "law": "r^(1 - D) * L^(D - 3)",
+   "D": 2,
+   "wgsl": "let k1_0 = 1.0 / (r); let k1_1 = (-1.0) * k1_0 / r * 1.0; let k1_2 = k1_0 * lawH1; let k1_3 = k1_1 * lawH1; let k1 = k1_2 / r; let k2 = (k1 - k1_3) / (r * r);let law_L = v[0]; let lawH0 = v[1]; let lawH1 = v[2];",
+   "k1": "let k1_0 = 1.0 / (r); let k1_1 = k1_0 * lawH1; let k1 = k1_1 / r;",
+   "valueCount": 3,
+   "values": [
+    1.5,
+    -1,
+    0.6666666865348816
+   ]
+  },
+  "06-c_T_mu_r_r-2": {
+   "law": "c * T(mu * r) / r",
+   "D": 2,
+   "wgsl": "refused: Laws with custom functions cannot run on the GPU",
+   "k1": "refused: Laws with custom functions cannot run on the GPU",
+   "valueCount": null,
+   "values": null
+  },
+  "07-rpow_p-2": {
+   "law": "r^-p",
+   "D": 2,
+   "wgsl": "let k1_0 = pow(r, lawH0); let k1_1 = lawH0 * k1_0 / r * 1.0; let k1 = k1_0 / r; let k2 = (k1 - k1_1) / (r * r);let law_p = v[0]; let lawH0 = v[1];",
+   "k1": "let k1_0 = pow(r, lawH0); let k1 = k1_0 / r;",
+   "valueCount": 2,
+   "values": [
+    1.5,
+    -1.5
+   ]
+  },
+  "08-exp_r_L_rpow2_range-2": {
+   "law": "exp(-r / L) / r^2|range",
+   "D": 2,
+   "wgsl": "let k1_0 = -r; let k1_1 = -1.0; let k1_2 = k1_0 * lawH0; let k1_3 = k1_1 * lawH0; let k1_4 = exp(k1_2); let k1_5 = k1_4 * k1_3; let k1_6 = (r * r); let k1_7 = 2.0 * k1_6 / r * 1.0; let k1_8 = k1_4 / k1_6; let k1_9 = (k1_5 - k1_8 * k1_7) / k1_6; let k1 = k1_4 / (k1_6 * r); let k2 = (k1 - k1_9) / (r * r);let law_L = v[0]; let lawH0 = v[1]; let lawRange2 = v[2];",
+   "k1": "let k1_0 = -r; let k1_2 = k1_0 * lawH0; let k1_3 = exp(k1_2); let k1_4 = (r * r); let k1 = k1_3 / (k1_4 * r);",
+   "valueCount": 3,
+   "values": [
+    1.5,
+    0.6666666865348816,
+    36
+   ]
+  },
+  "09-min_r_L_rpow3-2": {
+   "law": "min(r, L) / r^3",
+   "D": 2,
+   "wgsl": "let k1_0 = min(r, law_L); let k1_1 = select(0.0, 1.0, r <= law_L); let k1_2 = (r * r * r); let k1_3 = 3.0 * k1_2 / r * 1.0; let k1_4 = k1_0 / k1_2; let k1_5 = (k1_1 - k1_4 * k1_3) / k1_2; let k1 = k1_0 / (k1_2 * r); let k2 = (k1 - k1_5) / (r * r);let law_L = v[0];",
+   "k1": "let k1_0 = min(r, law_L); let k1_1 = (r * r * r); let k1 = k1_0 / (k1_1 * r);",
+   "valueCount": 1,
+   "values": [
+    1.5
+   ]
+  },
+  "10-abs_r_L_rpow2-2": {
+   "law": "abs(r - L) / r^2",
+   "D": 2,
+   "wgsl": "let k1_0 = r - law_L; let k1_1 = abs(k1_0); let k1_2 = select(1.0, -1.0, k1_0 < 0.0); let k1_3 = (r * r); let k1_4 = 2.0 * k1_3 / r * 1.0; let k1_5 = k1_1 / k1_3; let k1_6 = (k1_2 - k1_5 * k1_4) / k1_3; let k1 = k1_1 / (k1_3 * r); let k2 = (k1 - k1_6) / (r * r);let law_L = v[0];",
+   "k1": "let k1_0 = r - law_L; let k1_1 = abs(k1_0); let k1_2 = (r * r); let k1 = k1_1 / (k1_2 * r);",
+   "valueCount": 1,
+   "values": [
+    1.5
+   ]
+  },
+  "11-tanh_r_L_r-2": {
+   "law": "tanh(r / L) / r",
+   "D": 2,
+   "wgsl": "let k1_0 = r * lawH0; let k1_1 = 1.0 * lawH0; let k1_2 = tanh(k1_0); let k1_3 = (1.0 - k1_2 * k1_2) * k1_1; let k1_4 = k1_2 / r; let k1_5 = (k1_3 - k1_4 * 1.0) / r; let k1 = k1_2 / (r * r); let k2 = (k1 - k1_5) / (r * r);let law_L = v[0]; let lawH0 = v[1];",
+   "k1": "let k1_0 = r * lawH0; let k1_1 = tanh(k1_0); let k1 = k1_1 / (r * r);",
+   "valueCount": 2,
+   "values": [
+    1.5,
+    0.6666666865348816
+   ]
+  },
+  "12-pow_r_p_cos_r_L-2": {
+   "law": "pow(r, -p) * cos(r / L)",
+   "D": 2,
+   "wgsl": "let k1_0 = pow(r, lawH0); let k1_1 = lawH0 * k1_0 / r * 1.0; let k1_2 = r * lawH1; let k1_3 = 1.0 * lawH1; let k1_4 = cos(k1_2); let k1_5 = -sin(k1_2) * k1_3; let k1_6 = k1_0 * k1_4; let k1_7 = k1_1 * k1_4 + k1_0 * k1_5; let k1 = k1_6 / r; let k2 = (k1 - k1_7) / (r * r);let law_L = v[0]; let law_p = v[1]; let lawH0 = v[2]; let lawH1 = v[3];",
+   "k1": "let k1_0 = pow(r, lawH0); let k1_1 = r * lawH1; let k1_2 = cos(k1_1); let k1_3 = k1_0 * k1_2; let k1 = k1_3 / r;",
+   "valueCount": 4,
+   "values": [
+    1.5,
+    1.5,
+    -1.5,
+    0.6666666865348816
+   ]
+  },
+  "13-log_1_r_rpow2-2": {
+   "law": "log(1 + r) / r^2",
+   "D": 2,
+   "wgsl": "let k1_0 = 1.0 + r; let k1_1 = log(k1_0); let k1_2 = 1.0 / k1_0; let k1_3 = (r * r); let k1_4 = 2.0 * k1_3 / r * 1.0; let k1_5 = k1_1 / k1_3; let k1_6 = (k1_2 - k1_5 * k1_4) / k1_3; let k1 = k1_1 / (k1_3 * r); let k2 = (k1 - k1_6) / (r * r);",
+   "k1": "let k1_0 = 1.0 + r; let k1_1 = log(k1_0); let k1_2 = (r * r); let k1 = k1_1 / (k1_2 * r);",
+   "valueCount": 0,
+   "values": []
+  },
+  "14-2_r_r_L-2": {
+   "law": "2 / (r * r + L)",
+   "D": 2,
+   "wgsl": "let k1_0 = r * r; let k1_1 = 1.0 * r + r * 1.0; let k1_2 = k1_0 + law_L; let k1_3 = 2.0 / k1_2; let k1_4 = -k1_3 * k1_1 / k1_2; let k1 = 2.0 / (k1_2 * r); let k2 = (k1 - k1_4) / (r * r);let law_L = v[0];",
+   "k1": "let k1_0 = r * r; let k1_1 = k1_0 + law_L; let k1 = 2.0 / (k1_1 * r);",
+   "valueCount": 1,
+   "values": [
+    1.5
+   ]
+  },
+  "15-1_rpow2-2": {
+   "law": "-1 / r^2",
+   "D": 2,
+   "wgsl": "let k1_0 = (r * r); let k1_1 = 2.0 * k1_0 / r * 1.0; let k1_2 = (-1.0) / k1_0; let k1_3 = -k1_2 * k1_1 / k1_0; let k1 = (-1.0) / (k1_0 * r); let k2 = (k1 - k1_3) / (r * r);let lawH0 = v[0];",
+   "k1": "let k1_0 = (r * r); let k1 = (-1.0) / (k1_0 * r);",
+   "valueCount": 1,
+   "values": [
+    -1
+   ]
+  },
+  "00-default-3": {
+   "law": null,
+   "D": 3,
+   "wgsl": "let k1_0 = 1.0 / (r * r); let k1_1 = (-2.0) * k1_0 / r * 1.0; let k1 = k1_0 / r; let k2 = (k1 - k1_1) / (r * r);let lawH0 = v[0];",
+   "k1": "let k1_0 = 1.0 / (r * r); let k1 = k1_0 / r;",
+   "valueCount": 1,
+   "values": [
+    0
+   ]
+  },
+  "01-rpow_2-3": {
+   "law": "r^-2",
+   "D": 3,
+   "wgsl": "let k1_0 = 1.0 / (r * r); let k1_1 = (-2.0) * k1_0 / r * 1.0; let k1 = k1_0 / r; let k2 = (k1 - k1_1) / (r * r);let lawH0 = v[0];",
+   "k1": "let k1_0 = 1.0 / (r * r); let k1 = k1_0 / r;",
+   "valueCount": 1,
+   "values": [
+    0
+   ]
+  },
+  "02-rpow_1-3": {
+   "law": "r^-1",
+   "D": 3,
+   "wgsl": "let k1_0 = 1.0 / (r); let k1_1 = (-1.0) * k1_0 / r * 1.0; let k1 = k1_0 / r; let k2 = (k1 - k1_1) / (r * r);let lawH0 = v[0];",
+   "k1": "let k1_0 = 1.0 / (r); let k1 = k1_0 / r;",
+   "valueCount": 1,
+   "values": [
+    -1
+   ]
+  },
+  "03-exp_r_L_rpow2-3": {
+   "law": "exp(-r / L) / r^2",
+   "D": 3,
+   "wgsl": "let k1_0 = -r; let k1_1 = -1.0; let k1_2 = k1_0 * lawH0; let k1_3 = k1_1 * lawH0; let k1_4 = exp(k1_2); let k1_5 = k1_4 * k1_3; let k1_6 = (r * r); let k1_7 = 2.0 * k1_6 / r * 1.0; let k1_8 = k1_4 / k1_6; let k1_9 = (k1_5 - k1_8 * k1_7) / k1_6; let k1 = k1_4 / (k1_6 * r); let k2 = (k1 - k1_9) / (r * r);let law_L = v[0]; let lawH0 = v[1];",
+   "k1": "let k1_0 = -r; let k1_2 = k1_0 * lawH0; let k1_3 = exp(k1_2); let k1_4 = (r * r); let k1 = k1_3 / (k1_4 * r);",
+   "valueCount": 2,
+   "values": [
+    1.5,
+    0.6666666865348816
+   ]
+  },
+  "04-sqrt_1_K_r_r_rpow2-3": {
+   "law": "sqrt(1 + K * r * r) / r^2",
+   "D": 3,
+   "wgsl": "let k1_0 = law_K * r; let k1_1 = law_K * 1.0; let k1_2 = k1_0 * r; let k1_3 = k1_1 * r + k1_0 * 1.0; let k1_4 = 1.0 + k1_2; let k1_5 = sqrt(k1_4); let k1_6 = k1_3 / (2.0 * k1_5); let k1_7 = (r * r); let k1_8 = 2.0 * k1_7 / r * 1.0; let k1_9 = k1_5 / k1_7; let k1_10 = (k1_6 - k1_9 * k1_8) / k1_7; let k1 = k1_5 / (k1_7 * r); let k2 = (k1 - k1_10) / (r * r);let law_K = v[0];",
+   "k1": "let k1_0 = law_K * r; let k1_1 = k1_0 * r; let k1_2 = 1.0 + k1_1; let k1_3 = sqrt(k1_2); let k1_4 = (r * r); let k1 = k1_3 / (k1_4 * r);",
+   "valueCount": 1,
+   "values": [
+    1.5
+   ]
+  },
+  "05-rpow_1_D_Lpow_D_3-3": {
+   "law": "r^(1 - D) * L^(D - 3)",
+   "D": 3,
+   "wgsl": "let k1_0 = 1.0 / (r * r); let k1_1 = (-2.0) * k1_0 / r * 1.0; let k1_2 = k1_0 * 1.0; let k1_3 = k1_1 * 1.0; let k1 = k1_2 / r; let k2 = (k1 - k1_3) / (r * r);let law_L = v[0]; let lawH0 = v[1]; let lawH1 = v[2];",
+   "k1": "let k1_0 = 1.0 / (r * r); let k1_1 = k1_0 * 1.0; let k1 = k1_1 / r;",
+   "valueCount": 3,
+   "values": [
+    1.5,
+    -2,
+    1
+   ]
+  },
+  "06-c_T_mu_r_r-3": {
+   "law": "c * T(mu * r) / r",
+   "D": 3,
+   "wgsl": "refused: Laws with custom functions cannot run on the GPU",
+   "k1": "refused: Laws with custom functions cannot run on the GPU",
+   "valueCount": null,
+   "values": null
+  },
+  "07-rpow_p-3": {
+   "law": "r^-p",
+   "D": 3,
+   "wgsl": "let k1_0 = pow(r, lawH0); let k1_1 = lawH0 * k1_0 / r * 1.0; let k1 = k1_0 / r; let k2 = (k1 - k1_1) / (r * r);let law_p = v[0]; let lawH0 = v[1];",
+   "k1": "let k1_0 = pow(r, lawH0); let k1 = k1_0 / r;",
+   "valueCount": 2,
+   "values": [
+    1.5,
+    -1.5
+   ]
+  },
+  "08-exp_r_L_rpow2_range-3": {
+   "law": "exp(-r / L) / r^2|range",
+   "D": 3,
+   "wgsl": "let k1_0 = -r; let k1_1 = -1.0; let k1_2 = k1_0 * lawH0; let k1_3 = k1_1 * lawH0; let k1_4 = exp(k1_2); let k1_5 = k1_4 * k1_3; let k1_6 = (r * r); let k1_7 = 2.0 * k1_6 / r * 1.0; let k1_8 = k1_4 / k1_6; let k1_9 = (k1_5 - k1_8 * k1_7) / k1_6; let k1 = k1_4 / (k1_6 * r); let k2 = (k1 - k1_9) / (r * r);let law_L = v[0]; let lawH0 = v[1]; let lawRange2 = v[2];",
+   "k1": "let k1_0 = -r; let k1_2 = k1_0 * lawH0; let k1_3 = exp(k1_2); let k1_4 = (r * r); let k1 = k1_3 / (k1_4 * r);",
+   "valueCount": 3,
+   "values": [
+    1.5,
+    0.6666666865348816,
+    36
+   ]
+  },
+  "09-min_r_L_rpow3-3": {
+   "law": "min(r, L) / r^3",
+   "D": 3,
+   "wgsl": "let k1_0 = min(r, law_L); let k1_1 = select(0.0, 1.0, r <= law_L); let k1_2 = (r * r * r); let k1_3 = 3.0 * k1_2 / r * 1.0; let k1_4 = k1_0 / k1_2; let k1_5 = (k1_1 - k1_4 * k1_3) / k1_2; let k1 = k1_0 / (k1_2 * r); let k2 = (k1 - k1_5) / (r * r);let law_L = v[0];",
+   "k1": "let k1_0 = min(r, law_L); let k1_1 = (r * r * r); let k1 = k1_0 / (k1_1 * r);",
+   "valueCount": 1,
+   "values": [
+    1.5
+   ]
+  },
+  "10-abs_r_L_rpow2-3": {
+   "law": "abs(r - L) / r^2",
+   "D": 3,
+   "wgsl": "let k1_0 = r - law_L; let k1_1 = abs(k1_0); let k1_2 = select(1.0, -1.0, k1_0 < 0.0); let k1_3 = (r * r); let k1_4 = 2.0 * k1_3 / r * 1.0; let k1_5 = k1_1 / k1_3; let k1_6 = (k1_2 - k1_5 * k1_4) / k1_3; let k1 = k1_1 / (k1_3 * r); let k2 = (k1 - k1_6) / (r * r);let law_L = v[0];",
+   "k1": "let k1_0 = r - law_L; let k1_1 = abs(k1_0); let k1_2 = (r * r); let k1 = k1_1 / (k1_2 * r);",
+   "valueCount": 1,
+   "values": [
+    1.5
+   ]
+  },
+  "11-tanh_r_L_r-3": {
+   "law": "tanh(r / L) / r",
+   "D": 3,
+   "wgsl": "let k1_0 = r * lawH0; let k1_1 = 1.0 * lawH0; let k1_2 = tanh(k1_0); let k1_3 = (1.0 - k1_2 * k1_2) * k1_1; let k1_4 = k1_2 / r; let k1_5 = (k1_3 - k1_4 * 1.0) / r; let k1 = k1_2 / (r * r); let k2 = (k1 - k1_5) / (r * r);let law_L = v[0]; let lawH0 = v[1];",
+   "k1": "let k1_0 = r * lawH0; let k1_1 = tanh(k1_0); let k1 = k1_1 / (r * r);",
+   "valueCount": 2,
+   "values": [
+    1.5,
+    0.6666666865348816
+   ]
+  },
+  "12-pow_r_p_cos_r_L-3": {
+   "law": "pow(r, -p) * cos(r / L)",
+   "D": 3,
+   "wgsl": "let k1_0 = pow(r, lawH0); let k1_1 = lawH0 * k1_0 / r * 1.0; let k1_2 = r * lawH1; let k1_3 = 1.0 * lawH1; let k1_4 = cos(k1_2); let k1_5 = -sin(k1_2) * k1_3; let k1_6 = k1_0 * k1_4; let k1_7 = k1_1 * k1_4 + k1_0 * k1_5; let k1 = k1_6 / r; let k2 = (k1 - k1_7) / (r * r);let law_L = v[0]; let law_p = v[1]; let lawH0 = v[2]; let lawH1 = v[3];",
+   "k1": "let k1_0 = pow(r, lawH0); let k1_1 = r * lawH1; let k1_2 = cos(k1_1); let k1_3 = k1_0 * k1_2; let k1 = k1_3 / r;",
+   "valueCount": 4,
+   "values": [
+    1.5,
+    1.5,
+    -1.5,
+    0.6666666865348816
+   ]
+  },
+  "13-log_1_r_rpow2-3": {
+   "law": "log(1 + r) / r^2",
+   "D": 3,
+   "wgsl": "let k1_0 = 1.0 + r; let k1_1 = log(k1_0); let k1_2 = 1.0 / k1_0; let k1_3 = (r * r); let k1_4 = 2.0 * k1_3 / r * 1.0; let k1_5 = k1_1 / k1_3; let k1_6 = (k1_2 - k1_5 * k1_4) / k1_3; let k1 = k1_1 / (k1_3 * r); let k2 = (k1 - k1_6) / (r * r);",
+   "k1": "let k1_0 = 1.0 + r; let k1_1 = log(k1_0); let k1_2 = (r * r); let k1 = k1_1 / (k1_2 * r);",
+   "valueCount": 0,
+   "values": []
+  },
+  "14-2_r_r_L-3": {
+   "law": "2 / (r * r + L)",
+   "D": 3,
+   "wgsl": "let k1_0 = r * r; let k1_1 = 1.0 * r + r * 1.0; let k1_2 = k1_0 + law_L; let k1_3 = 2.0 / k1_2; let k1_4 = -k1_3 * k1_1 / k1_2; let k1 = 2.0 / (k1_2 * r); let k2 = (k1 - k1_4) / (r * r);let law_L = v[0];",
+   "k1": "let k1_0 = r * r; let k1_1 = k1_0 + law_L; let k1 = 2.0 / (k1_1 * r);",
+   "valueCount": 1,
+   "values": [
+    1.5
+   ]
+  },
+  "15-1_rpow2-3": {
+   "law": "-1 / r^2",
+   "D": 3,
+   "wgsl": "let k1_0 = (r * r); let k1_1 = 2.0 * k1_0 / r * 1.0; let k1_2 = (-1.0) / k1_0; let k1_3 = -k1_2 * k1_1 / k1_0; let k1 = (-1.0) / (k1_0 * r); let k2 = (k1 - k1_3) / (r * r);let lawH0 = v[0];",
+   "k1": "let k1_0 = (r * r); let k1 = (-1.0) / (k1_0 * r);",
+   "valueCount": 1,
+   "values": [
+    -1
+   ]
+  },
+  "00-default-4": {
+   "law": null,
+   "D": 4,
+   "wgsl": "let k1_0 = 1.0 / (r * r); let k1_1 = (-2.0) * k1_0 / r * 1.0; let k1 = k1_0 / r; let k2 = (k1 - k1_1) / (r * r);let lawH0 = v[0];",
+   "k1": "let k1_0 = 1.0 / (r * r); let k1 = k1_0 / r;",
+   "valueCount": 1,
+   "values": [
+    0
+   ]
+  },
+  "01-rpow_2-4": {
+   "law": "r^-2",
+   "D": 4,
+   "wgsl": "let k1_0 = 1.0 / (r * r); let k1_1 = (-2.0) * k1_0 / r * 1.0; let k1 = k1_0 / r; let k2 = (k1 - k1_1) / (r * r);let lawH0 = v[0];",
+   "k1": "let k1_0 = 1.0 / (r * r); let k1 = k1_0 / r;",
+   "valueCount": 1,
+   "values": [
+    0
+   ]
+  },
+  "02-rpow_1-4": {
+   "law": "r^-1",
+   "D": 4,
+   "wgsl": "let k1_0 = 1.0 / (r); let k1_1 = (-1.0) * k1_0 / r * 1.0; let k1 = k1_0 / r; let k2 = (k1 - k1_1) / (r * r);let lawH0 = v[0];",
+   "k1": "let k1_0 = 1.0 / (r); let k1 = k1_0 / r;",
+   "valueCount": 1,
+   "values": [
+    -1
+   ]
+  },
+  "03-exp_r_L_rpow2-4": {
+   "law": "exp(-r / L) / r^2",
+   "D": 4,
+   "wgsl": "let k1_0 = -r; let k1_1 = -1.0; let k1_2 = k1_0 * lawH0; let k1_3 = k1_1 * lawH0; let k1_4 = exp(k1_2); let k1_5 = k1_4 * k1_3; let k1_6 = (r * r); let k1_7 = 2.0 * k1_6 / r * 1.0; let k1_8 = k1_4 / k1_6; let k1_9 = (k1_5 - k1_8 * k1_7) / k1_6; let k1 = k1_4 / (k1_6 * r); let k2 = (k1 - k1_9) / (r * r);let law_L = v[0]; let lawH0 = v[1];",
+   "k1": "let k1_0 = -r; let k1_2 = k1_0 * lawH0; let k1_3 = exp(k1_2); let k1_4 = (r * r); let k1 = k1_3 / (k1_4 * r);",
+   "valueCount": 2,
+   "values": [
+    1.5,
+    0.6666666865348816
+   ]
+  },
+  "04-sqrt_1_K_r_r_rpow2-4": {
+   "law": "sqrt(1 + K * r * r) / r^2",
+   "D": 4,
+   "wgsl": "let k1_0 = law_K * r; let k1_1 = law_K * 1.0; let k1_2 = k1_0 * r; let k1_3 = k1_1 * r + k1_0 * 1.0; let k1_4 = 1.0 + k1_2; let k1_5 = sqrt(k1_4); let k1_6 = k1_3 / (2.0 * k1_5); let k1_7 = (r * r); let k1_8 = 2.0 * k1_7 / r * 1.0; let k1_9 = k1_5 / k1_7; let k1_10 = (k1_6 - k1_9 * k1_8) / k1_7; let k1 = k1_5 / (k1_7 * r); let k2 = (k1 - k1_10) / (r * r);let law_K = v[0];",
+   "k1": "let k1_0 = law_K * r; let k1_1 = k1_0 * r; let k1_2 = 1.0 + k1_1; let k1_3 = sqrt(k1_2); let k1_4 = (r * r); let k1 = k1_3 / (k1_4 * r);",
+   "valueCount": 1,
+   "values": [
+    1.5
+   ]
+  },
+  "05-rpow_1_D_Lpow_D_3-4": {
+   "law": "r^(1 - D) * L^(D - 3)",
+   "D": 4,
+   "wgsl": "let k1_0 = 1.0 / (r * r * r); let k1_1 = (-3.0) * k1_0 / r * 1.0; let k1_2 = k1_0 * lawH1; let k1_3 = k1_1 * lawH1; let k1 = k1_2 / r; let k2 = (k1 - k1_3) / (r * r);let law_L = v[0]; let lawH0 = v[1]; let lawH1 = v[2];",
+   "k1": "let k1_0 = 1.0 / (r * r * r); let k1_1 = k1_0 * lawH1; let k1 = k1_1 / r;",
+   "valueCount": 3,
+   "values": [
+    1.5,
+    -3,
+    1.5
+   ]
+  },
+  "06-c_T_mu_r_r-4": {
+   "law": "c * T(mu * r) / r",
+   "D": 4,
+   "wgsl": "refused: Laws with custom functions cannot run on the GPU",
+   "k1": "refused: Laws with custom functions cannot run on the GPU",
+   "valueCount": null,
+   "values": null
+  },
+  "07-rpow_p-4": {
+   "law": "r^-p",
+   "D": 4,
+   "wgsl": "let k1_0 = pow(r, lawH0); let k1_1 = lawH0 * k1_0 / r * 1.0; let k1 = k1_0 / r; let k2 = (k1 - k1_1) / (r * r);let law_p = v[0]; let lawH0 = v[1];",
+   "k1": "let k1_0 = pow(r, lawH0); let k1 = k1_0 / r;",
+   "valueCount": 2,
+   "values": [
+    1.5,
+    -1.5
+   ]
+  },
+  "08-exp_r_L_rpow2_range-4": {
+   "law": "exp(-r / L) / r^2|range",
+   "D": 4,
+   "wgsl": "let k1_0 = -r; let k1_1 = -1.0; let k1_2 = k1_0 * lawH0; let k1_3 = k1_1 * lawH0; let k1_4 = exp(k1_2); let k1_5 = k1_4 * k1_3; let k1_6 = (r * r); let k1_7 = 2.0 * k1_6 / r * 1.0; let k1_8 = k1_4 / k1_6; let k1_9 = (k1_5 - k1_8 * k1_7) / k1_6; let k1 = k1_4 / (k1_6 * r); let k2 = (k1 - k1_9) / (r * r);let law_L = v[0]; let lawH0 = v[1]; let lawRange2 = v[2];",
+   "k1": "let k1_0 = -r; let k1_2 = k1_0 * lawH0; let k1_3 = exp(k1_2); let k1_4 = (r * r); let k1 = k1_3 / (k1_4 * r);",
+   "valueCount": 3,
+   "values": [
+    1.5,
+    0.6666666865348816,
+    36
+   ]
+  },
+  "09-min_r_L_rpow3-4": {
+   "law": "min(r, L) / r^3",
+   "D": 4,
+   "wgsl": "let k1_0 = min(r, law_L); let k1_1 = select(0.0, 1.0, r <= law_L); let k1_2 = (r * r * r); let k1_3 = 3.0 * k1_2 / r * 1.0; let k1_4 = k1_0 / k1_2; let k1_5 = (k1_1 - k1_4 * k1_3) / k1_2; let k1 = k1_0 / (k1_2 * r); let k2 = (k1 - k1_5) / (r * r);let law_L = v[0];",
+   "k1": "let k1_0 = min(r, law_L); let k1_1 = (r * r * r); let k1 = k1_0 / (k1_1 * r);",
+   "valueCount": 1,
+   "values": [
+    1.5
+   ]
+  },
+  "10-abs_r_L_rpow2-4": {
+   "law": "abs(r - L) / r^2",
+   "D": 4,
+   "wgsl": "let k1_0 = r - law_L; let k1_1 = abs(k1_0); let k1_2 = select(1.0, -1.0, k1_0 < 0.0); let k1_3 = (r * r); let k1_4 = 2.0 * k1_3 / r * 1.0; let k1_5 = k1_1 / k1_3; let k1_6 = (k1_2 - k1_5 * k1_4) / k1_3; let k1 = k1_1 / (k1_3 * r); let k2 = (k1 - k1_6) / (r * r);let law_L = v[0];",
+   "k1": "let k1_0 = r - law_L; let k1_1 = abs(k1_0); let k1_2 = (r * r); let k1 = k1_1 / (k1_2 * r);",
+   "valueCount": 1,
+   "values": [
+    1.5
+   ]
+  },
+  "11-tanh_r_L_r-4": {
+   "law": "tanh(r / L) / r",
+   "D": 4,
+   "wgsl": "let k1_0 = r * lawH0; let k1_1 = 1.0 * lawH0; let k1_2 = tanh(k1_0); let k1_3 = (1.0 - k1_2 * k1_2) * k1_1; let k1_4 = k1_2 / r; let k1_5 = (k1_3 - k1_4 * 1.0) / r; let k1 = k1_2 / (r * r); let k2 = (k1 - k1_5) / (r * r);let law_L = v[0]; let lawH0 = v[1];",
+   "k1": "let k1_0 = r * lawH0; let k1_1 = tanh(k1_0); let k1 = k1_1 / (r * r);",
+   "valueCount": 2,
+   "values": [
+    1.5,
+    0.6666666865348816
+   ]
+  },
+  "12-pow_r_p_cos_r_L-4": {
+   "law": "pow(r, -p) * cos(r / L)",
+   "D": 4,
+   "wgsl": "let k1_0 = pow(r, lawH0); let k1_1 = lawH0 * k1_0 / r * 1.0; let k1_2 = r * lawH1; let k1_3 = 1.0 * lawH1; let k1_4 = cos(k1_2); let k1_5 = -sin(k1_2) * k1_3; let k1_6 = k1_0 * k1_4; let k1_7 = k1_1 * k1_4 + k1_0 * k1_5; let k1 = k1_6 / r; let k2 = (k1 - k1_7) / (r * r);let law_L = v[0]; let law_p = v[1]; let lawH0 = v[2]; let lawH1 = v[3];",
+   "k1": "let k1_0 = pow(r, lawH0); let k1_1 = r * lawH1; let k1_2 = cos(k1_1); let k1_3 = k1_0 * k1_2; let k1 = k1_3 / r;",
+   "valueCount": 4,
+   "values": [
+    1.5,
+    1.5,
+    -1.5,
+    0.6666666865348816
+   ]
+  },
+  "13-log_1_r_rpow2-4": {
+   "law": "log(1 + r) / r^2",
+   "D": 4,
+   "wgsl": "let k1_0 = 1.0 + r; let k1_1 = log(k1_0); let k1_2 = 1.0 / k1_0; let k1_3 = (r * r); let k1_4 = 2.0 * k1_3 / r * 1.0; let k1_5 = k1_1 / k1_3; let k1_6 = (k1_2 - k1_5 * k1_4) / k1_3; let k1 = k1_1 / (k1_3 * r); let k2 = (k1 - k1_6) / (r * r);",
+   "k1": "let k1_0 = 1.0 + r; let k1_1 = log(k1_0); let k1_2 = (r * r); let k1 = k1_1 / (k1_2 * r);",
+   "valueCount": 0,
+   "values": []
+  },
+  "14-2_r_r_L-4": {
+   "law": "2 / (r * r + L)",
+   "D": 4,
+   "wgsl": "let k1_0 = r * r; let k1_1 = 1.0 * r + r * 1.0; let k1_2 = k1_0 + law_L; let k1_3 = 2.0 / k1_2; let k1_4 = -k1_3 * k1_1 / k1_2; let k1 = 2.0 / (k1_2 * r); let k2 = (k1 - k1_4) / (r * r);let law_L = v[0];",
+   "k1": "let k1_0 = r * r; let k1_1 = k1_0 + law_L; let k1 = 2.0 / (k1_1 * r);",
+   "valueCount": 1,
+   "values": [
+    1.5
+   ]
+  },
+  "15-1_rpow2-4": {
+   "law": "-1 / r^2",
+   "D": 4,
+   "wgsl": "let k1_0 = (r * r); let k1_1 = 2.0 * k1_0 / r * 1.0; let k1_2 = (-1.0) / k1_0; let k1_3 = -k1_2 * k1_1 / k1_0; let k1 = (-1.0) / (k1_0 * r); let k2 = (k1 - k1_3) / (r * r);let lawH0 = v[0];",
+   "k1": "let k1_0 = (r * r); let k1 = (-1.0) / (k1_0 * r);",
+   "valueCount": 1,
+   "values": [
+    -1
+   ]
+  }
+ }
+}

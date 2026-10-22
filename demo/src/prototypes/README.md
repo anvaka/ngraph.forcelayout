@@ -36,10 +36,10 @@ export default {
   // at step 300"), count from it.
   attach({ layout, graph, params, settings, steps }) {
     // Change the layout here, e.g.:
-    //   layout.simulator.addStage('my-force', store => { ... });
+    //   layout.simulator.addNodeFormula('my-pull', { formula: 'force -= 0.01 * pos' });
     //   layout.simulator.repulsionLaw('exp(-r / 30) / r^2');
     //   layout.getSpring(fromId, toId).length = 20;
-    //   layout.on('step', onStep);
+    //   layout.simulator.on('settings', onSettings); // redo what depends on the settings
     return {
       // Optional: one-off step the viewer runs with a button (the layout pauses first)
       finish() {},
@@ -58,4 +58,12 @@ repulsion law, charges, columns of your own on the bodies, and rules for close p
 forces over `store.pos` and `store.force` (axis `k` of body `i` is at `i * D + k`) and they work
 in any number of dimensions.
 
-Prototypes run on the CPU only; the WebGPU backend ignores them.
+Physics that other engines (the GPU) should run too goes into formulas, sums, stages gated with
+`when` (e.g. every 25 steps) and host steps, never into a `'step'` listener: on the GPU that
+listener runs once per readback, not once per step. Parameter functions get the step context
+(the step, the settings), not the positions; JS that needs positions in the middle of a step is
+a host step.
+
+On WebGPU the demo asks `simulator.plan(gpuBackend)` whether the GPU module can run what an idea
+changed. If it can (today, ideas that only change the repulsion law), the GPU runs the idea;
+otherwise the GPU runs the layout without it and the demo says why.

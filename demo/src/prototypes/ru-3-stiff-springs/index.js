@@ -2,7 +2,14 @@
 // The stock spring pulls with k * (r - L). This one pulls with k * (r - L) * (1 + (d / (onset * L))^power)
 // when d = r - L > 0, and is unchanged when the spring is shorter than L. Near its length it is the
 // stock spring; a link stretched to many spring lengths is pulled back hard.
-import createStiffSprings from './stiffSpringForce.js';
+//
+// It is a link formula that takes the place of the stock springs. The library keeps everything
+// else the stock springs do: per-link lengths and stiffness (with the panel's values for links
+// that have none), a random nudge for links of length 0, and the counters of the adaptive time step.
+const NAME = 'ru-3-stiff-springs';
+// Safety limit on the extra factor, so extreme settings (a tiny spring length, a huge Steepness)
+// can't overflow to Infinity and turn positions into NaN. Normal settings never reach it.
+const MAX_EXTRA = 1e9;
 
 export default {
   id: 'ru-3-stiff-springs',
@@ -48,12 +55,21 @@ normal settings never reach it.</p>`,
     // NaN falls back to the defaults. Stiffen after is at least 0.1; Steepness 0 or less is off.
     const onset = Number.isFinite(params.onset) ? Math.max(params.onset, 0.1) : 3;
     const power = Number.isFinite(params.power) ? Math.max(params.power, 0) : 2;
-    const stiffSprings = createStiffSprings({ onset, power });
-    const stockSprings = simulator.replaceStage('springs', stiffSprings);
+    simulator.addLinkFormula(NAME, {
+      replace: 'springs',
+      params: { onset, power, maxExtra: MAX_EXTRA },
+      // d: how far the link is stretched past its length. A spring of length 0 (or less) has no
+      // "spring lengths" to count stretch in, so it stays stock; so does a link shorter than its
+      // length. `extra <= maxExtra` is also false for NaN, which then counts as the limit.
+      formula: `d = r - length;
+        u = d / (onset * length);
+        extra = ${power === 2 ? 'u^2' : 'pow(u, power)'};
+        pull = coefficient * d * (d > 0 && power > 0 && length > 0 ? 1 + (extra <= maxExtra ? extra : maxExtra) : 1)`
+    });
 
     return {
       dispose() {
-        if (simulator.getStage('springs') === stiffSprings) simulator.replaceStage('springs', stockSprings);
+        simulator.removeStage(NAME); // the stock springs come back
       }
     };
   }

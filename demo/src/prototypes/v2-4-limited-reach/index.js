@@ -42,21 +42,11 @@ toward it. It works in 2-D only (nothing happens in 3-D) and turns itself off at
     // In spring lengths. 0 or less: no limit. NaN (e.g. a broken URL value): the default.
     const asked = Number(params.reach);
     const reachInUnits = Number.isNaN(asked) ? DEFAULT_REACH : (asked > 0 ? Math.max(asked, MIN_REACH) : 0);
-    const law = createReachLaw(reachInUnits);
-
-    // The push is matched to the library's at one spring length, which needs a spring length
-    // above 0: otherwise use the library's own push. The panel changes the spring length on the
-    // running layout, so check before every push.
-    let lawOn = false;
+    // At spring length 0 the law is the library's own push (see reachLaw.js)
     const previousLaw = simulator.repulsionLaw().spec;
-    simulator.addStage('limited-reach', () => {
-      const on = simulator.springLength() > 0;
-      if (on !== lawOn) simulator.repulsionLaw(on ? law : previousLaw);
-      lawOn = on;
-    }, { before: 'repulsion' });
+    simulator.repulsionLaw(createReachLaw(reachInUnits));
     return {
       dispose() {
-        simulator.removeStage('limited-reach');
         simulator.repulsionLaw(previousLaw);
       }
     };

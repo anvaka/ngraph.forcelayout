@@ -1,6 +1,7 @@
 // The push of "Push with a limited reach": the law of a flat world with a range, mu * K1(mu * r).
 // Up close it falls as 1/r; beyond about 1/mu it dies out exponentially. (K1 is a Bessel
-// function, read from a table; see below.) The library compiles the law into both trees.
+// function, read from a lookup table; see below.) The library compiles the law, table included,
+// into both trees.
 
 const TABLE_SIZE = 1024;
 // Beyond x = mu * r = X_MAX the force is below 0.01% of its value at r = 1/mu: treat it as zero.
@@ -13,28 +14,27 @@ const SCALE = TABLE_SIZE / X_MAX;
  */
 export default function createReachLaw(reachInUnits) {
   const table = getTable();
-  // T(x) = x K1(x) goes from 1 at x = 0 to 0 at X_MAX, so c T(mu r) / r is a force of c mu K1(mu r)
-  const T = {
-    value: x => lookup(table, x),
-    // the slope of the table's straight piece under x (the dual tree needs it)
-    derivative: x => {
-      if (x >= X_MAX) return 0;
-      const i = (x * SCALE) | 0;
-      return (table[i + 1] - table[i]) * SCALE;
-    }
-  };
   // 1 / where the push starts to fade, in layout units
-  const mu = simulator => reachInUnits > 0 ? 1 / (reachInUnits * simulator.springLength()) : 0;
+  const mu = simulator => {
+    const unit = simulator.springLength();
+    return reachInUnits > 0 && unit > 0 ? 1 / (reachInUnits * unit) : 0;
+  };
   return {
-    force: 'c * T(mu * r) / r',
-    functions: { T },
+    // T(x) = x K1(x) goes from 1 at x = 0 to 0 at X_MAX, so c T(mu r) / r is a force of
+    // c mu K1(mu r). The push is matched to the library's at one spring length, which needs a
+    // spring length above 0: at 0 (the panel passes through it while you type "0.5") the push is
+    // the library's 1/r^2.
+    force: '(springLength > 0 ? c * T(mu * r) : 1 / r) / r',
+    // The simulator interpolates the table, and uses the slope of the table's straight piece
+    // under x as T's derivative (the dual tree needs it). Past X_MAX it keeps the last value, 0.
+    tables: { T: { from: 0, to: X_MAX, values: table } },
     // Read every step, so the law follows the spring length
     params: {
       mu,
       // Same push as the library at r = unit: c * T(mu * unit) / unit = 1 / unit^2
       c: simulator => {
         const unit = simulator.springLength();
-        return 1 / (unit * lookup(table, mu(simulator) * unit));
+        return unit > 0 ? 1 / (unit * lookup(table, mu(simulator) * unit)) : 0;
       }
     }
     // Past X_MAX the law is 0. Telling the trees (range: 'X / mu') would let them skip far
@@ -49,10 +49,10 @@ function lookup(t, x) {
 }
 
 let table = null;
-// T(x) = x * K1(x) on [0, X_MAX], with one extra entry so interpolation can read t[i + 1].
+// T(x) = x * K1(x) at TABLE_SIZE + 1 points from 0 to X_MAX.
 function getTable() {
   if (table) return table;
-  table = new Float64Array(TABLE_SIZE + 2);
+  table = new Float64Array(TABLE_SIZE + 1);
   for (let i = 0; i < table.length; i++) {
     const x = (i / TABLE_SIZE) * X_MAX;
     table[i] = x === 0 ? 1 : (x >= X_MAX ? 0 : x * besselK1(x));

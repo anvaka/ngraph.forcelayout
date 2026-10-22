@@ -53,12 +53,12 @@ ball, whose pull is exact.</p>`,
     if (!(density > 0)) return null; // 0 turns the background off
     const extra = Number(params.extra);
     const startStep = Number(params.startStep);
-    addBackground(layout, {
+    const background = addBackground(layout, {
       density,
       extra: Number.isNaN(extra) ? 0.3 : Math.max(0, extra),
       startStep: Number.isNaN(startStep) ? 300 : startStep,
       stepsBefore: steps || 0
     });
-    return { dispose() { layout.simulator.removeStage('neutral-background'); } };
+    return { dispose: background.dispose };
   }
 };
