@@ -101,6 +101,25 @@ test('a one-sided formula has only the i-variant; vector accumulators have D num
   assert.deepEqual(pairAccumulators(stage, 3, columns), [{ column: 'off', width: 3, startAtZero: false }]);
 });
 
+test('force_i += and force_j -= add into my force sum, each variant its own end', () => {
+  const sim = simulatorWith(2, s => s.addPairFormula('direct', {
+    radius: 3, formula: 'force_i += 0.5 * (pos_i - pos_j); force_j -= 2 * (pos_i - pos_j); push = 1',
+  }));
+  const program = sim.program();
+  const stage = program.stages.find(s => s.name === 'direct');
+  const columns = Object.fromEntries(program.columns.nodes.map(c => [c.name, c]));
+  const read = (column, who, k) => `${who}_${column}_${k}`;
+  const printed = printPairFormula(stage, { D: 2, printer: createPrinter(), columns, read, param: () => '', builtIn: () => '', force: k => `F${k}` });
+  const i = printed.i.join('\n'), j = printed.j.join('\n');
+  assert.match(i, /F0 \+= /);
+  assert.doesNotMatch(i, /F0 -= /, 'the i-variant drops force_j');
+  assert.match(j, /F1 -= /);
+  assert.doesNotMatch(j, /F1 \+= /, 'the j-variant drops force_i');
+  assert.deepEqual(printed.accumulators, [], 'force is not an accumulator column');
+  assert.deepEqual(pairOutputs(stage, 2, columns), [{ name: 'force', width: 2 }]);
+  assert.equal(plan(sim, ['direct']).refusal, null);
+});
+
 test('kernels fit 8 storage buffers when formulas read columns from S and H', () => {
   for (const D of [2, 3, 4]) {
     const sim = simulatorWith(D, symmetric);
@@ -154,9 +173,9 @@ test('the guard\'s message names the stage and the count', () => {
   const p = plan(sim, ['crowd']);
   assert.equal(statusMessage(p, new Uint32Array(5)), null);
   const message = statusMessage(p, Uint32Array.from([1, 0, 39100000, p.capChunks, 0]));
-  assert.match(message, /^the pair formula crowd needed about 1\.0e10 pair tests in one step; the GPU stops at /);
+  assert.match(message, /^the pair formula crowd needed about 1\.0e10 pair tests in one step; the GPU runs at most [\d.e]+ in one submit/);
   assert.match(message, /start the stage later \(when: 'step > 40'\) or lower its radius$/);
-  assert.match(statusMessage(p, Uint32Array.from([2, 0, 1000, p.capChunks, 0])), /needed about 256,000 tests to order its crowded cells/);
+  assert.match(statusMessage(p, Uint32Array.from([2, 0, 1000, p.capChunks, 0])), /needed at least 256,000 pair tests \(counting only the work of ordering its crowded cells\)/);
   assert.match(statusMessage(p, Uint32Array.from([1, 0, 0xffffffff, p.capChunks, 0])), /needed more than /);
 });
 
