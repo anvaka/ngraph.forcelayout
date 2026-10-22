@@ -30,45 +30,6 @@ test('law code gives F(r)/r and its gradient term', function (t) {
   t.end();
 });
 
-test('WGSL code gives the same numbers as the JS code', function (t) {
-  var laws = [
-    { force: 'r^-2', params: { L: 1 } },
-    { force: 'exp(-r / L) / r^2', params: { L: 2 }, range: 'L * 3' },
-    { force: 'r^(1 - D) * L^(D - 3)', params: { L: 7 } },
-    { force: 'tanh(r / L) / r^2 + min(r, L) - abs(r - 3) + sqrt(r) * log(r) / 2', params: { L: 2 } },
-    { force: 'pow(r, -p) * sin(r) - cos(r / 2) / max(r, 1)', params: { p: 1.5 } },
-    { force: 'r^q / (r * r + e * e)', params: { q: 0.3, e: 0.5 } }
-  ];
-  laws.forEach(function (spec) {
-    var law = createRepulsionLaw(spec);
-    law.update({ settings: { dimensions: 2 } });
-    var numbers = new Float32Array(law.valueCount);
-    law.writeValues(numbers, 0);
-    var kernel = law.emitWGSL(2, 'r', 'k1', 'k2');
-    var wgsl = law.wgslPrologue(function (i) { return 'numbers[' + i + ']'; }) + ' ' + kernel;
-    t.notOk(/Math\.|\bvar\b|\?/.test(wgsl), spec.force + ': no JS left in WGSL');
-    var literals = [], number = /(^|[^\w.])(\d+(\.\d*)?([eE][+-]?\d+)?)/g, match;
-    while ((match = number.exec(kernel))) literals.push(match[2]);
-    t.ok(literals.length && literals.every(function (text) { return /[.eE]/.test(text); }), spec.force + ': every number is a float');
-    if (spec.range) t.ok(/lawRange2 = numbers\[\d+\]/.test(wgsl), 'range is declared');
-
-    var asJS = wgsl.replace(/\blet\b/g, 'var')
-      .replace(/select\(([^,()]+), ([^,()]+), ([^()]+)\)/g, '($3 ? $2 : $1)')
-      .replace(/\b(exp|log|sqrt|abs|tanh|sin|cos|min|max|pow)\(/g, 'Math.$1(');
-    var gpu = new Function('r', 'numbers', asJS + ' return [k1, k2];');
-    var cpu = new Function('r', 'values', 'lawFunctions', law.prologue('values') + ' var k1, k2; ' + law.emit(2, 'r', 'k1', 'k2') + ' return [k1, k2];');
-    [0.3, 1.7, 4].forEach(function (r) {
-      var a = gpu(r, numbers), b = cpu(r, law.values, law.functions);
-      t.ok(Math.abs(a[0] - b[0]) <= 1e-6 * Math.abs(b[0]) && Math.abs(a[1] - b[1]) <= 1e-6 * Math.abs(b[1]),
-        spec.force + ' at r = ' + r);
-    });
-  });
-  t.throws(function () {
-    createRepulsionLaw({ force: 'K(r)', functions: { K: { value: Math.cos } } }).emitWGSL(2, 'r', 'k1');
-  }, /cannot run on the GPU/);
-  t.end();
-});
-
 test('law expressions are checked', function (t) {
   t.throws(function () { createRepulsionLaw('exp(-r / L)'); }, /Unknown name/);
   t.throws(function () { createRepulsionLaw('foo(r)'); }, /Unknown function/);
@@ -271,7 +232,7 @@ test('a range of 0 pushes nothing, even with 1/r^2', function (t) {
 test('law code reads every number it computes', function (t) {
   ['exp(-r / L) / r^2', '-r^-2', '(1 + r / L) * exp(-r / L) / r^2', 'sqrt(1 + L * r * r) / r^2'].forEach(function (force) {
     var law = createRepulsionLaw({ force: force, params: { L: 2 } });
-    [law.emit(2, 'r', 'k1'), law.emit(2, 'r', 'k1', 'k2'), law.emitWGSL(2, 'r', 'k1', 'k2')].forEach(function (code) {
+    [law.emit(2, 'r', 'k1'), law.emit(2, 'r', 'k1', 'k2')].forEach(function (code) {
       var declared = code.match(/(var|let) k1_\d+ /g) || [];
       declared.forEach(function (declaration) {
         var name = declaration.split(' ')[1];

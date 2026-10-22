@@ -1,57 +1,89 @@
 # ngraph.forcelayout.gpu
 
-An experimental 2D force layout for `ngraph.graph` that runs entirely on WebGPU. It follows the
-physics and settings of `ngraph.forcelayout` (springs, repulsion, drag, `maxVelocity`, the
-`euler` and `fire` integrators), but it is a separate engine and does not use the library.
-
-Graphs up to 1,024 nodes use exact all-pairs repulsion. Larger graphs use a grid pyramid
-instead of a tree, so `theta` and `nbody` don't apply. On large graphs a step is hundreds of
-times faster than on the CPU.
+Runs a layout of `ngraph.forcelayout` on WebGPU. The layout keeps its API: the GPU runs the
+layout's own simulator, and positions come back into the layout after every batch of steps.
+Today it runs the library's built in step (springs, repulsion with any law, drag, Euler or FIRE)
+in 2D; `plan()` says why it cannot run anything else.
 
 ## Usage
 
 ``` js
-import {initWebGPU, createGpuLayout} from 'ngraph.forcelayout.gpu';
+import createLayout from 'ngraph.forcelayout';
+import {createWebGPUBackend, runOnGpu} from 'ngraph.forcelayout.gpu';
 
-const device = await initWebGPU(); // null when WebGPU is not available
-if (device) {
-  const layout = createGpuLayout(device, graph, {
-    settings: {springLength: 10, maxVelocity: 4},
-    // optional: start from positions you already have
-    getInitialPosition: nodeId => cpuLayout.getNodePosition(nodeId)
-  });
-
+const layout = createLayout(graph);
+const backend = await createWebGPUBackend();          // null without WebGPU
+const plan = layout.simulator.plan(backend);          // {runs, reasons, warnings, stages}
+if (plan.runs) {
+  const gpu = await runOnGpu(layout, backend);        // resolves when pipelines and data are ready
   function frame() {
-    layout.step(20); // queues 20 steps, never waits for the GPU
-    const pos = layout.getNodePosition(someNodeId); // {x, y} from the latest finished step
+    gpu.step(20);                                     // queues 20 steps, returns at once
+    const pos = layout.getNodePosition(someNodeId);   // as on the CPU, from the latest readback
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+  gpu.on('error', e => console.log(e.message));       // stepping stopped (e.lost: the device is gone)
+} else {
+  console.log(plan.reasons);                          // ['pull: WebGPU does not run node formulas yet']
 }
 ```
 
-Repulsion is 1/r^2 by default, as in the library. `settings.repulsionLaw` takes any law the
-library's `repulsionLaw` takes (say `'exp(-r / L) / r^2'` or `{force, params, range}`) and compiles
-it into the shaders, so a new law costs only its arithmetic. The law is read when the layout is
-created; its parameters are read again on every `step()` call. Parameter functions get a stand-in
-for the simulator with `settings`, `unit()`, `iteration()` and getters such as `springLength()`.
-Laws with custom JS `functions`, or with more than 16 numbers, run on the CPU only: the GPU
-layout throws for them when it is created.
+- `gpu.step(n)` queues `n` steps and submits their work. The layout's `'step'` event fires once
+  per readback, and `'stable'` from the movement between readbacks (`gpu.lastMove`).
+- `await gpu.sync()`: the store holds the positions and velocities of every queued step. Until the
+  next `gpu.step()`, the host owns them: write positions then (a final step on the drawing, say),
+  and the next step uploads them. Writes without `sync()` are overwritten by the next readback,
+  unless you mark the column with `store.changed('pos')`.
+- `await gpu.stop()` syncs, gives the simulator the step count and unwraps the layout:
+  `layout.step()` works again. While wrapped, `layout.step()` throws. `layout.dispose()` stops it.
+- Changes reach the GPU by themselves: settings through the simulator's setters, masses and
+  pinned nodes through the store's column versions (the body setters mark them), graph edits
+  and a new law at the next `gpu.step()`.
+- A `'step'` listener that changes what the GPU reads (a link length, a setting) halts the runner
+  with a message: on the CPU it would run after every step, here only once per batch.
+- `gpu.stats()`: `{msPerStep, source: 'gpu-timestamps' | 'wall-clock', steps, engine, ...}`.
+- There is no fallback to the CPU. A step the GPU cannot run is refused before it starts, or
+  halts the runner if it shows up later; the app decides what to do (`await gpu.stop()` and
+  `layout.step()`, say).
 
-`gpuBackend` tells which parts of a library simulator this module can run, before you switch:
-`layout.simulator.plan(gpuBackend)` returns `{runs, reasons, stages}`, with a reason for every
-stage it cannot run (formula stages, JavaScript stages, per-link spring lengths, charges other
-than the default mass, more than 2 dimensions, ...).
+`gpuCapabilities(limits)` is a backend without a device, for `plan()` in tests or on a server:
+WebGPU's default limits, or yours on top of them.
 
-The layout also has `setNodePosition(id, x, y)`, `pinNode(id, isPinned)`, `getGraphRect()`,
-`updateSettings(partial)`, `getStats()` and `dispose()`. `await layout.flush()` waits until
-positions include every step queued so far.
+## Architecture
 
-## Not done yet
+The library describes the step as data (`simulator.program()`: stages in CPU order, what each
+reads and writes, formulas as text) and prints formulas through a printer it is given. The module
+compiles that description; it never reads the library's internals.
 
-* 2D only.
-* The graph is read once: after adding or removing nodes or links, create a new layout.
-* Positions come back one or more frames late, because reading from the GPU is asynchronous.
-* No stop rule: it runs as long as you call `step()`.
+| File | Part |
+|---|---|
+| `index.js` | Public API: `createWebGPUBackend`, `runOnGpu`, `gpuCapabilities`. |
+| `device.js` | The device: limits, `uncapturederror` and loss watching, pipelines compiled with `createComputePipelineAsync` and cached per device by their WGSL text and layout, the submit cost. |
+| `wgsl/print.js` | The WGSL printer of the formula language: prefixed user names, safe builtins (tanh clamped, constant whole powers multiplied), f32 literal rules; the law helpers (`emitLaw`, the law's numbers). |
+| `check.js` | The lowering table: what each stage needs to run here, checked against a capability profile (limits) with no device. `lower()` gives `plan()` its verdicts and the runner its plan, so they cannot disagree. Literal checks, storage bindings per kernel, buffer sizes. |
+| `schedule.js` | From an accepted step to kernels: which template, which kernels in which order, which stages each computes. The generic emitter (node kernels in CPU order, the one-kernel small-graph step, sums, the generic pyramid) adds its plans here. |
+| `templates/grid.js`, `templates/small.js` | Today's engines as stock templates, WGSL byte for byte (test/t4.js). They take masses from the store, compile asynchronously, and run LOCAL and FORCE (or the small kernel) with a per-step copy of their uniforms when a law's numbers change within a batch. |
+| `buffers.js` | Store to device and back: f64 origin, Hilbert renumbering, f32 packing, readback into the store as f64. |
+| `runner.js` | `runOnGpu`: the guard stage, uploads by column version, per-step values, batching, readbacks, `sync`, `stop`, events, the listener check, errors and device loss, sync points for graph edits and structure changes. |
+
+How a call flows: `gpu.step(n)` applies graph edits (a sync point when there were any), checks
+the step's structure (a sync point and a new plan when it changed), uploads what changed, reads
+the law's numbers for each queued step (when a parameter is a function, or the law reads
+`step`), and encodes the steps in as few submits as fit 100 ms of GPU work. One of three staging
+buffers copies the positions; when it maps, the store gets them as f64 and the events fire.
+
+## Tests
+
+Text only, with plain node (no device):
+
+```
+node modules/gpu/test/t3.js       # law WGSL against what the library printed (48 pairs)
+node modules/gpu/test/t4.js       # stock templates against today's kernels (16 laws)
+node modules/gpu/test/print.js    # the printer: numbers agree with JS, literals, names, every builtin
+node modules/gpu/test/check.js    # plan() verdicts and budgets
+node modules/gpu/test/t8.js <demo root>   # every idea of the demo: how many run, 2D and 3D, both profiles
+```
+
+Device tests run in headless Chrome through the GPU harness of this work (not in the repo).
 
 Part of the [ngraph.forcelayout](../..) repository. Not published to npm yet.

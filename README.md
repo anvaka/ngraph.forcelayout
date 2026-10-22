@@ -234,8 +234,11 @@ simulator.addHostStep('measure', {
 ```
 
 Setters of settings fire `'settings'` (`simulator.on('settings', function (key, value) {})`).
-Every column has a version, `store.versions[name]`, that grows when it changes; code that
-writes a column's array directly calls `store.changed(name)` so that such engines see it.
+Every column has a version, `store.versions[name]`, that grows when it changes. Setters mark
+their column: `body.mass`, `body.isPinned`, `spring.length`, `spring.coefficient`, and positions
+and velocities written through a body (`layout.setNodePosition()`, `body.setPosition()`,
+`body.pos.x = ...`). Code that writes a column's array directly calls `store.changed(name)` so
+that such engines see it.
 
 ### Repulsion law
 
@@ -374,11 +377,14 @@ removes them (a replaced stage comes back).
 `simulator.program()` describes the whole step as plain data: settings, columns and who writes
 them, and every stage in order with its shape, formula, what it reads and writes and how, its
 params and options. Engines compile from it; functions appear as `{kind: 'host'}`, and
-`simulator.stageValues(name, context)` gives their numbers for a step. A stage of an add-on
+`simulator.stageValues(name, context)` gives a stage's numbers for a step (params, radius, `when`,
+the built in values it reads, a law's values). `simulator.programVersion()` tells when the
+structure changed without building the description. A stage of an add-on
 module describes itself with `addStage(name, run, { describe: { shape: 'grid', ... } })`, and
 `values: function (context) { ... }` gives its numbers for a step.
 `simulator.plan(backend)` tells which stages an engine can run, and why not: the WebGPU module
-in `modules/gpu` exports `gpuBackend` for it. JS stages and pair rules run on the CPU only.
+in `modules/gpu` gives a backend for it (`createWebGPUBackend()`), and runs a layout with
+`runOnGpu(layout, backend)`. JS stages and pair rules run on the CPU only.
 
 ## Space occupied by graph
 

@@ -209,11 +209,22 @@ test('stageValues() gives a stage its numbers for any step', function (t) {
     startAtZero: ['crowd']
   });
   var now = sim.stageValues('crowding');
-  t.same(now, { params: { h: 1 }, when: false, radius: 2 }, 'the current step');
-  t.same(sim.stageValues('crowding', sim.stepContext(5)), { params: { h: 6 }, when: true, radius: 12 }, 'a step to come');
-  var repulsion = sim.stageValues('repulsion', sim.stepContext(7));
-  t.equal(repulsion.law.values.L, 14, 'a law gets its values for that step');
+  t.same(now, { params: { h: 1 }, when: false, builtIns: { step: 0 }, radius: 2 }, 'the current step');
+  t.same(sim.stageValues('crowding', sim.stepContext(5)), { params: { h: 6 }, when: true, builtIns: { step: 5 }, radius: 12 }, 'a step to come');
+  var step5 = sim.stageValues('repulsion', sim.stepContext(5));
+  var step6 = sim.stageValues('repulsion', sim.stepContext(6));
+  t.equal(step5.lawValues.L, 10, 'a law gets its numbers for that step');
+  t.equal(step6.lawValues.L, 12);
+  t.equal(step5.lawValues.$h0, 1 / 10, 'with the parts computed once per step');
+  t.equal(step6.lawValues.$h0, 1 / 12, 'each call keeps its own numbers');
+  t.equal(step5.law, step6.law, 'the compiled law is the same, for generating code');
+  t.same(sim.stageValues('drag').builtIns, { dragCoefficient: 0.9 });
+  t.same(sim.stageValues('repulsion').builtIns, { gravity: -12, theta: 0.8 });
   t.equal(sim.stageValues('drag').when, true);
+  sim.springLength(0);
+  sim.store.define('scaled');
+  sim.addNodeFormula('scale', { formula: 'scaled = unit * n' });
+  t.same(sim.stageValues('scale').builtIns, { unit: 1e-3, n: 6 }, 'unit keeps its floor');
   t.throws(function () { sim.stageValues('nope'); }, /No stage named nope/);
   t.end();
 });
@@ -402,7 +413,7 @@ test('plan(backend): add-on stages describe themselves; backends check program()
   var field = stageOf(sim.program(), 'field');
   t.equal(field.shape, 'grid');
   t.equal(field.anchor, 'box', 'with options of its own');
-  t.same(sim.stageValues('field', sim.stepContext(3)), { when: true, params: { cell: 5 } }, 'and its own numbers per step');
+  t.same(sim.stageValues('field', sim.stepContext(3)), { when: true, params: { cell: 5 }, builtIns: {} }, 'and its own numbers per step');
   var cpu = sim.plan().stages;
   t.equal(cpu.filter(function (s) { return s.stage === 'field'; })[0].how, 'add-on stage (grid)');
   t.equal(cpu.filter(function (s) { return s.stage === 'other'; })[0].how, 'a mesh on the CPU');
@@ -447,6 +458,147 @@ test('a printer spells formulas in another language', function (t) {
   Object.keys(formula.BUILTINS).forEach(function (name) {
     var builtIn = formula.BUILTINS[name];
     t.ok(Array.isArray(builtIn.args) && builtIn.result && builtIn.domain, name + ' has its semantics');
+  });
+  t.end();
+});
+
+test('host writes to positions and velocities mark their columns', function (t) {
+  var graph = createGraph();
+  graph.addLink(1, 2);
+  var layout = createLayout(graph);
+  layout.step();
+  var versions = layout.simulator.store.versions;
+  var pos = versions.pos;
+  layout.setNodePosition(1, 5, 6);
+  t.ok(versions.pos > pos, 'setNodePosition (a drag) marks pos');
+  pos = versions.pos;
+  layout.getBody(2).pos.x = 3;
+  t.ok(versions.pos > pos, 'so does a write through a body\'s position');
+  var velocity = versions.velocity;
+  layout.getBody(2).velocity.reset();
+  t.ok(versions.velocity > velocity, 'and of its velocity');
+  var force = versions.force;
+  layout.getBody(2).force.x = 1;
+  t.equal(versions.force, force, 'forces are cleared every step and not marked');
+  var Body = require('../lib/codeGenerators/generateCreateBody')(2);
+  var loose = new Body(1, 2);
+  loose.setPosition(3, 4);
+  loose.pos.y = 5;
+  t.same(loose.pos.toJSON(), { x: 3, y: 5 }, 'a body outside a simulator has nothing to mark');
+  t.end();
+});
+
+test('program() details: own positions of trees, pair rules, counters of link formulas', function (t) {
+  var sim = makeSimulator({ dimensions: 2, adaptiveTimeStepWeight: 0.2 }, 6);
+  var repulsion = stageOf(sim.program(), 'repulsion');
+  t.same(repulsion.reads[0], { space: 'nodes', column: 'pos', rows: 'own' }, 'a tree reads the position of the body it pushes');
+  var version = sim.programVersion();
+  t.equal(sim.program().version, version, 'programVersion() is the version program() reports');
+  sim.addPairRule('a', { radius: 1, rule: function () { return 0; } });
+  t.ok(sim.programVersion() > version);
+  version = sim.programVersion();
+  sim.addPairRule('b', { radius: 1, rule: function () { return 0; } });
+  t.ok(sim.programVersion() > version, 'a rule added to the pairRules stage changes the structure');
+  version = sim.programVersion();
+  sim.removePairRule('b');
+  t.ok(sim.programVersion() > version, 'and so does one removed');
+  sim.addLinkFormula('soft', { replace: 'springs', formula: 'pull = coefficient * (r - length)' });
+  var soft = stageOf(sim.program(), 'soft');
+  t.equal(soft.args.counters, true, 'in place of the springs it keeps their counters');
+  t.same(soft.writes.slice(-2).map(function (w) { return w.column + ':' + w.mode; }), ['springCount:add', 'springLength:add']);
+  sim.adaptiveTimeStepWeight(0);
+  soft = stageOf(sim.program(), 'soft');
+  t.equal(soft.args.counters, false, 'only while the adaptive time step is on');
+  t.notOk(soft.writes.some(function (w) { return w.column === 'springCount'; }));
+  t.end();
+});
+
+test('a link formula without pull adds no force and draws no random numbers', function (t) {
+  var plain = makeSimulator({ dimensions: 2 }, 12);
+  var sim = makeSimulator({ dimensions: 2 }, 12);
+  sim.springStore.define('seen');
+  sim.addLinkFormula('measure', { formula: 'seen = r', after: 'integrate' });
+  for (var i = 0; i < 5; ++i) { plain.step(); sim.step(); }
+  sameNumbers(t, Array.from(sim.store.pos.subarray(0, 24)), Array.from(plain.store.pos.subarray(0, 24)), 'the layout moves as without it');
+  var spring = sim.springs[0];
+  var d = [0, 1].map(function (k) { return sim.store.pos[2 * spring.to.index + k] - sim.store.pos[2 * spring.from.index + k]; });
+  t.equal(sim.springStore.seen[0], Math.sqrt(d[0] * d[0] + d[1] * d[1]), 'it reads r');
+  var measure = stageOf(sim.program(), 'measure');
+  t.notOk(measure.writes.some(function (w) { return w.column === 'force'; }), 'no force in its writes');
+  sim.addLinkFormula('count', { formula: 'seen = seen + 1' });
+  t.notOk(stageOf(sim.program(), 'count').reads.some(function (r) { return r.column === 'pos'; }), 'nor positions when it does not read r');
+  t.end();
+});
+
+test('a link formula sets its own spring with =', function (t) {
+  var set = makeSimulator({ dimensions: 2 }, 16);
+  var viaFormula = makeSimulator({ dimensions: 2 }, 16);
+  [set, viaFormula].forEach(function (sim) {
+    sim.springStore.define('stiff');
+    for (var s = 0; s < sim.springStore.n; s += 3) sim.springStore.stiff[s] = 0.3;
+  });
+  for (var s = 0; s < set.springStore.n; ++s) {
+    set.springStore.coefficient[s] = set.springStore.stiff[s] > 0 ? set.springStore.stiff[s] : -1;
+    set.springStore.length[s] = 12;
+  }
+  viaFormula.store.define('seen');
+  viaFormula.addLinkFormula('controller', {
+    before: 'clear',
+    formula: 'coefficient = stiff > 0 ? stiff : -1; length = 12; seen_i += coefficient'
+  });
+  for (var i = 0; i < 10; ++i) { set.step(); viaFormula.step(); }
+  sameNumbers(t, Array.from(viaFormula.store.pos.subarray(0, 32)), Array.from(set.store.pos.subarray(0, 32)), 'the springs read what it set');
+  t.equal(viaFormula.springStore.coefficient[1], -1, 'the store holds what it set');
+  t.ok(Math.abs(viaFormula.store.seen[viaFormula.springs[1].from.index] - 8) < 1e-9, 'after = it reads the value with the settings filled in');
+  var controller = stageOf(viaFormula.program(), 'controller');
+  t.same(controller.writes.filter(function (w) { return w.space === 'links'; }).map(function (w) { return w.column + ':' + w.mode; }), ['coefficient:set', 'length:set']);
+  var column = viaFormula.program().columns.links.filter(function (c) { return c.name === 'coefficient'; })[0];
+  t.equal(column.writer, 'stage:controller');
+  t.throws(function () { viaFormula.addLinkFormula('bad', { formula: 'coefficient += 1' }); }, /coefficient can only be changed with =/);
+  t.throws(function () { viaFormula.addSum('bad2', { over: 'links', formula: 'coefficient = 1; 1' }); }, /cannot be assigned/);
+  t.end();
+});
+
+test('a gated stage reads only what its gate needs on its off steps', function (t) {
+  var sim = makeSimulator({ dimensions: 2 }, 4);
+  sim.store.define('out');
+  var calls = { every: 0, gate: 0, host: 0 };
+  sim.addNodeFormula('rare', {
+    when: 'step == at',
+    params: { at: function () { calls.gate += 1; return 3; }, k: function () { calls.every += 1; return 2; } },
+    formula: 'out = k'
+  });
+  sim.addNodeFormula('hosted', {
+    when: function (context) { return context.iteration() === 2; },
+    params: { k: function () { calls.host += 1; return 1; } },
+    formula: 'out += k'
+  });
+  for (var i = 0; i < 5; ++i) sim.step();
+  t.same(calls, { every: 1, gate: 5, host: 1 }, 'params outside the gate are read on its on steps only, once');
+  t.equal(sim.store.out[0], 2, 'on its own steps it runs as before (hosted at step 2, then rare at 3)');
+  t.same(sim.stageValues('rare', sim.stepContext(3)), { params: { at: 3, k: 2 }, when: true, builtIns: { step: 3 } });
+  t.end();
+});
+
+test('grouped sums follow groups that grow and shrink', function (t) {
+  var sim = makeSimulator({ dimensions: 2 }, 10);
+  sim.store.define('group', Int32Array);
+  sim.addSum('massOf', { formula: 'mass', group: 'group' });
+  function expected() {
+    var out = [];
+    for (var i = 0; i < 10; ++i) {
+      var g = sim.store.group[i];
+      if (g < 0) continue;
+      while (out.length <= g) out.push(0);
+      out[g] += sim.store.mass[i];
+    }
+    return out;
+  }
+  [[0, 1], [0, 1, 2, 4], [1], [-1], [3, 0]].forEach(function (ids) {
+    for (var i = 0; i < 10; ++i) sim.store.group[i] = ids[i % ids.length];
+    sim.step();
+    var sum = sim.sums().massOf;
+    t.same(Array.from(sum.groups.subarray(0, sum.count)), expected(), 'groups ' + ids.join(','));
   });
   t.end();
 });
