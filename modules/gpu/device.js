@@ -124,11 +124,23 @@ export async function submitCost(device) {
   return state.submitMs;
 }
 
-// The speed probe: every thread sums a push from each of PROBE_BODIES bodies, as an exact pair loop
-// does (16.8M pairs). PROBE_MS is its GPU time on the M4 Max the work caps were sized on (0.262 ms),
-// with a margin for noise
-const PROBE_BODIES = 1024, PROBE_THREADS = 16384, PROBE_MS = 0.27;
-const PROBE = `@group(0) @binding(0) var<storage, read> p: array<vec4f>;
+// The speed probe: three kinds of work the module's kernels do, each timed in its own pass.
+//  - pairs: every thread sums a push from each of 1,024 bodies (an exact pair loop, from cache);
+//  - gather: every thread reads scattered words of a 16 MB buffer (a cell sort's neighbours);
+//  - atomics: every thread adds into scattered and into shared counters (a grid's deposit).
+// MS is each part's GPU time on the M4 Max the work caps were sized on (0.93-1.01, 0.95 and
+// 0.76-0.87 ms measured), with a margin for noise; at about 1 ms each, Chrome's 100 us timestamp
+// quantum costs at most a tenth.
+const PROBE_THREADS = 65536, PROBE_BODIES = 1024, GATHER_WORDS = 1 << 22, GATHER_READS = 128, ATOMIC_SLOTS = 1 << 20, ATOMIC_ADDS = 32;
+const MIX = `fn mix(x: u32) -> u32 {
+  var h = x * 747796405u + 2891336453u;
+  h = ((h >> 16u) ^ h) * 0x45d9f3bu;
+  return (h >> 16u) ^ h;
+}`;
+const PROBE_PARTS = [
+  {
+    name: 'pairs', MS: 1.06, buffers: ['bodies', 'out'],
+    code: `@group(0) @binding(0) var<storage, read> p: array<vec4f>;
 @group(0) @binding(1) var<storage, read_write> out: array<f32>;
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
@@ -141,65 +153,130 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     acc += d * (o.w * inverseSqrt(r2) / r2);
   }
   out[gid.x] = acc.x + acc.y + acc.z;
-}`;
+}`,
+  },
+  {
+    name: 'gather', MS: 1.0, buffers: ['words', 'out'],
+    code: `@group(0) @binding(0) var<storage, read> words: array<u32>;
+@group(0) @binding(1) var<storage, read_write> out: array<f32>;
+${MIX}
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  var at = mix(gid.x);
+  var acc = 0u;
+  for (var k = 0u; k < ${GATHER_READS}u; k++) {
+    let w = words[at & ${GATHER_WORDS - 1}u];
+    acc += w;
+    at = mix(at + w);
+  }
+  out[gid.x] = f32(acc);
+}`,
+  },
+  {
+    name: 'atomics', MS: 0.91, buffers: ['slots'],
+    code: `@group(0) @binding(0) var<storage, read_write> slots: array<atomic<u32>>;
+${MIX}
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  var at = mix(gid.x);
+  for (var k = 0u; k < ${ATOMIC_ADDS}u; k++) {
+    // one add in four lands on 256 shared counters, as bodies piled into a few grid cells do
+    let slot = select(at & ${ATOMIC_SLOTS - 1}u, at & 255u, (k & 3u) == 0u);
+    atomicAdd(&slots[slot], 1u);
+    at = mix(at);
+  }
+}`,
+  },
+];
+// The factor when the probe cannot measure: a slow device, the safe side
+const UNKNOWN_SLOWDOWN = 10;
 
 /**
- * How many times slower than the M4 Max the work caps were sized on this device is (1 at least,
- * at most 100), measured once per device with a probe of a known amount of pair work: GPU time
- * from timestamps when the device has them, else the wall clock of 4 probes less a submit's cost.
- * About 0.2 ms of GPU work here; the caps and the steps per submit scale with it.
+ * How many times slower than the M4 Max the work caps were sized on this device is: the largest
+ * ratio of the probe's three parts (1 at least, 100 at most), measured once per device. GPU time
+ * from timestamps when the device has them (the larger of two runs after a warm-up), else the
+ * wall clock of each part's submit, which counts its latency too (so it reads slower, the safe
+ * side). A probe that cannot measure gives UNKNOWN_SLOWDOWN. About 3 ms of GPU work here.
  */
 export async function deviceSlowdown(device) {
   const state = watchDevice(device);
   if (state.slowdown !== null) return state.slowdown;
-  const pipeline = await getPipeline(device, { code: PROBE, label: 'SPEED_PROBE' });
-  const bodies = new Float32Array(PROBE_BODIES * 4);
-  for (let i = 0; i < PROBE_BODIES; i++) bodies.set([Math.cos(i), Math.sin(i * 1.3), (i % 37) * 0.1, 1 + (i % 5)], i * 4);
-  const input = device.createBuffer({ size: bodies.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-  const output = device.createBuffer({ size: PROBE_THREADS * 4, usage: GPUBufferUsage.STORAGE });
-  device.queue.writeBuffer(input, 0, bodies);
-  const group = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [input, output].map((buffer, binding) => ({ binding, resource: { buffer } })) });
-  const timed = device.features.has('timestamp-query');
-  const querySet = timed ? device.createQuerySet({ type: 'timestamp', count: 2 }) : null;
-  const resolve = timed ? device.createBuffer({ size: 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC }) : null;
-  const read = timed ? device.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }) : null;
-  const repeats = timed ? 1 : 4;
-  const once = async () => {
-    const enc = device.createCommandEncoder();
-    const pass = enc.beginComputePass(timed ? { timestampWrites: { querySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } } : undefined);
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, group);
-    for (let r = 0; r < repeats; r++) pass.dispatchWorkgroups(PROBE_THREADS / 256);
-    pass.end();
-    if (timed) {
-      enc.resolveQuerySet(querySet, 0, 2, resolve, 0);
-      enc.copyBufferToBuffer(resolve, 0, read, 0, 16);
-    }
-    const start = performance.now();
-    device.queue.submit([enc.finish()]);
-    if (!timed) {
-      await device.queue.onSubmittedWorkDone();
-      return (performance.now() - start) / repeats;
-    }
-    await read.mapAsync(GPUMapMode.READ);
-    const t = new BigUint64Array(read.getMappedRange());
-    const ms = Number(t[1] - t[0]) / 1e6;
-    read.unmap();
-    return ms;
-  };
-  let best = Infinity;
+  let factor = UNKNOWN_SLOWDOWN;
+  const owned = [];
   try {
+    const pipelines = await Promise.all(PROBE_PARTS.map(part => getPipeline(device, { code: part.code, label: 'SPEED_PROBE_' + part.name })));
+    const buffer = (size, usage) => { const b = device.createBuffer({ size, usage }); owned.push(b); return b; };
+    const S = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
+    const bodies = new Float32Array(PROBE_BODIES * 4);
+    for (let i = 0; i < PROBE_BODIES; i++) bodies.set([Math.cos(i), Math.sin(i * 1.3), (i % 37) * 0.1, 1 + (i % 5)], i * 4);
+    const input = buffer(bodies.byteLength, S);
+    device.queue.writeBuffer(input, 0, bodies);
+    const words = buffer(GATHER_WORDS * 4, S);
+    const fill = new Uint32Array(1 << 16);
+    for (let i = 0; i < fill.length; i++) fill[i] = (i * 2654435761) >>> 0;
+    for (let at = 0; at < GATHER_WORDS; at += fill.length) device.queue.writeBuffer(words, at * 4, fill);
+    const slots = buffer(ATOMIC_SLOTS * 4, S);
+    const output = buffer(PROBE_THREADS * 4, GPUBufferUsage.STORAGE);
+    const named = { bodies: input, words, slots, out: output };
+    const groups = pipelines.map((pipeline, p) => device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: PROBE_PARTS[p].buffers.map((name, binding) => ({ binding, resource: { buffer: named[name] } })),
+    }));
+    const timed = device.features.has('timestamp-query');
+    const count = 2 * PROBE_PARTS.length;
+    const querySet = timed ? device.createQuerySet({ type: 'timestamp', count }) : null;
+    const resolve = timed ? buffer(count * 8, GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC) : null;
+    const read = timed ? buffer(count * 8, GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST) : null;
     const submit = timed ? 0 : await submitCost(device);
-    // the first run warms the device up; the best of three counts
+    // one run: each part's ms
+    const once = async () => {
+      if (timed) {
+        const enc = device.createCommandEncoder();
+        PROBE_PARTS.forEach((part, p) => {
+          const pass = enc.beginComputePass({ timestampWrites: { querySet, beginningOfPassWriteIndex: 2 * p, endOfPassWriteIndex: 2 * p + 1 } });
+          pass.setPipeline(pipelines[p]);
+          pass.setBindGroup(0, groups[p]);
+          pass.dispatchWorkgroups(PROBE_THREADS / 256);
+          pass.end();
+        });
+        enc.resolveQuerySet(querySet, 0, count, resolve, 0);
+        enc.copyBufferToBuffer(resolve, 0, read, 0, count * 8);
+        device.queue.submit([enc.finish()]);
+        await read.mapAsync(GPUMapMode.READ);
+        const t = new BigUint64Array(read.getMappedRange());
+        const ms = PROBE_PARTS.map((part, p) => Number(t[2 * p + 1] - t[2 * p]) / 1e6);
+        read.unmap();
+        return ms;
+      }
+      const ms = [];
+      for (let p = 0; p < PROBE_PARTS.length; p++) {
+        const enc = device.createCommandEncoder();
+        const pass = enc.beginComputePass();
+        pass.setPipeline(pipelines[p]);
+        pass.setBindGroup(0, groups[p]);
+        pass.dispatchWorkgroups(PROBE_THREADS / 256);
+        pass.end();
+        const start = performance.now();
+        device.queue.submit([enc.finish()]);
+        await device.queue.onSubmittedWorkDone();
+        ms.push(performance.now() - start - submit);
+      }
+      return ms;
+    };
+    // a warm-up run, then the larger of two (slower reads the safe side)
     await once();
-    for (let k = 0; k < 3; k++) best = Math.min(best, Math.max(0, (await once()) - submit / repeats));
-  } catch (e) {
-    best = NaN;
-  } finally {
-    [input, output, resolve, read].forEach(buffer => { if (buffer) buffer.destroy(); });
+    const runs = [await once(), await once()];
+    const ms = PROBE_PARTS.map((part, p) => Math.max(runs[0][p], runs[1][p]));
+    state.probeMs = ms;
+    if (ms.every(value => Number.isFinite(value) && value > 0)) {
+      factor = Math.min(100, Math.max(1, ...ms.map((value, p) => value / PROBE_PARTS[p].MS)));
+    }
     if (querySet) querySet.destroy();
+  } catch (e) {
+    factor = UNKNOWN_SLOWDOWN;
+  } finally {
+    owned.forEach(b => b.destroy());
   }
-  state.slowdown = Number.isFinite(best) && best > 0 ? Math.min(100, Math.max(1, best / PROBE_MS)) : 1;
-  state.probeMs = best;
-  return state.slowdown;
+  state.slowdown = factor;
+  return factor;
 }
