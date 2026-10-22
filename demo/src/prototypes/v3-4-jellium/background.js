@@ -36,9 +36,11 @@ export default function addBackground(layout, options) {
   simulator.addSum('jelliumCharge', { formula: charge });
   simulator.addSum('jelliumMoment', { formula: `${charge} * pos` });
   simulator.addNodeFormula('neutral-background', {
+    // Parameter functions see the step context, which has no positions; the measurement reads
+    // them from the simulator itself
     params: {
-      sigma: sim => measure(sim),
-      radius: sim => { measure(sim); return radius; },
+      sigma: () => measure(simulator),
+      radius: () => { measure(simulator); return radius; },
       start: startStep,
       before: stepsBefore,
       edge: FIELD[FIELD.length - 1],

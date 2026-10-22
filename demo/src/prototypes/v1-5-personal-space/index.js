@@ -82,9 +82,11 @@ crossings, and steps take 1.1–1.4× as long. It works in any number of dimensi
     }
 
     simulator.on('topology', findPieces);
-    // On the same spot (r = 0) the simulator pushes along a fixed axis by `push`. Pairs of
-    // different pieces push nothing and add no stiffness.
+    // Bodies on the same spot (r = 0) have no direction to push along, so the simulator skips
+    // them. Pairs of different pieces push nothing and add no stiffness.
     simulator.addPairFormula('personalSpace', {
+      // the stiffness of this step's pairs, not a running total
+      startAtZero: ['pushStiffness'],
       radius: sim => { const size = sizes(sim); return size.active ? size.radius : 0; },
       params: {
         half: sim => sizes(sim).radius / 2,
