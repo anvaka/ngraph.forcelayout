@@ -95,7 +95,7 @@
         fewer steps, especially on trees and grids.
       </input-select>
       <input-select label='Repulsion' v-model='layoutSettings.nbody' :options='nbodyOptions'
-        :disabled='onGpu' :note="onGpu ? 'Not used on WebGPU: exact pairs up to 16,384 nodes, a grid pyramid beyond.' : ''">
+        :disabled='onGpu' :note="onGpu ? 'Not used on WebGPU: exact pairs up to 1,024 nodes, a grid pyramid beyond.' : ''">
         How node repulsion is computed. <b>quad tree</b> is Barnes-Hut: each node walks the tree.
         <b>dual tree</b> lets pairs of tree cells interact with each other, which is 5-10x faster on large
         graphs with the same accuracy. Both use theta.
@@ -124,8 +124,8 @@
         <b>WebGPU</b> runs the layout's own simulation on the GPU when it can run all of it (for now
         the built in physics with any repulsion law, node formulas and sums, in any number of
         dimensions); otherwise the layout stays on the CPU and the note under the stats says why.
-        Repulsion is exact over all pairs up to 16,384 nodes; larger 2D layouts use a grid pyramid
-        instead of a tree, so Theta and Repulsion settings do not apply. It is hundreds of times faster on large graphs, so raise
+        Repulsion is exact over all pairs up to 1,024 nodes; larger layouts use a grid pyramid
+        instead of a tree (in 2D and 3D), so Theta and Repulsion settings do not apply. It is hundreds of times faster on large graphs, so raise
         Steps per frame (e.g. 20) to see it: with one step per frame, drawing the graph is the
         bottleneck. This is a separate module, <code>modules/gpu</code> in this repository;
         ngraph.forcelayout itself always runs on the CPU.
