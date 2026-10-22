@@ -119,6 +119,8 @@ test('a pair formula gives the numbers of the same pair rule', function (t) {
       radius: h,
       symmetric: symmetric,
       rule: function (i, j, r, store) {
+        // pair formulas skip bodies on the same spot
+        if (r === 0) return 0;
         var w = c * (1 / store.mass[i] + 1 / store.mass[j]);
         store.stiff[i] += w;
         if (symmetric) store.stiff[j] += w;
@@ -129,6 +131,7 @@ test('a pair formula gives the numbers of the same pair rule', function (t) {
     pair.addPairFormula('crowd', {
       radius: 'h',
       symmetric: symmetric,
+      startAtZero: ['stiff'],
       params: { h: h, c: function () { return c; } },
       formula: 'w = c * (1 / mass_i + 1 / mass_j); stiff_i += w; ' + (symmetric ? 'stiff_j += w; ' : '') + 'push = w * 2 * (1 - r / h) / h'
     });
@@ -139,11 +142,11 @@ test('a pair formula gives the numbers of the same pair rule', function (t) {
   t.end();
 });
 
-test('a pair formula with radius 0 does nothing, but still zeroes what it adds into', function (t) {
+test('a pair formula with radius 0 does nothing, but still zeroes its startAtZero columns', function (t) {
   var sim = makeSimulator({ dimensions: 2 }, 10);
   sim.store.define('count');
   var radius = 100;
-  sim.addPairFormula('count', { radius: function () { return radius; }, formula: 'count_i += 1; count_j += 1' });
+  sim.addPairFormula('count', { radius: function () { return radius; }, startAtZero: ['count'], formula: 'count_i += 1; count_j += 1' });
   sim.step();
   t.equal(sim.store.count[5], 9, 'every other body is close');
   sim.step();
@@ -358,7 +361,7 @@ test('link formulas read and write link columns and add into both ends', functio
   var sim = makeSimulator({ dimensions: 2 }, 8);
   sim.springStore.define('seen');
   sim.store.define('linkCount');
-  sim.addLinkFormula('count', { formula: 'seen = seen + 1; linkCount_i += 1; linkCount_j += 1; pull = 0' });
+  sim.addLinkFormula('count', { startAtZero: ['linkCount'], formula: 'seen = seen + 1; linkCount_i += 1; linkCount_j += 1; pull = 0' });
   sim.step();
   sim.step();
   t.equal(sim.springStore.seen[0], 2, 'link columns keep their values');

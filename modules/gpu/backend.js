@@ -23,33 +23,44 @@ export const gpuBackend = {
     const settings = simulator.settings;
     if (settings.dimensions !== 2) reasons.push(`the WebGPU module is 2D only (dimensions: ${settings.dimensions})`);
     if (settings.adaptiveTimeStepWeight) reasons.push('the WebGPU module has no adaptive time step');
+    if (settings.inertia !== 'mass') reasons.push('the WebGPU module divides forces by the mass');
     return reasons;
   },
 
   /**
-   * Whether this module runs a stage, from the stage's description (see simulator.plan()).
+   * The same, for simulator.plan(): the step as a whole (see simulator.program()).
    */
-  check(description, simulator) {
-    switch (description.shape) {
+  checkProgram(program, simulator) {
+    return gpuBackend.checkSettings(simulator);
+  },
+
+  /**
+   * Whether this module runs a stage of simulator.program() (see simulator.plan()).
+   */
+  check(stage, program, simulator) {
+    switch (stage.builtIn || stage.shape) {
       case 'clear':
       case 'drag':
       case 'integrate':
-        return runs(KERNELS[description.shape]);
+        return runs(KERNELS[stage.builtIn]);
       case 'springs':
         return checkSprings(simulator);
+      case 'repulsion':
+        return checkRepulsion(stage, simulator);
       case 'tree':
-        return description.builtIn ? checkRepulsion(description, simulator) :
-          refuse('the WebGPU module runs one repulsion pass');
+        return refuse('the WebGPU module runs one repulsion pass');
       case 'node':
       case 'link':
       case 'pair':
       case 'sum':
-        return refuse(`the WebGPU module does not run ${description.shape} formulas yet`);
+        return refuse(`the WebGPU module does not run ${stage.shape} formulas yet`);
+      case 'host':
+        return refuse('the WebGPU module does not run host steps yet');
       case 'pair rules':
       case 'js':
         return refuse('JavaScript stages run on the CPU only');
     }
-    return refuse(`unknown kind of stage: ${description.shape}`);
+    return refuse(`unknown kind of stage: ${stage.shape}`);
   },
 };
 
@@ -63,12 +74,13 @@ function checkSprings(simulator) {
   return runs(KERNELS.springs);
 }
 
-function checkRepulsion(description, simulator) {
-  const law = description.law;
+function checkRepulsion(stage, simulator) {
+  const law = simulator.repulsionLaw();
+  const channel = stage.args.channels[0];
   if (law.tableNames.length) return refuse('the WebGPU module cannot read lookup tables in a law yet');
   if (Object.keys(law.functions).length) return refuse('laws with JavaScript functions run on the CPU only');
   if (law.valueCount > LAW_VALUES) return refuse(`the WebGPU module takes laws with up to ${LAW_VALUES} numbers`);
-  if (description.charge !== 'mass' || description.sensitivity !== 'mass') {
+  if (channel.charge !== 'mass' || channel.sensitivity !== 'mass') {
     return refuse('the WebGPU module uses the mass as charge and sensitivity');
   }
   // The module sets every mass to the library's default, 1 + links / 3
