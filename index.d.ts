@@ -40,7 +40,8 @@ declare module "ngraph.forcelayout" {
     typeOf(name: string): string | undefined;
     /**
      * Version of every column: grows when the column changes in a way an engine with its own
-     * copy of the numbers should know about (see changed())
+     * copy of the numbers should know about (see changed()). Read the property each time: reading
+     * it applies what setters wrote since the last read.
      */
     readonly versions: Record<string, number>;
     /** Grows when a column is defined or removed */
