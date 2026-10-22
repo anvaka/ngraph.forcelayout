@@ -14,6 +14,9 @@
 //   SMOOTH: one dispatch per axis, a line solve (Thomas) per grid line. Along x in 2D a workgroup
 //     runs each line as a scan of affine maps; elsewhere a thread runs a line, loading 8 points
 //     per wait (measured: one thread per line, a point per load, cost 0.28 of a 0.39 ms step)
+//   RESIDUAL, SMOOTH again: from gamma 2 on, one step of iterative refinement keeps the smoothed
+//     field in two words (gridField + gridLo), so slopes stay within 1e-6 of the CPU's however
+//     far the smoothing reaches (see residual())
 //   GATHER: a thread per body writes the value and gradient columns
 //
 // No float atomics anywhere, and no float sum whose order a race decides, so steps repeat exactly.
@@ -28,6 +31,7 @@
 //   gridSp    per sorted body: its offsets in its base cell per axis and that cell along x (and its
 //             value, in 2D in the third word; in 3D in a second vec4)
 //   gridField the field, a density per grid point
+//   gridLo    with smoothing: the deposit, then the residual, then the field's low word
 export const WG = 256;
 // Threads of a smoothing workgroup that runs one line per thread
 const LINE_WG = 64;
@@ -51,11 +55,18 @@ export const META = {
   TAB_LAST: 30,  // last entry of the coefficient tables
   TAB_GAMMA: 31, // diffuse / cell^2 the tables hold (f32 bits)
   TAB_DONE: 32,  // entries they hold, or CONVERGED: entries past the last equal it
+  ZERO: 33,      // always 0: grid_hold() in kernels without GU
+  REFINE: 34,    // 1 when this step's smoothing takes the refinement step (see residual())
   STATUS: 36,    // sticky: [1 too wide | 3 over capacity, cells across (f32), cell (f32), axis]
-  IND: 40,       // indirect dispatch arguments, 3 words each: scan blocks, scan add, deposit, smooth per axis
-  TABLE: 64,     // coefficient tables (see params()): 1 / pivot, then mu; tableSize entries each
+  IND: 40,       // indirect dispatch arguments, 3 words each: scan blocks, scan add, deposit, smooth per
+                 // axis, the residual, smooth per axis again (0 workgroups when the step does not refine)
+  TABLE: 80,     // coefficient tables (see params()): 1 / pivot, then mu; tableSize entries each
 };
 export const IND_SCAN = META.IND, IND_ADD = META.IND + 3, IND_DEPOSIT = META.IND + 6, IND_SMOOTH = META.IND + 9;
+export const IND_RESIDUAL = META.IND + 18, IND_SMOOTH_LOW = META.IND + 21;
+// Smoothing from this gamma (diffuse / cell^2) on takes the refinement step; below it the plain
+// f32 field's slopes are within 2e-6 of the CPU's (measured: 1.9e-6 at gamma 1, 3.2e-6 at 4)
+const REFINE_GAMMA = 2;
 const CONVERGED = 0xffffffff;
 
 function each(n, fn, sep = ' ') {
@@ -109,7 +120,10 @@ export function gridKernels(spec) {
   k[`${label}_SCAN_ADD`] = scanAdd(spec);
   k[`${label}_ORDER`] = order(spec);
   k[`${label}_DEPOSIT`] = deposit(spec);
-  if (spec.smooth) for (let axis = 0; axis < D; axis++) k[`${label}_SMOOTH${axis}`] = smooth(spec, axis);
+  if (spec.smooth) {
+    for (let axis = 0; axis < D; axis++) k[`${label}_SMOOTH${axis}`] = smooth(spec, axis);
+    k[`${label}_RESIDUAL`] = residual(spec);
+  }
   k[`${label}_GATHER`] = gather(spec);
   return k;
 }
@@ -174,6 +188,8 @@ const STEP = { name: 'V', kind: 'step' };
 const metaRead = { name: 'gridMeta', kind: 'read', type: 'array<u32>' };
 const metaWrite = { name: 'gridMeta', kind: 'storage', type: 'array<u32>' };
 const field = access => ({ name: 'gridField', kind: access, type: 'array<f32>' });
+// the smoothed field's low word (see residual())
+const low = access => ({ name: 'gridLo', kind: access, type: 'array<f32>' });
 
 // The caller's buffers named by colRefs, once each
 function callerBuffers(refs, access) {
@@ -349,6 +365,12 @@ function params(spec) {
     // sqrt(gamma) times it. The table holds 1 / m_i, and mu_i for the self term.
     lines.push(`  let diffuse = ${at('diffuse')};`);
     lines.push('  let gam = select(0.0, diffuse / (cell.x * cell.x), diffuse > 0.0);');
+    lines.push(`  let refine = flag == 0u && gam >= ${REFINE_GAMMA}.0;`);
+    lines.push(`  gridMeta[${META.REFINE}u] = select(0u, 1u, refine);`);
+    lines.push(`  ${split(`select(0u, (total + ${WG - 1}u) / ${WG}u, refine)`, IND_RESIDUAL)}`);
+    for (let k = 0; k < D; k++) {
+      lines.push(`  for (var w = 0u; w < 3u; w++) { gridMeta[${IND_SMOOTH_LOW + 3 * k}u + w] = select(0u, gridMeta[${IND_SMOOTH + 3 * k}u + w], refine || w == 2u); }`);
+    }
     lines.push(`  let need = ${maxOf(Array.from({ length: D }, (_, k) => `sz${k}`))};`);
     lines.push(`  let held = gridMeta[${META.TAB_DONE}u];`);
     lines.push(`  if (flag == 0u && (gridMeta[${META.TAB_GAMMA}u] != bitcast<u32>(gam) || (held != ${CONVERGED}u && held < need))) {`);
@@ -546,6 +568,8 @@ function deposit(spec) {
   }).join('\n  ');
   const bindings = [metaRead, { name: 'gridStart', kind: 'read', type: 'array<u32>' }, { name: 'gridSp', kind: 'read', type: 'array<vec4f>' }, field('storage')];
   if (spec.deposit) bindings.push({ name: 'gridCount', kind: 'read', type: 'array<u32>' });
+  // with smoothing, the deposit stays in gridLo too: the residual needs it
+  if (spec.smooth) bindings.push(low('storage'));
   const unit = f32At(META.UNIT);
   const scale = spec.deposit ? `  let most = bitcast<f32>(gridCount[${spec.capacity}u]);
   let scale = select(0.0, 1073741824.0 / most, most > 0.0);
@@ -564,7 +588,78 @@ ${scale}  let j0 = i32(t % u32(s0));
   let hi0 = min(j0${quad ? ' + 1' : ''}, s0 - 1);
   var lo = 0u; var hi = 0u;
   ${body}
-  gridField[t] = ${total};
+  let deposited = ${total};
+  gridField[t] = deposited;${spec.smooth ? `\n  gridLo[t] = select(0.0, deposited, gridMeta[${META.REFINE}u] != 0u);` : ''}
+}`);
+}
+
+// One step of iterative refinement for the smoothing. The f32 sweeps leave a few ulps of noise
+// in every point of the smoothed field X, and a slope is a difference of neighbouring points,
+// which on a field smoothed over many cells is a small difference of large numbers: at gamma 256
+// the slopes were off by 1.9e-5 of their RMS. So the field is kept in two words, X + Y:
+// R = u - (A_x A_y ...) X, then Y = the same smoothing of R (the second pass of the SMOOTH
+// kernels, on gridLo). A_k = 1 + gamma L_k with L_k f = (f - f_left) + (f - f_right) (zero outside
+// the grid); R is formed from those differences, never from (1 + 2 gamma) X, so its own rounding
+// is noise the second smoothing averages away. Both words then hold the field to about 1e-12.
+// gridLo holds the deposit u on entry (DEPOSIT) and R on exit.
+function residual(spec) {
+  const { D } = spec;
+  const offsets = [];
+  const walk = (k, cur) => { if (k === D) { offsets.push(cur); return; } for (const d of [-1, 0, 1]) walk(k + 1, cur.concat(d)); };
+  walk(0, []);
+  const key = o => o.map(d => ({ '-1': 'm', 0: 'z', 1: 'p' })[d]).join('');
+  const strides = ['', ' * s0', ' * s0 * s1'];
+  // neighbours outside the grid are 0; their loads are clamped inside it and the value dropped
+  const loads = offsets.map(o => {
+    const inside = o.map((d, k) => (d === 0 ? null : d < 0 ? `j${k} > 0` : `j${k} + 1 < s${k}`)).filter(Boolean);
+    const idx = o.map((d, k) => `${d === 0 ? `j${k}` : d < 0 ? `max(j${k} - 1, 0)` : `min(j${k} + 1, s${k} - 1)`}${strides[k]}`).join(' + ');
+    const load = `gridField[u32(${idx})]`;
+    return `let x${key(o)} = ${inside.length ? `select(0.0, ${load}, ${inside.join(' && ')})` : load};`;
+  });
+  // (prod_{k in axes} L_k) X at the centre, as nested differences: L along the first axis of the
+  // set at every offset of the others, and so on
+  const products = [];
+  const termOf = axes => {
+    // values over offsets of `axes` (others at 0), reduced one axis at a time
+    let table = new Map();
+    offsets.filter(o => o.every((d, k) => axes.indexOf(k) >= 0 || d === 0)).forEach(o => table.set(key(o), `x${key(o)}`));
+    let free = axes.slice();
+    while (free.length) {
+      const axis = free.shift();
+      const next = new Map();
+      table.forEach((code, k) => {
+        const o = k.split('').map(c => ({ m: -1, z: 0, p: 1 })[c]);
+        if (o[axis] !== 0) return;
+        const at = d => table.get(key(o.map((v, a) => (a === axis ? d : v))));
+        const name = `l${axes.join('')}_${axis}_${k}`;
+        products.push(`let ${name} = grid_hold(grid_hold(${code} - ${at(-1)}) + grid_hold(${code} - ${at(1)}));`);
+        next.set(k, name);
+      });
+      table = next;
+    }
+    return table.get(key(Array(D).fill(0)));
+  };
+  const sets = [];
+  for (let mask = 1; mask < 1 << D; mask++) sets.push(Array.from({ length: D }, (_, k) => k).filter(k => mask & (1 << k)));
+  const bySize = [1, 2, 3].map(size => sets.filter(set => set.length === size).map(termOf)).filter(list => list.length);
+  const gammas = ['gam', 'gam * gam', 'gam * gam * gam'];
+  const sum = bySize.map((list, i) => `grid_hold(${gammas[i]} * grid_hold(${list.join(' + ')}))`).join(' + ');
+  // fast math would otherwise fold the differences back into (1 + 4 gamma + ...) X - ..., whose
+  // cancellation is what the refinement is there to avoid
+  return kernel(spec, [metaRead, field('read'), low('storage')], `fn grid_hold(x: f32) -> f32 { return bitcast<f32>(bitcast<u32>(x) ^ gridMeta[${META.ZERO}u]); }
+@compute @workgroup_size(${WG})
+fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
+  let t = gid.x + gid.y * nwg.x * ${WG}u;
+  let total = gridMeta[${META.TOTAL}u];
+  if (t >= total) { return; }
+  let gam = ${f32At(META.TAB_GAMMA)};
+  ${each(D, k => `let s${k} = i32(gridMeta[${META.SIZE + k}u]);`)}
+  let j0 = i32(t % u32(s0));
+  let r = t / u32(s0);
+  ${D === 3 ? 'let j1 = i32(r % u32(s1)); let j2 = i32(r / u32(s1));' : 'let j1 = i32(r);'}
+  ${loads.join('\n  ')}
+  ${products.join('\n  ')}
+  gridLo[t] = grid_hold(gridLo[t] - x${key(Array(D).fill(0))}) - grid_hold(${sum});
 }`);
 }
 
@@ -700,30 +795,35 @@ function gather(spec) {
   const walk = (k, cur) => { if (k === D) { combos.push(cur); return; } for (const d of ds) walk(k + 1, cur.concat(d)); };
   walk(0, []);
   const strides = ['', ' * s0', ' * s0 * s1'];
-  const local = c => 'o' + c.map(name).join('');
-  // the field at each stencil point (less the body's own deposit), then the value
-  const loads = combos.map(c => {
+  // the field at each stencil point (less the body's own deposit); a smoothed field comes in two
+  // words, gridField + gridLo (see residual())
+  const words = spec.smooth ? [['o', 'gridField'], ['l', 'gridLo']] : [['o', 'gridField']];
+  const local = (c, word = 'o') => word + c.map(name).join('');
+  const loads = [];
+  words.forEach(([word, buffer]) => combos.forEach(c => {
     const idx = c.map((d, k) => `(c${k} + (${d}))${strides[k]}`).join(' + ');
     const wp = c.map((d, k) => `w${k}${name(d)}`).join(' * ');
-    return `let ${local(c)} = gridField[u32(${idx})]${exclude === 'plain' ? ` - u * ${wp}` : ''};`;
-  });
-  const value = `let v0 = ${combos.map(c => `${c.map((d, k) => `w${k}${name(d)}`).join(' * ')} * ${local(c)}`).join(' + ')};`;
+    loads.push(`let ${local(c, word)} = ${buffer}[u32(${idx})]${exclude === 'plain' ? ` - u * ${wp}` : ''};`);
+  }));
+  const value = `var v = ${words.map(([word]) => combos.map(c => `${c.map((d, k) => `w${k}${name(d)}`).join(' * ')} * ${local(c, word)}`).join(' + ')).join(' + ')};`;
   // The slope along g from differences of neighbouring points, as the CPU's linear code does: on
   // a smooth field, slope * F rounded per point leaves a residue that differences do not. The
   // quadratic slopes add up to 0, so sum_j s_j F_j = s_m (F_m - F_z) + s_p (F_p - F_z).
   const slopes = Array.from({ length: D }, (_, g) => {
-    const terms = combos.filter(c => c[g] === 0).map(c => {
+    const terms = [];
+    words.forEach(([word]) => combos.filter(c => c[g] === 0).forEach(c => {
       const others = c.map((d, k) => (k === g ? null : `w${k}${name(d)}`)).filter(Boolean).join(' * ');
-      const at = shift => local(c.map((d, k) => (k === g ? shift : d)));
-      const along = quad ? `(q${g}m * (${at(-1)} - ${at(0)}) + q${g}p * (${at(1)} - ${at(0)}))` : `(${at(1)} - ${at(0)})`;
-      return others ? `${along} * ${others}` : along;
-    });
+      const at = shift => local(c.map((d, k) => (k === g ? shift : d)), word);
+      // (opaque, or fast math multiplies out the differences, and the hi and lo words with them)
+      const along = quad ? `(q${g}m * grid_opq(${at(-1)} - ${at(0)}) + q${g}p * grid_opq(${at(1)} - ${at(0)}))` : `grid_opq(${at(1)} - ${at(0)})`;
+      terms.push(others ? `grid_opq(${along} * ${others})` : along);
+    }));
     return `var gr${g} = ${terms.join(' + ')};`;
   });
-  const terms = loads.concat([value.replace('let v0', 'var v')], slopes).join('\n  ');
+  const terms = loads.concat([value], slopes).join('\n  ');
   const outRefs = [spec.outputs.value, spec.outputs.gradient];
   const bindings = [U, metaRead, { name: spec.pos.buffer, kind: 'read', type: 'array<f32>' }, field('read')]
-    .concat(callerBuffers(outRefs, 'storage'));
+    .concat(spec.smooth ? [low('read')] : [], callerBuffers(outRefs, 'storage'));
   if (exclude && spec.deposit) bindings.push({ name: 'gridKey', kind: 'read', type: 'array<u32>' });
   const write = (v, g) => `${spec.outputs.value.at('i', 0)} = ${v}; ${each(D, k => `${spec.outputs.gradient.at('i', k)} = ${g(k)};`)}`;
   const unit = f32At(META.UNIT);

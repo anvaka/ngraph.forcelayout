@@ -89,6 +89,8 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
     gridSp: size(spWords * n * 16),
     gridField: size(capacity * 4),
   };
+  // a smoothed field's low word (the refinement step, see residual() in wgsl.js)
+  if (args.diffuse) buffers.gridLo = size(capacity * 4);
   const largest = Math.min(limits.maxStorageBufferBindingSize, limits.maxBufferSize);
   const over = Object.keys(buffers).filter(name => buffers[name] > largest);
   if (over.length) {
@@ -109,8 +111,9 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
     refusal: null, D, n, label, maxCells, capacity, tableSize: TS, keyWords, anchor: args.anchor,
     smooth: spec.smooth, deposit: !!deposit, buffers, kernels, values, own,
     slotNames: names,
-    // MINMAX, PARAMS, BIN, 3 scans, ORDER, DEPOSIT, a smoothing per axis, GATHER
-    dispatches: 9 + (spec.smooth ? D : 0),
+    // MINMAX, PARAMS, BIN, 3 scans, ORDER, DEPOSIT, GATHER; with smoothing a sweep per axis, the
+    // residual and a sweep per axis again
+    dispatches: 9 + (spec.smooth ? 2 * D + 1 : 0),
   };
 }
 

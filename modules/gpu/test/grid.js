@@ -48,8 +48,8 @@ test('every combination plans in 2D and 3D, each kernel within 8 storage buffers
               const p = plan(D, gridStage(D, options).stage);
               const what = `${D}D ${anchor} ${weights} ${smooth ? 'smooth' : 'plain'} ${self}${charge ? ' charge' : ''}`;
               assert.equal(p.refusal, null, what);
-              assert.equal(p.dispatches, 9 + (smooth ? D : 0), what);
-              assert.equal(Object.keys(p.kernels).length, 9 + (smooth ? D : 0), what);
+              assert.equal(p.dispatches, 9 + (smooth ? 2 * D + 1 : 0), what);
+              assert.equal(Object.keys(p.kernels).length, 9 + (smooth ? D + 1 : 0), what);
               for (const [name, kernel] of Object.entries(p.kernels)) {
                 assert.ok(storageBindings(kernel.code) <= 8, `${what} ${name}: ${storageBindings(kernel.code)} storage buffers`);
                 assert.equal(kernel.bindings.length, (kernel.code.match(/@binding\(/g) || []).length, `${what} ${name}: bindings listed`);

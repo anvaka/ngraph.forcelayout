@@ -6,7 +6,7 @@
 //   grid.encode(pass, { stepOffset, parity });
 //   // copy grid.status into a readback: gridStatus(words, plan, name) says when to halt
 import { getPipeline } from '../device.js';
-import { META, IND_SCAN, IND_ADD, IND_DEPOSIT, IND_SMOOTH, WG } from './wgsl.js';
+import { META, IND_SCAN, IND_ADD, IND_DEPOSIT, IND_SMOOTH, IND_RESIDUAL, IND_SMOOTH_LOW, WG } from './wgsl.js';
 
 // MINMAX loops over the bodies with at most this many workgroups
 const MINMAX_GROUPS = 1024;
@@ -47,6 +47,7 @@ export async function buildGrid(device, plan, { buffers: external = {}, step = n
     gridKey: buffer(sizes.gridKey, SB | CS),
     gridSp: buffer(sizes.gridSp, SB | CS),
     gridField: buffer(sizes.gridField, SB | CS),
+    gridLo: sizes.gridLo ? buffer(sizes.gridLo, SB | CS) : null,
   };
   own.V = plan.own ? buffer(plan.own.floats * 4, GPUBufferUsage.UNIFORM | CD) : null;
   // the last words: `zero` (see grid_opq in wgsl.js) and padding
@@ -63,8 +64,10 @@ export async function buildGrid(device, plan, { buffers: external = {}, step = n
   }
 
   // Bind groups: two (by parity) for kernels that read a buffer that alternates
-  const resource = (name, parity) => {
+  // `low`: the smoothing's second pass, on the field's low word (the refinement step)
+  const resource = (name, parity, low) => {
     if (name === 'V') return own.V ? { buffer: own.V } : { buffer: step.buffer, size: step.size };
+    if (low && name === 'gridField') return { buffer: own.gridLo };
     const b = own[name] || external[name];
     if (!b) throw new Error('buildGrid: no buffer for ' + name);
     return { buffer: Array.isArray(b) ? b[parity] : b };
@@ -72,12 +75,13 @@ export async function buildGrid(device, plan, { buffers: external = {}, step = n
   const kernels = names.map(name => {
     const { bindings } = plan.kernels[name];
     const alternates = bindings.some(b => Array.isArray(external[b.name]));
-    const group = parity => device.createBindGroup({
+    const group = (parity, low) => device.createBindGroup({
       layout: pipes[name].getBindGroupLayout(0),
-      entries: bindings.map((b, binding) => ({ binding, resource: resource(b.name, parity) })),
+      entries: bindings.map((b, binding) => ({ binding, resource: resource(b.name, parity, low) })),
     });
     const groups = alternates ? [group(0), group(1)] : [group(0)];
-    return { name, pipeline: pipes[name], groups, dynamic: stepKind === 'dynamic' && bindings.some(b => b.kind === 'step') };
+    const lowGroup = /_SMOOTH\d$/.test(name) ? group(0, true) : null;
+    return { name, pipeline: pipes[name], groups, lowGroup, dynamic: stepKind === 'dynamic' && bindings.some(b => b.kind === 'step') };
   });
   const byName = Object.fromEntries(kernels.map(k => [k.name, k]));
   const nodes = Math.ceil(plan.n / WG);
@@ -93,13 +97,19 @@ export async function buildGrid(device, plan, { buffers: external = {}, step = n
     [`${L}_ORDER`, [nodes]],
     [`${L}_DEPOSIT`, IND_DEPOSIT],
   ];
-  if (plan.smooth) for (let k = 0; k < plan.D; k++) steps.push([`${L}_SMOOTH${k}`, IND_SMOOTH + 3 * k]);
+  if (plan.smooth) {
+    for (let k = 0; k < plan.D; k++) steps.push([`${L}_SMOOTH${k}`, IND_SMOOTH + 3 * k]);
+    // the refinement step: the residual, smoothed again in gridLo (no workgroups when the step's
+    // gamma does not need it)
+    steps.push([`${L}_RESIDUAL`, IND_RESIDUAL]);
+    for (let k = 0; k < plan.D; k++) steps.push([`${L}_SMOOTH${k}`, IND_SMOOTH_LOW + 3 * k, 'low']);
+  }
   steps.push([`${L}_GATHER`, [nodes]]);
 
-  function dispatch(pass, name, size, { stepOffset = 0, parity = 0 } = {}) {
+  function dispatch(pass, name, size, { stepOffset = 0, parity = 0 } = {}, low = null) {
     const k = byName[name];
     pass.setPipeline(k.pipeline);
-    pass.setBindGroup(0, k.groups[k.groups.length > 1 ? parity : 0], k.dynamic ? [stepOffset] : []);
+    pass.setBindGroup(0, low ? k.lowGroup : k.groups[k.groups.length > 1 ? parity : 0], k.dynamic ? [stepOffset] : []);
     if (typeof size === 'number') pass.dispatchWorkgroupsIndirect(own.gridMeta, size * 4);
     else pass.dispatchWorkgroups(size[0]);
   }
@@ -126,11 +136,11 @@ export async function buildGrid(device, plan, { buffers: external = {}, step = n
     // pair holds this step's positions.
     encode(pass, options) {
       if (plan.n === 0) return;
-      for (const [name, size] of steps) dispatch(pass, name, size, options);
+      for (const [name, size, low] of steps) dispatch(pass, name, size, options, low);
     },
 
     // The same, kernel by kernel (to time each in its own pass)
-    phases: steps.map(([name, size]) => ({ name, encode: (pass, options) => dispatch(pass, name, size, options) })),
+    phases: steps.map(([name, size, low]) => ({ name: low ? name + '_LOW' : name, encode: (pass, options) => dispatch(pass, name, size, options, low) })),
 
     destroy() {
       owned.forEach(b => b.destroy());
