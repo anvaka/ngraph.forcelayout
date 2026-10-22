@@ -111,7 +111,7 @@ still works.
 
 | Halt | What it means |
 |---|---|
-| A work cap passed (`e.status` set) | a pair formula needed more pair tests in one step than its slices planned for; the pyramid's crowded cells need more pair evaluations than the cap (a layout piled densely in one place); a grid field's lattice is wider than its `maxCells` (the CPU module's words). The message says by which step. |
+| A work cap passed (`e.status` set) | a pair formula needed more pair tests in one step than its slices planned for; the pyramid's crowded cells need more pair evaluations than the cap (a layout piled densely in one place); a grid field's lattice is wider than its `maxCells` (a smoothed lattice halts in the CPU module's words; an unsmoothed one, which the CPU runs at any width, says to raise `maxCells` or run on the CPU). The message says by which step. |
 | A number that does not fit 32-bit floats | a host value or parameter became too large on some step; the message names it and the step |
 | A `'step'` listener changed the physics | see above |
 | A device error (`e.kernel`) or a lost device (`e.lost`) | a validation error names its kernel; after a loss, create a new backend |
@@ -180,7 +180,7 @@ A pair step that needs more than its cap runs in several submits ("slices") rath
   random one.
 - **Some costs:** a pair formula in 3D costs about twice 2D (0.20–0.23 ms at 100k); laws that fall
   slower than 1/r² cost 1.35–1.68× a stock step in 2D; a 3D grid field with quadratic weights
-  costs 1.08 ms at 1M bodies.
+  costs 0.73 ms at 1M bodies.
 - **FIRE's state** is not handed back to the CPU's integrator on `stop()`.
 - **An uncaptured device error halts every runner on that device**: WebGPU reports errors per
   device.
