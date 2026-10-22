@@ -24,7 +24,7 @@ under "What is refused"):
 | Pair formulas | every pair within the radius, with the CPU's i/j roles, one-sided stages, accumulators |
 | Sums | over all bodies, or per group of a column the host sets; formulas read `name` or `name[group]` |
 | Lookup tables | in formulas and in laws |
-| Host steps (`addHostStep`) | the batch stops at the steps where one runs; it runs on the host with the device's numbers in the store, then the step goes on |
+| Host steps (`addHostStep`) | the batch stops at the steps where one runs; it runs on the host with the device's numbers in the store, then the step goes on. Each host step's `when` is asked at its turn, after the ones before it ran, as on the CPU |
 | Grid fields (`modules/gridfield`) | every option: both anchors, both weights, smoothing, self included or left out |
 
 How it runs, by size and dimension:
@@ -124,14 +124,16 @@ from the device. The layout loses at most a batch of good steps and never keeps 
 ## Each device's speed
 
 The work caps (the pyramid's crowded cells, a pair formula's tests per slice) were sized on an
-Apple M4 Max, so that a step at its cap takes a few to 20 ms. `runOnGpu()` times a fixed probe of
-16.8M pair evaluations once per device (0.26 ms there; about 2 ms of setup in all) and gets how
-many times slower the device is (`gpu.stats().slowdown`, 1 to 100):
+Apple M4 Max. `runOnGpu()` runs a speed probe once per device: an exact pair loop, scattered
+reads over 16 MB and atomic adds, about 1 ms each there (about 9 ms of setup in all). The part
+that falls furthest behind the M4 Max says how many times slower the device is
+(`gpu.stats().slowdown`, 1 to 100; 10 when the probe cannot measure):
 
 - the pyramid's cap is divided by it, so a capped step takes about as long on any device;
 - the pair formulas start from a matching cap, then follow the rate they measure on dense steps;
-- a submit holds no more steps than fit 1 s if every step reached its caps, far below the
-  2-second GPU watchdog; and as many as fit 100 ms of the time steps actually take.
+- a submit holds no more steps than fit 1 s if every step reached its caps (a capped pyramid
+  step counts 30 ms per charge times the factor), far below the 2-second GPU watchdog; and as
+  many as fit 100 ms of the time steps actually take.
 
 A pair step that needs more than its cap runs in several submits ("slices") rather than halting.
 
