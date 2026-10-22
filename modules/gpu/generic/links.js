@@ -196,7 +196,8 @@ export function pairCode(plan, section, printer) {
   const axes = Array.from({ length: D }, (_, k) => k);
   // a pass's own sums start at zero, even when the radius skips it, as on the CPU
   printed.accumulators.forEach(a => { if (a.startAtZero) locals(plan, a.column).forEach(name => out.push(`${name} = 0.0;`)); });
-  out.push(`let pairRadius = ${slotValue(section.radius)};`);
+  // a block of its own: another pair stage in the same kernel declares the same names
+  out.push(`{ let pairRadius = ${slotValue(section.radius)};`);
   out.push('if (live && pairRadius > 0.0) {');
   // totals per tile of bodies, added up after each tile: one running sum over a crowd of
   // thousands of neighbours misses 1e-5 (as the tile loop's repulsion)
@@ -214,7 +215,7 @@ export function pairCode(plan, section, printer) {
   out.push('    ' + axes.map(k => `${force[k]} += pairForce${k};`).concat(accumulators.map(a => `${a.name}_total += ${a.name};`)).join(' '));
   out.push('  }');
   accumulators.forEach(a => out.push(`  ${a.local} += ${a.name}_total;`));
-  out.push('}');
+  out.push('} }');
   return out;
 }
 
