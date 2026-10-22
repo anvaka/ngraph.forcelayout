@@ -624,3 +624,34 @@ test('pair formulas find pairs just inside the radius, at any scale', function (
   });
   t.end();
 });
+
+test('stages with the same when share its answer; gates of their own params do not', function (t) {
+  var sim = makeSimulator({ dimensions: 2 }, 4);
+  sim.store.define('a');
+  sim.store.define('b');
+  sim.store.define('c');
+  var runs = [];
+  var when = 'step - floor(step / 3) * 3 == 0';
+  sim.addNodeFormula('first', { formula: 'a += 1', when: when });
+  sim.addStage('js', function (store, s) { runs.push(s.iteration()); }, { when: when });
+  sim.addNodeFormula('second', { formula: 'b += 1', when: when });
+  sim.addNodeFormula('ownParam', { formula: 'c += 1', when: 'step >= k', params: { k: 4 } });
+  sim.addNodeFormula('ownParam2', { formula: 'c += 10', when: 'step >= k', params: { k: 2 } });
+  for (var i = 0; i < 7; ++i) sim.step();
+  t.same([sim.store.a[0], sim.store.b[0]], [3, 3], 'steps 0, 3 and 6 for both formulas');
+  t.same(runs, [0, 3, 6], 'and the JS stage');
+  t.equal(sim.store.c[0], 3 + 10 * 5, 'the same text with params of their own answers for each stage');
+  t.equal(sim.stageValues('second', sim.stepContext(9)).when, true, 'a step to come gets its own answer');
+  t.equal(sim.stageValues('second', sim.stepContext(10)).when, false);
+  t.end();
+});
+
+test('a link formula that only sets its coefficient does not read it', function (t) {
+  var sim = makeSimulator({ dimensions: 2 }, 6);
+  sim.addLinkFormula('set', { formula: 'coefficient = 0.5' });
+  sim.addLinkFormula('setThenRead', { formula: 'coefficient = 0.5; pull = coefficient * (r - length)' });
+  var program = sim.program();
+  t.notOk(stageOf(program, 'set').reads.some(function (read) { return read.column === 'coefficient'; }));
+  t.ok(stageOf(program, 'setThenRead').reads.some(function (read) { return read.column === 'coefficient'; }), 'a read after it counts');
+  t.end();
+});
