@@ -113,7 +113,9 @@ export function genericPlan(program, laws, options = {}) {
       while (at < stages.length && (stages[at].builtIn === 'repulsion' || (!stages[at].builtIn && stages[at].shape === 'tree'))) {
         const tree = stages[at];
         const channel = tree.args.channels[0];
-        walk.push({ stage: tree, charge: channel.charge, sensitivity: channel.sensitivity, law: laws[tree.name] || null });
+        // a charge with the centroid 'shared' acts from its walk's first charge's centre (the K-charge
+        // tree's args, when the library gives them)
+        walk.push({ stage: tree, charge: channel.charge, sensitivity: channel.sensitivity, law: laws[tree.name] || null, centroid: channel.centroid || 'own' });
         at++;
       }
       at--;
@@ -140,7 +142,8 @@ export function genericPlan(program, laws, options = {}) {
   // don't read it (drag, springs, addRepulsion's default place before integrate): the order of
   // additions is all that changes
   for (let k = 0; k < sections.length; k++) {
-    if (sections[k].kind !== 'pairs') continue;
+    // a walk whose charges share its first one's centre keeps that first charge: it stays apart
+    if (sections[k].kind !== 'pairs' || sections[k].channels.some(c => c.centroid === 'shared')) continue;
     let p = k - 1;
     while (p >= 0 && sections[p].kind !== 'pairs' && onlyAddsForce(sections[p])) p--;
     if (p >= 0 && sections[p].kind === 'pairs') {
@@ -447,7 +450,7 @@ export function genericPlan(program, laws, options = {}) {
     };
     pyramid = planPyramid({
       D, n, limits: options.limits, warn: options.warn,
-      channels: pyramidWalk.channels.map(c => ({ stage: c.stage.name, law: c.law, centroid: 'own', charge: colRef(c.charge) })),
+      channels: pyramidWalk.channels.map((c, k) => ({ stage: c.stage.name, law: c.law, centroid: k === 0 ? 'own' : c.centroid, charge: colRef(c.charge) })),
       pos: { buffer: 'X', at: (row, k) => `X[${row} * ${D}u + ${k}u]` },
       values: {
         decl: binding => `@group(0) @binding(${binding}) var<uniform> V: array<vec4f, ${done.floats / 4}>;`,
