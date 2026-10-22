@@ -58,6 +58,10 @@ if (plan.runs) {
 - There is no fallback to the CPU. A step the GPU cannot run is refused before it starts, or
   halts the runner if it shows up later; the app decides what to do (`await gpu.stop()` and
   `layout.step()`, say).
+- A structure that passes its work cap (a pair formula's tests, the pyramid's crowded cells, a
+  grid field's lattice) halts the runner with `e.status` set. Steps after it ran without that
+  work, so the store keeps the last readback from before and `stop()` reads nothing more back:
+  the layout loses at most a batch of good steps and never keeps bad ones.
 
 `gpuCapabilities(limits)` is a backend without a device, for `plan()` in tests or on a server:
 WebGPU's default limits, or yours on top of them.

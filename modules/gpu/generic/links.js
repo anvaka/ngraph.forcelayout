@@ -12,6 +12,9 @@ import { printPairFormula, pairCandidate, accumulatorName } from '../pairs/formu
 import { header, NUDGE, settingsLines, scopeOf, linkRef, locals, columnRef, u32, slotValue, L_OTHER, L_ROLE, L_FROM_ENTRY, L_FROM, L_TO, L_HEADER } from './common.js';
 import { LINK_CHUNK } from './plan.js';
 
+// Bodies per tile of the all-pairs loop of a pair formula, whose totals are added up per tile
+const PAIR_TILE = 256;
+
 /**
  * The stock springs, or a link formula that pulls or adds into body columns: lines of a node
  * kernel section. `pos` and `force` are the thread's locals. Up to N* the section goes through
@@ -183,13 +186,22 @@ export function pairCode(plan, section, printer) {
   printed.accumulators.forEach(a => { if (a.startAtZero) locals(plan, a.column).forEach(name => out.push(`${name} = 0.0;`)); });
   out.push(`let pairRadius = ${slotValue(section.radius)};`);
   out.push('if (live && pairRadius > 0.0) {');
-  printed.accumulators.forEach(a => { for (let k = 0; k < a.width; k++) out.push(`  var ${accumulatorName(a.column, k, a.width)} = 0.0;`); });
-  out.push('  for (var j = 0u; j < P.n; j++) {');
-  out.push('    ' + axes.map(k => `let d${k} = ${localOf('pos', k)} - X[j * ${u32(D)} + ${u32(k)}];`).join(' '));
-  out.push(`    let pairR2 = ${axes.map(k => `d${k} * d${k}`).join(' + ')};`);
-  pairCandidate(printed, { D, me: 'row', other: 'j', r2: 'pairR2', radius: 'pairRadius', force: k => force[k] }).forEach(line => out.push('    ' + line));
+  // totals per tile of bodies, added up after each tile: one running sum over a crowd of
+  // thousands of neighbours misses 1e-5 (as the tile loop's repulsion)
+  const accumulators = [];
+  printed.accumulators.forEach(a => { for (let k = 0; k < a.width; k++) accumulators.push({ name: accumulatorName(a.column, k, a.width), local: localOf(a.column, k) }); });
+  accumulators.forEach(a => out.push(`  var ${a.name}_total = 0.0;`));
+  out.push(`  for (var tile = 0u; tile < P.n; tile += ${u32(PAIR_TILE)}) {`);
+  out.push('    ' + axes.map(k => `var pairForce${k} = 0.0;`).concat(accumulators.map(a => `var ${a.name} = 0.0;`)).join(' '));
+  out.push(`    let tileEnd = min(tile + ${u32(PAIR_TILE)}, P.n);`);
+  out.push('    for (var j = tile; j < tileEnd; j++) {');
+  out.push('      ' + axes.map(k => `let d${k} = ${localOf('pos', k)} - X[j * ${u32(D)} + ${u32(k)}];`).join(' '));
+  out.push(`      let pairR2 = ${axes.map(k => `d${k} * d${k}`).join(' + ')};`);
+  pairCandidate(printed, { D, me: 'row', other: 'j', r2: 'pairR2', radius: 'pairRadius', force: k => `pairForce${k}` }).forEach(line => out.push('      ' + line));
+  out.push('    }');
+  out.push('    ' + axes.map(k => `${force[k]} += pairForce${k};`).concat(accumulators.map(a => `${a.name}_total += ${a.name};`)).join(' '));
   out.push('  }');
-  printed.accumulators.forEach(a => { for (let k = 0; k < a.width; k++) out.push(`  ${localOf(a.column, k)} += ${accumulatorName(a.column, k, a.width)};`); });
+  accumulators.forEach(a => out.push(`  ${a.local} += ${a.name}_total;`));
   out.push('}');
   return out;
 }
