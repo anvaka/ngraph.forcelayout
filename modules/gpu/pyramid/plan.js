@@ -147,6 +147,7 @@ function layoutSizes(D, n, G, L, K, heavy) {
   const size = bytes => Math.max(16, Math.ceil(bytes / 16) * 16);
   return {
     sizes: { n, G, levels, nCells, levelOff, pyrSize, localCells, locOff, crowdOff, crowdList: LIST_HEAD + (heavy ? nCells : 0),
+      occList: LIST_HEAD + (heavy ? nCells : 0) + crowdMax,
       metaTag: nCells, metaRow: nCells + 2 * n, metaCount: nCells + 3 * n },
     buffers: {
       treeBox: size(boxLayout(D).size * 4),
@@ -156,7 +157,7 @@ function layoutSizes(D, n, G, L, K, heavy) {
       treeMeta: size((nCells + 3 * n + pyrSize) * 4),
       treeSp: size(n * L.SP4 * 16),
       treeCells: size((crowdOff + n * Math.ceil(D * K / 4)) * 16),
-      treeLists: size((LIST_HEAD + (heavy ? nCells : 0) + crowdMax) * 4),
+      treeLists: size((LIST_HEAD + (heavy ? nCells : 0) + crowdMax + (nCells > n ? Math.min(n, nCells) : 0)) * 4),
     },
   };
 }

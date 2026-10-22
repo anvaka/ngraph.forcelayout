@@ -8,10 +8,10 @@
 //   // then the caller's node kernel, with tree.buffers bound as plan.section.bindings says
 import { getPipeline } from '../device.js';
 import { writeLawValues } from '../wgsl/print.js';
-import { boxLayout, WG, CROWD_GROUPS, LIST_HEAD } from './wgsl.js';
+import { boxLayout, WG, CROWD_GROUPS } from './wgsl.js';
 import { NEAR_CAP } from './plan.js';
 
-const PARAM_WORDS = 16;
+const PARAM_WORDS = 20;
 // Pair evaluations a step may spend on crowded cells (cells past the near cap) before the step
 // is refused: about 20 ms of this Mac's GPU
 export const WORK_CAP = 2e9;
@@ -79,7 +79,7 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
   // LOCAL's own workgroups, then CROWD_GROUPS more for the crowded cells
   const localThreads = plan.heads ? sizes.n + sizes.localCells - sizes.nCells : sizes.localCells;
   const localGroups = Math.ceil(localThreads / WG);
-  pu[12] = localGroups; pu[13] = sizes.crowdOff; pf[14] = workCap; pu[15] = sizes.crowdList;
+  pu[12] = localGroups; pu[13] = sizes.crowdOff; pf[14] = workCap; pu[15] = sizes.crowdList; pu[16] = sizes.occList;
 
   const bind = (name, list, pipeline = pipes[name]) => device.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
@@ -186,7 +186,7 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     boxBuffer: treeBox,
     // Copy these 16 bytes into a readback and give the 4 words to pyramidStatus(): non-null means
     // the step's crowded cells were refused and the runner should halt with that message
-    status: { buffer: treeLists, offset: 0, size: LIST_HEAD * 4 },
+    status: { buffer: treeLists, offset: 0, size: 16 },
     destroy() {
       for (const b of owned) b.destroy();
     },

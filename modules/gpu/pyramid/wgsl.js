@@ -27,7 +27,8 @@
 //   treeCells [lookup tables | per cell of every level: charge sums and centres | per cell of
 //              every level but the top: the local expansion (centre, then field and Jacobian per
 //              channel) | per sorted body: the push of crowded near cells per channel]
-//   treeLists [heavy count, crowded count, status, work | heavy finest cells (3D) | crowded cells]
+//   treeLists [heavy count, crowded count, status, work, occupied count | heavy finest cells (3D) |
+//              crowded cells | occupied finest cells (3D)]
 import { createPrinter, lawPrologue } from '../wgsl/print.js';
 
 export const WG = 256;
@@ -39,8 +40,8 @@ const HEAVY_GROUPS = 64, HEAVY_THREADS = 64;
 // Workgroups that TREE_LOCAL adds for crowded cells (see tree_crowd)
 export const CROWD_GROUPS = 128;
 // treeLists: heavy count, crowded count, status (the largest crowded cell when their work is over
-// the cap, else 0), work (millions of pair evaluations), then the lists
-export const LIST_HEAD = 4;
+// the cap, else 0), work (millions of pair evaluations), occupied count, 3 spare, then the lists
+export const LIST_HEAD = 8;
 const AX = 'xyzw';
 
 function each(n, fn, sep = ' ') {
@@ -216,7 +217,8 @@ struct TreeParams {
   n: u32, G: u32, levels: u32, nCells: u32,
   locOff: u32, metaTag: u32, metaRow: u32, metaCount: u32,
   nearCap: u32, outlierRank: u32, gravity: f32, top: u32,
-  localGroups: u32, crowdOff: u32, workCap: f32, crowdList: u32,${lawWords ? `
+  localGroups: u32, crowdOff: u32, workCap: f32, crowdList: u32,
+  occList: u32, pad0: u32, pad1: u32, pad2: u32,${lawWords ? `
   law: array<vec4f, ${Math.ceil(lawWords / 4)}>,` : ''}
 };`;
 }
@@ -591,11 +593,24 @@ ${tp}
 @group(0) @binding(1) var<storage, read> treeSp: array<vec4f>;
 @group(0) @binding(2) var<storage, read_write> treeMeta: array<u32>;
 @group(0) @binding(3) var<storage, read_write> treeCells: array<vec4f>;
-@group(0) @binding(4) var<storage, read_write> treeLists: array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read_write> treeLists: array<atomic<u32>>;${spec.heads ? `
+var<workgroup> wgOccupied: atomic<u32>;
+var<workgroup> wgBase: u32;` : ''}
 @compute @workgroup_size(${WG})
-fn main(${LINEAR}) {
-  let c = ${LINEAR_ID};
-  if (c >= TP.nCells) { return; }
+fn main(${LINEAR}${spec.heads ? ', @builtin(local_invocation_index) li: u32' : ''}) {
+  let c = ${LINEAR_ID};${spec.heads ? `
+  // the occupied finest cells, listed for LOCAL (a workgroup adds its own at once)
+  if (li == 0u) { atomicStore(&wgOccupied, 0u); }
+  workgroupBarrier();
+  var slot = 0xffffffffu;
+  if (c < TP.nCells) { slot = tree_aggregate(c); }
+  workgroupBarrier();
+  if (li == 0u) { wgBase = atomicAdd(&treeLists[4], atomicLoad(&wgOccupied)); }
+  let base = workgroupUniformLoad(&wgBase);
+  if (slot != 0xffffffffu) { atomicStore(&treeLists[TP.occList + base + slot], c); }
+}
+fn tree_aggregate(c: u32) -> u32 {` : `
+  if (c >= TP.nCells) { return; }`}
   let s = treeMeta[c];
   let e = select(TP.n, treeMeta[c + 1u], c + 1u < TP.nCells);
   // a crowded cell: its near pushes are TREE_LOCAL's crowd workgroups' work
@@ -618,7 +633,9 @@ fn main(${LINEAR}) {
   ${own.map(q => `let i${q} = select(0.0, 1.0 / w${q}, w${q} != 0.0);`).join(' ')}
   ${each(D, k => `let c0_${k} = select(u${k} * mean, s0_${k} * i0, w0 != 0.0);`)}
   ${storeVec4s('treeCells', `${L.TAB4}u + c * ${L.CS4}u`, recordWords(q => `m${q}`, (q, k) => (q === 0 ? `c0_${k}` : `s${q}_${k} * i${q}`), 'cnt'))}${L.CNT < 0 ? `
-  treeMeta[TP.metaCount + c] = cnt;` : ''}
+  treeMeta[TP.metaCount + c] = cnt;` : ''}${spec.heads ? `
+  if (cnt == 0u) { return 0xffffffffu; }
+  return atomicAdd(&wgOccupied, 1u);` : ''}
 }`;
 
   // One level up: 2^D children, contiguous in Morton order
@@ -740,8 +757,8 @@ for (var ch = 0u; ch < ${1 << D}u; ch++) {
 }`, indent)}`;
 
   // With more finest cells than bodies (3D), most finest cells are empty, and a thread per cell
-  // would leave most of a SIMD group idle: there LOCAL runs a thread per body for the finest
-  // level, the first body of each cell doing its cell, then a thread per cell above.
+  // would leave most of a SIMD group idle: there AGG0 lists the occupied finest cells and LOCAL
+  // runs a thread per entry (up to n of them), then a thread per cell above.
   const heads = spec.heads;
   const valueBinding = stepDecl ? '\n' + stepDecl(5) : '';
 
@@ -878,9 +895,8 @@ fn main(${LINEAR}, @builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_
   let t = ${LINEAR_ID};
   var off = 0u; var Gl = TP.G; var l = 0u; var c = 0u;${heads ? `
   if (t < TP.n) {
-    // the first body of a finest cell does its cell
-    c = treeMeta[TP.metaTag + 2u * t + 1u] & 0x7fffffffu;
-    if (t > 0u && (treeMeta[TP.metaTag + 2u * t - 1u] & 0x7fffffffu) == c) { return; }
+    if (t >= atomicLoad(&treeLists[4])) { return; }
+    c = atomicLoad(&treeLists[TP.occList + t]);
   } else {
     var u = t - TP.n + TP.nCells;` : `
   {
