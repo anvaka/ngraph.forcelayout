@@ -22,8 +22,9 @@ the README):
   conditions, named values, lookup tables, `floor`/`ceil`/`round`/`sign`/`clamp`, and built in
   values such as `dt`, `step` and `unit`.
 * `addRepulsion()` - more tree passes, each with its own law, charges and sensitivity. Passes next
-  to each other and to the stock repulsion walk one quad tree with a charge each
-  (`centroid: 'shared'` lets a charge act from the first charge's centre).
+  to each other and to the stock repulsion walk one quad tree with a charge each, also under
+  `nbody: 'dualtree'` (`plan()` warns). `centroid: 'shared'` lets a charge act from the first
+  charge's centre.
 * `simulator.plan(backend)` - which stages an engine (such as the WebGPU module) can run, and
   why not, with warnings. Stages can `replace` another stage.
 * `simulator.program()` - the whole step as plain data (settings, columns and who writes them,
@@ -43,7 +44,8 @@ the README):
   their link's `coefficient` and `length`, and run as fast as the stock springs.
 * A `'settings'` event from the setters, and column versions (`store.versions`,
   `store.changed(name)`) for engines that keep their own copy of the numbers. Setters of bodies
-  and springs mark their column, positions set with `setNodePosition()` included.
+  and springs mark their column, positions set with `setNodePosition()` included. Change
+  settings through the setters: a direct write to `simulator.settings` fires no event.
   `simulator.programVersion()` tells when the structure of a step changed.
 * `simulator.iteration(n)` sets the step count; `simulator.applyEdits()` applies graph edits and
   fires `'topology'` at once; `addStage(name, run, {describe})` lets an add-on stage describe
