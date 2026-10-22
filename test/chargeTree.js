@@ -69,6 +69,45 @@ test('charges with one law object evaluate it once', function (t) {
   });
   var code = generateQuadTree.generateQuadTreeFunctionBody(2, [null, law, law], { centroid: 'shared' });
   t.equal(code.split('Math.exp').length - 1, 2, 'one exp for a body, one for a cell');
+  // A law without a range on two charges
+  var unranged = createRepulsionLaw({ force: 'exp(-r / L) / r^2', params: { L: 20 } });
+  unranged.update(fakeSimulator(2));
+  ['own', 'shared'].forEach(function (centroid) {
+    var store = randomStore(2, 300, 2);
+    var laws = [unranged, unranged];
+    var tree = generateQuadTree(2, laws, { centroid: centroid })({ gravity: -1, theta: 0 }, Random.random(1), laws);
+    tree.insertBodies(store, store.charges, store.sensitivities);
+    for (var i = 0; i < store.n; ++i) tree.updateBodyForce(i);
+    var fade = function (r) { return Math.exp(-r / 20) / (r * r); };
+    var error = relativeDifference(store.force, exactForces(store, [fade, fade], -1));
+    t.ok(error < 1e-12, 'unranged law on charges 0 and 1, ' + centroid + ' centres: ' + error);
+  });
+  t.end();
+});
+
+test('a signed charge that cancels in a cell still pushes from its children', function (t) {
+  // Body 0 feels only charge 1, whose four bodies sum to 0. A law with a range on charge 0 must not
+  // make the walk skip their cell (shared centres allow signed charges after the first).
+  var place = [[0, 0], [30, 0], [30, 2], [31, 0], [31, 2]];
+  var q = Float64Array.from([0, 1, -1, 1, -1]);
+  var feelsFirst = Float64Array.from([0, 1, 1, 1, 1]);
+  var ones = Float64Array.from([1, 1, 1, 1, 1]);
+  var law = createRepulsionLaw({ force: 'exp(-r / L) / r^2', params: { L: 1 }, range: 5 });
+  law.update(fakeSimulator(2));
+  var store = createBodyStore(2, place.length);
+  place.forEach(function (p) { var row = store.add(); store.pos[2 * row] = p[0]; store.pos[2 * row + 1] = p[1]; });
+  var laws = [law, null];
+  var tree = generateQuadTree(2, laws, { centroid: 'shared' })({ gravity: -1, theta: 0 }, Random.random(1), laws);
+  tree.insertBodies(store, [store.mass, q], [feelsFirst, ones]);
+  tree.updateBodyForce(0);
+  var ex = 0, ey = 0;
+  for (var j = 1; j < place.length; ++j) {
+    var r = Math.hypot(place[j][0], place[j][1]);
+    ex -= q[j] * place[j][0] / (r * r * r);
+    ey -= q[j] * place[j][1] / (r * r * r);
+  }
+  t.ok(ey !== 0, 'the cluster pushes body 0');
+  t.ok(Math.abs(store.force[0] - ex) < 1e-15 && Math.abs(store.force[1] - ey) < 1e-15, 'walk (' + store.force[0] + ', ' + store.force[1] + '), exact (' + ex + ', ' + ey + ')');
   t.end();
 });
 
