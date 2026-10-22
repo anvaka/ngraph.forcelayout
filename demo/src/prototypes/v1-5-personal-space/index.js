@@ -60,11 +60,10 @@ crossings, and steps take 1.1–1.4× as long. It works in any number of dimensi
   attach({ layout, graph, params, steps }) {
     const simulator = layout.simulator;
     const stepsBefore = steps || 0; // the steps the drawing already ran count towards the delay
-    // Per body: its piece (only bodies of the same piece push), how stiff the push is around it
-    // (the sum of 2|dF/dr| over its pairs), and its mass while the integrator sees a bigger one
+    // Per body: its piece (only bodies of the same piece push), and how stiff the push is around
+    // it (the sum of 2|dF/dr| over its pairs)
     simulator.store.define('piece', Int32Array);
     simulator.store.define('pushStiffness', Float64Array);
-    simulator.store.define('trueMass', Float64Array);
 
     // Sizes of the push this step. They are read every step, so panel changes apply live.
     function sizes(sim) {
@@ -82,9 +81,11 @@ crossings, and steps take 1.1–1.4× as long. It works in any number of dimensi
     }
 
     simulator.on('topology', findPieces);
-    // On the same spot (r = 0) the simulator pushes along a fixed axis by `push`. Pairs of
-    // different pieces push nothing and add no stiffness.
+    // Bodies on the same spot (r = 0) have no direction to push along, so the simulator skips
+    // them. Pairs of different pieces push nothing and add no stiffness.
     simulator.addPairFormula('personalSpace', {
+      // the stiffness of this step's pairs, not a running total
+      startAtZero: ['pushStiffness'],
       radius: sim => { const size = sizes(sim); return size.active ? size.radius : 0; },
       params: {
         half: sim => sizes(sim).radius / 2,
@@ -109,12 +110,12 @@ crossings, and steps take 1.1–1.4× as long. It works in any number of dimensi
     // rest all forces are zero whatever the masses are. But a layout that still trembles with
     // none (megaStars) is calmed too, and that changes the picture: on megaStars it gives most of
     // the gain on its own. Only bodies the push reaches are touched, so the rest move exactly as
-    // without the idea at any time step. The push has already used the true masses; only the
-    // integrator sees the bigger ones: every mass is saved before the integration and put back
-    // right after it. A body is left alone if the numbers overflow (only at absurd settings; a
-    // force longer than about 1e154 counts as overflowing too).
+    // without the idea at any time step. The masses stay as they are, so every push uses them;
+    // only the integrator divides forces by the inertia column instead.
     const calm = Number(params.calm);
-    if (Number.isNaN(calm) || calm > 0) {
+    const calmed = Number.isNaN(calm) || calm > 0;
+    if (calmed) {
+      simulator.store.define('calmInertia', Float64Array);
       simulator.addNodeFormula('calmCrowdedBodies', {
         params: {
           active: sim => sizes(sim).active ? 1 : 0,
@@ -123,25 +124,23 @@ crossings, and steps take 1.1–1.4× as long. It works in any number of dimensi
           swing2: MAX_SWING * MAX_SWING
         },
         formula: `
-          trueMass = mass;
           k = pushStiffness + springStiffness * degree;
           inertia = k * dt * dt / swing2;
-          raise = active > 0 && pushStiffness > 0 && inertia > mass && inertia <= ${Number.MAX_VALUE} ? 1 : 0;
+          calm = active > 0 && pushStiffness > 0 && inertia > mass ? 1 : 0;
           extra = dragCoefficient * (inertia / mass - 1);
-          slowed = force - extra * velocity;
-          calm = raise > 0 && (useDrag == 0 || length(slowed) <= ${Number.MAX_VALUE}) ? 1 : 0;
-          force = calm > 0 && useDrag > 0 ? slowed : force;
-          mass = calm > 0 ? inertia : mass`
+          force = calm > 0 && useDrag > 0 ? force - extra * velocity : force;
+          calmInertia = calm > 0 ? inertia : mass`
       });
-      simulator.addNodeFormula('restoreMasses', { after: 'integrate', formula: 'mass = trueMass' });
+      simulator.inertia('calmInertia');
     }
     return {
       dispose() {
         simulator.off('topology', findPieces);
-        ['personalSpace', 'calmCrowdedBodies', 'restoreMasses'].forEach(name => {
+        if (calmed) simulator.inertia('mass');
+        ['personalSpace', 'calmCrowdedBodies'].forEach(name => {
           if (simulator.getStage(name)) simulator.removeStage(name);
         });
-        ['piece', 'pushStiffness', 'trueMass'].forEach(name => simulator.store.remove(name));
+        ['piece', 'pushStiffness', 'calmInertia'].forEach(name => simulator.store.remove(name));
       }
     };
 

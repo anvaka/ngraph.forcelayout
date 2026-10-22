@@ -2,7 +2,7 @@
   "name": "ngraph.forcelayout.gpu",
   "version": "0.0.0",
   "private": true,
-  "description": "Experimental 2D force layout for ngraph.graph that runs on WebGPU",
+  "description": "Runs layouts of ngraph.forcelayout on WebGPU",
   "type": "module",
   "main": "index.js",
   "exports": "./index.js",

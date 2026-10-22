@@ -38,7 +38,7 @@
           {{stats.nodes.toLocaleString()}} nodes, {{stats.links.toLocaleString()}} links<span v-if='stats.placement'>, {{stats.placement}} start</span><br>
           {{stats.steps.toLocaleString()}} steps<span v-if='stats.msPerStep'>, <span class='number'>{{formatMs(stats.msPerStep)}}</span> ms/step</span>
           on {{stats.backend === 'webgpu' ? 'WebGPU' : 'CPU'}}
-          <div v-if='stats.ideaOffGpu' class='off-gpu'>Without the idea: {{stats.ideaOffGpu}}.</div>
+          <div v-if='stats.gpuReasons' class='off-gpu'>Runs on the CPU: {{stats.gpuReasons}}.</div>
         </div>
         <a href='#' @click.prevent='settingsOpen = !settingsOpen' class='toggle-settings'>Settings {{settingsOpen ? '▴' : '▾'}}</a>
       </div>
@@ -95,7 +95,7 @@
         fewer steps, especially on trees and grids.
       </input-select>
       <input-select label='Repulsion' v-model='layoutSettings.nbody' :options='nbodyOptions'
-        :disabled='onGpu' :note="onGpu ? 'Not used on WebGPU: it has its own grid pyramid (exact up to 1,024 nodes).' : ''">
+        :disabled='onGpu' :note="onGpu ? 'Not used on WebGPU: exact pairs up to 1,024 nodes, a grid pyramid beyond.' : ''">
         How node repulsion is computed. <b>quad tree</b> is Barnes-Hut: each node walks the tree.
         <b>dual tree</b> lets pairs of tree cells interact with each other, which is 5-10x faster on large
         graphs with the same accuracy. Both use theta.
@@ -121,9 +121,11 @@
         places each node at random near its already placed neighbours.
       </input-select>
       <input-select label='Run on' v-model='backend' :options='backendOptions' :note='gpuMessage'>
-        <b>WebGPU</b> runs the whole simulation on the GPU (2D only). Repulsion uses a grid pyramid
-        instead of a tree, so Theta and Repulsion settings do not apply; graphs up to 1,024 nodes
-        use exact all-pairs repulsion. It is hundreds of times faster on large graphs, so raise
+        <b>WebGPU</b> runs the layout's own simulation on the GPU when it can run all of it (for now
+        the built in physics with any repulsion law, node formulas and sums, in any number of
+        dimensions); otherwise the layout stays on the CPU and the note under the stats says why.
+        Repulsion is exact over all pairs up to 1,024 nodes; larger layouts use a grid pyramid
+        instead of a tree (in 2D and 3D), so Theta and Repulsion settings do not apply. It is hundreds of times faster on large graphs, so raise
         Steps per frame (e.g. 20) to see it: with one step per frame, drawing the graph is the
         bottleneck. This is a separate module, <code>modules/gpu</code> in this repository;
         ngraph.forcelayout itself always runs on the CPU.
@@ -136,7 +138,7 @@
         </div>
         <div class='prototype'>
           <div v-if='!prototypeOn' class='off-note'>The idea is off: turn it on at the top to use these.</div>
-          <div v-else-if='stats && stats.ideaOffGpu' class='off-note'>Not used on WebGPU: {{stats.ideaOffGpu}}.</div>
+          <div v-else-if='stats && stats.gpuReasons' class='off-note'>Runs on the CPU: {{stats.gpuReasons}}.</div>
           <div v-if='prototype.tryGraphs' class='try'>
             Try on:
             <a href='#' v-for='name in prototype.tryGraphs' :key='name' @click.prevent='selectedGraph = name'>{{shortGraphName(name)}}</a>
@@ -244,8 +246,7 @@ export default {
       return {id: this.prototypeId, params: {...this.prototypeParams}};
     },
     backendOptions() {
-      let gpuDisabled = this.layoutSettings.dimensions !== 2 || this.gpuAvailable === false;
-      return [{value: 'cpu', label: 'CPU (library)'}, {value: 'webgpu', label: 'WebGPU, 2D (add-on)', disabled: gpuDisabled}];
+      return [{value: 'cpu', label: 'CPU (library)'}, {value: 'webgpu', label: 'WebGPU (add-on)', disabled: this.gpuAvailable === false}];
     }
   },
   methods: {
@@ -274,10 +275,10 @@ export default {
     updateStats() {
       if (!this.scene) return;
       this.stats = this.scene.getStats();
-      if (this.stats.backend !== this.backend && this.backend === 'webgpu') {
-        // the scene fell back to CPU (e.g. GPU device was lost)
-        this.gpuMessage = 'WebGPU device was lost, switched back to CPU.';
-        this.backend = this.stats.backend;
+      if (this.stats.gpuError && this.backend === 'webgpu') {
+        // the GPU stopped (e.g. its device was lost): the scene carries on with the CPU
+        this.gpuMessage = `WebGPU stopped (${this.stats.gpuError}), switched back to CPU.`;
+        this.backend = 'cpu';
       }
     },
 
@@ -311,12 +312,6 @@ export default {
     fixedViewBox(newValue) {
       this.scene.setFixedViewBox(newValue);
     },
-    'layoutSettings.dimensions'(newValue) {
-      if (newValue !== 2 && this.backend === 'webgpu') {
-        this.gpuMessage = 'WebGPU layout works only in 2D, switched to CPU.';
-        this.backend = 'cpu';
-      }
-    },
     placement(newValue) {
       appState.set('placement', newValue);
       this.scene.setPlacement(newValue);
@@ -328,10 +323,8 @@ export default {
     backend(newValue) {
       this.scene.setBackend(newValue).then(actualBackend => {
         if (actualBackend !== newValue) {
-          this.gpuMessage = this.layoutSettings.dimensions !== 2 ?
-            'WebGPU layout works only in 2D.' :
-            'WebGPU is not available in this browser.';
-          if (this.layoutSettings.dimensions === 2) this.gpuAvailable = false;
+          this.gpuMessage = 'WebGPU is not available in this browser.';
+          this.gpuAvailable = false;
           this.backend = actualBackend;
         } else if (newValue === 'webgpu') {
           this.gpuMessage = '';

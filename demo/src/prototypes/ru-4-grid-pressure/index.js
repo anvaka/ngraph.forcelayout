@@ -1,4 +1,14 @@
-import createGridPressure from './gridPressure.js';
+// Crowding pressure on a grid (2D only).
+//
+// Every node drops one unit of "stuff" into the four grid cells around it. One implicit
+// (always stable) step of the heat equation smooths that into a pressure field: crowded places
+// get high pressure, empty places low. Each node is then pushed downhill on that field. The
+// smoothing reaches about `range` units, so the push is short-range: crowds spread out, but
+// things far apart stop pushing each other.
+//
+// The grid, the deposit, the smoothing and the slope at each node are a grid field (see
+// modules/gridfield); the push is a formula that reads the slope.
+import addGridField from '../../../../modules/gridfield/index.js';
 
 // Values tuned in the lab with springLength 10 and springCoefficient 0.8 (the demo's defaults).
 // The pressure strength is rescaled for other spring settings, so the look stays similar.
@@ -54,38 +64,48 @@ but the stars get smaller. 2D only: in 3D the idea does nothing.</p>`,
     const range = positive(params.range, BASE_RANGE);
     const strength = positive(params.strength, 1);
     const farPush = Math.max(0, finite(params.farPush, 0.3));
-    const pressure = createGridPressure();
 
     // Keep only a share of the stock push (drag comes after it and stays whole)
     const stockRepulsion = simulator.getStage('repulsion');
     if (farPush === 0) simulator.removeStage('repulsion');
     else if (farPush !== 1) {
-      simulator.addStage('ru4-far-push', ({ n, D, force, pinned }) => {
-        for (let i = 0; i < n; ++i) {
-          if (pinned[i]) continue;
-          for (let k = 0; k < D; ++k) force[i * D + k] *= farPush;
-        }
-      }, { after: 'repulsion' });
+      simulator.addNodeFormula('ru4-far-push', {
+        after: 'repulsion',
+        params: { farPush },
+        formula: 'force *= select(pinned == 0, farPush, 1)'
+      });
     }
 
-    simulator.addStage('ru4-crowding', (store, sim) => {
-      const s = sim.settings;
-      const unit = s.springLength > 0 ? s.springLength : 10;
-      const stiffness = s.springCoefficient > 0 ? s.springCoefficient : 0.8;
-      const k = BASE_STRENGTH * strength * Math.pow(range / BASE_RANGE, 2) *
-        (stiffness / 0.8) * Math.pow(unit / 10, 4);
-      pressure.apply(store, {
-        strength: k,
-        range: range * unit,
-        cellSize: unit / 2,
-        maxCells: MAX_CELLS
-      });
+    // The spring length and stiffness that BASE_STRENGTH was tuned for
+    const unit = context => context.settings.springLength > 0 ? context.settings.springLength : 10;
+    const stiffness = context => context.settings.springCoefficient > 0 ? context.settings.springCoefficient : 0.8;
+    const field = addGridField(simulator, 'ru4-pressure', {
+      anchor: 'box',
+      cell: 'L / 2',
+      // room for the pressure to fade out around the drawing
+      margin: '3 * R',
+      maxCells: MAX_CELLS,
+      deposit: { weights: 'linear' },
+      // one implicit heat step with time step R^2
+      smooth: { diffuse: 'R * R' },
+      params: { L: unit, R: context => range * unit(context) },
+      into: { value: 'ru4Pressure', gradient: 'ru4PressureSlope' }
+    });
+    simulator.addNodeFormula('ru4-crowding', {
+      after: 'ru4-pressure',
+      params: {
+        k: context => BASE_STRENGTH * strength * Math.pow(range / BASE_RANGE, 2) *
+          (stiffness(context) / 0.8) * Math.pow(unit(context) / 10, 4)
+      },
+      // push each node downhill
+      formula: 'force -= select(pinned == 0, k * ru4PressureSlope, 0 * pos)'
     });
     return {
       dispose() {
         ['ru4-far-push', 'ru4-crowding'].forEach(name => {
           if (simulator.getStage(name)) simulator.removeStage(name);
         });
+        field.dispose();
         if (!simulator.getStage('repulsion')) simulator.addStage('repulsion', stockRepulsion, { after: 'clear' });
       }
     };

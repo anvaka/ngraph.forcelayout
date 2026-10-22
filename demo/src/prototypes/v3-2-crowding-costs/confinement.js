@@ -25,6 +25,8 @@ export default function addCrowdingCost(simulator, name, options) {
   const inv = sim => 1 / h(sim);
 
   simulator.addPairFormula(name, {
+    // the stiffness of this step's pairs, not a running total
+    startAtZero: ['crowdingStiffness'],
     // A range shorter than MIN_H holds no two distinct nodes in practice, and its push (~ c / h)
     // and stiffness (~ c / h^2) could overflow, so it counts as off.
     radius: sim => {

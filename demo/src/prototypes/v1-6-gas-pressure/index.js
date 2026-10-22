@@ -1,6 +1,32 @@
-// "Gas pressure where crowded": nodes packed denser than about one per spring-length square push
-// outward, from dense to sparse, like a gas. See gasPressure.js for the force itself.
-import createGasPressure from './gasPressure.js';
+// Gas pressure where nodes are crowded (2D only; in 3D it does nothing).
+//
+// The nodes are treated as a gas: where they are packed densely, they push outward, from dense to
+// sparse, with a force proportional to how quickly the density falls off:
+//
+//     F_i = -kT * grad(n) / n,   evaluated at body i
+//
+// This is the ideal gas law P = n kT (pressure grows with density) turned into a force on each
+// body. It only acts on crowding: below the target density n0 = 1 / (spacing * springLength)^2
+// there is no force at all, and between n0 and 2 n0 it fades in. With the default springLength and
+// gravity, graphs whose nodes end up spread wider than that (grids, meshes) end up as they would
+// without it; their crowded start is still pushed apart while they unfold. With weaker repulsion
+// (gravity -2) or longer springs (30), ordinary spacing already counts as crowded.
+//
+// The fire integrator has no drag, so there the temperature is halved. This is checked every step,
+// because the demo can switch the integrator without making a new layout.
+//
+// The density n is measured on a grid of square cells of side h (h = springLength by default), a
+// grid field (see modules/gridfield): each body is spread over the 3 x 3 nearest grid points with
+// smooth quadratic weights (they add up to 1 per body), so the density and its slope change
+// smoothly as a body moves. A body does not feel its own share.
+//
+// Known artifact: near the target density, bodies settle on the grid points, so the inside of a
+// filled star shows rows and columns along the grid. A cell of 2 spring lengths, or a grid that
+// moves every step, removes it, but the first leaves a hole in each star and the second shakes.
+//
+// Cost per step: 9 weighted deposits and 9 reads per body, O(n) whatever the crowding, plus a
+// pass over the grid's cells.
+import addGridField from '../../../../modules/gridfield/index.js';
 
 export default {
   id: 'v1-6-gas-pressure',
@@ -39,19 +65,48 @@ longer springs (30), ordinary spacing already counts as crowded and grids change
     }
   ],
 
-  attach({ layout, params }) {
+  attach({ layout, params, settings }) {
+    if ((settings.dimensions || 2) !== 2) return null;
     const simulator = layout.simulator;
-    // the fire halving is applied in gasPressure.js at every step, since the integrator can change
-    const gas = createGasPressure({
-      temperature: Math.max(0, params.temperature),
-      spacing: Math.max(0, params.spacing),
-      radius: 1,
+    const temperature = Math.max(0, params.temperature);
+    const spacing = Math.max(0, params.spacing);
+    const radius = 1; // grid cell, in spring lengths
+    const h = context => radius * context.settings.springLength;
+
+    const field = addGridField(simulator, 'v1-6-gas-density', {
+      anchor: 'lattice',
+      cell: 'h',
+      deposit: { weights: 'quadratic' },
+      self: 'exclude',
+      params: { h },
+      into: { value: 'gasDensity', gradient: 'gasSlope' }
     });
     // after the springs, just before bodies move
-    simulator.addStage('v1-6-gas-pressure', gas.force);
+    simulator.addNodeFormula('v1-6-gas-pressure', {
+      after: 'v1-6-gas-density',
+      params: {
+        h,
+        // the fire halving is checked every step, since the integrator can change
+        kT: context => (context.settings.integrator === 'fire' ? 0.5 : 1) * temperature * context.settings.springCoefficient *
+          context.settings.springLength * context.settings.springLength,
+        // target density, in bodies per cell (a spacing of 0 turns the push off)
+        rho0: context => Math.pow(h(context) / (spacing * context.settings.springLength), 2)
+      },
+      formula: `
+        // density of the other bodies, in bodies per cell (0.05 keeps the push finite where it is 0),
+        // and the push down its slope
+        rho = gasDensity * h * h;
+        ramp = select(rho >= 2 * rho0, 1, (rho - rho0) / rho0);
+        push = -kT * ramp / ((rho + 0.05) * h) * (gasSlope * (h * h * h));
+        // a huge temperature or spring constant can overflow: never add Infinity or NaN. Checked per
+        // axis, as length() would overflow 32-bit floats long before 1e30
+        force += select(rho > rho0 && pinned == 0 && abs(dot(push, axis(0))) < 1e30 && abs(dot(push, axis(1))) < 1e30,
+          push, 0 * pos)`
+    });
     return {
       dispose() {
         simulator.removeStage('v1-6-gas-pressure');
+        field.dispose();
       }
     };
   },
