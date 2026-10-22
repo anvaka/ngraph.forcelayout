@@ -255,7 +255,6 @@ test('laws: named values, conditions, tables and built in values', function (t) 
   var table = kernel({ force: 'T(r) / r^2', tables: { T: { from: 0, to: 4, values: values } } });
   var exact = kernel({ force: 'exp(-r) / r^2' });
   t.ok(Math.abs(table[0] - exact[0]) < 1e-4 && Math.abs(table[1] - exact[1]) < 1e-2, 'a table follows the function it samples, and its slope');
-  t.throws(function () { createRepulsionLaw({ force: 'T(r)', tables: { T: { from: 0, to: 1, values: [1, 0] } } }).emitWGSL(2, 'r', 'k1', 'k2'); }, /tables/);
   t.throws(function () { createRepulsionLaw('r < 1'); }, /not a condition/);
   t.throws(function () { createRepulsionLaw('u = r; 1 / r^2'); }, /never used/);
   t.end();

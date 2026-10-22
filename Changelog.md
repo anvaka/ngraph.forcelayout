@@ -30,14 +30,17 @@ the README):
   stages in order with their shape, formula, reads, writes and options), for other engines,
   inspectors and tests; `simulator.stageValues(name, context)` gives a stage's numbers for a step.
   A formula compiles to other languages through a printer: `formula.compile(text, scope,
-  printer)`, `law.emit(printer, ...)`.
+  printer)`, `law.emit(printer, ...)`. The library prints JS only; the WebGPU module has its own
+  WGSL printer (`law.emitWGSL()`, `law.wgslPrologue()`, `law.writeValues()` and
+  `law.valueCount` are gone).
 * `when` - any stage can run on some steps only, e.g. `'step - floor(step / 25) * 25 == 0'`.
   A gated sum keeps its last result.
 * `simulator.addHostStep(name, {when, reads, writes, run})` - JavaScript that needs data in the
   middle of a step, at its place among the stages.
 * `inertia` setting and `simulator.inertia(name)` - forces are divided by this column (the mass
   by default) when bodies move.
-* `startAtZero` for link and pair formulas, and `axis(k)` in formulas.
+* `startAtZero` for link and pair formulas, and `axis(k)` in formulas. Link formulas can set
+  their link's `coefficient` and `length`, and run as fast as the stock springs.
 * A `'settings'` event from the setters, and column versions (`store.versions`,
   `store.changed(name)`) for engines that keep their own copy of the numbers. Setters of bodies
   and springs mark their column, positions set with `setNodePosition()` included.
