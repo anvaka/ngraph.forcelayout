@@ -277,7 +277,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
             // its kernel, so it is built even on steps where its passes are gated off
             if (kernel.tree) tree.encode(cp, { stepOffset: offset[0], parity });
             // the pair formulas' sort, chunks and gathers, from this step's positions and numbers
-            if (kernel.pairStages) pairs.encode(cp, { stepOffset: offset[0], parity, values });
+            if (kernel.pairStages) pairs.encode(cp, { stepOffset: offset[0], parity, values, stages: kernel.pairStages });
             cp.setPipeline(pipeline);
             cp.setBindGroup(0, bind[parity], offset);
             cp.dispatchWorkgroups(g);

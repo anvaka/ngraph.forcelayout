@@ -476,9 +476,6 @@ export function genericPlan(program, laws, options = {}) {
   // slot, and their gathers write the hidden columns above
   let pairs = null;
   if (pairSections.some(s => s.sort)) {
-    if (kernels.filter(k => k.pairStages).length > 1) {
-      return { refusal: 'WebGPU runs pair formulas above N* at one place in the step for now (these fall into kernels apart)' };
-    }
     const columnRefs = Object.create(null);
     program.columns.nodes.forEach(info => {
       const column = columns[info.name];
