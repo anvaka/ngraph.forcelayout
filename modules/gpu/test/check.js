@@ -72,6 +72,19 @@ test('node formulas, sums, extra passes, charges, inertia and when run, in any d
   }
 });
 
+test('tree passes walk together across stages that only add to the force', () => {
+  const sim = layoutOf(200).simulator;
+  sim.addRepulsion('far', { law: { force: 'a / r', params: { a: 0.1 } } });
+  const walks = () => planOf({ simulator: sim }).sections.filter(s => s.kind === 'pairs').map(s => s.channels.map(c => c.stage.name));
+  // drag and springs only add to the force: one walk of two charges
+  assert.deepEqual(walks(), [['repulsion', 'far']]);
+  sim.addNodeFormula('push', { formula: 'force += 0.1 * axis(0)', before: 'far' });
+  assert.deepEqual(walks(), [['repulsion', 'far']]);
+  // a stage that scales the force reads what came before it: two walks
+  sim.addNodeFormula('calm', { formula: 'force *= 0.5', before: 'far' });
+  assert.deepEqual(walks(), [['repulsion'], ['far']]);
+});
+
 test('what does not run yet is named', () => {
   const sim = layoutOf(50).simulator;
   sim.store.define('group', Int32Array, 1, 0);
