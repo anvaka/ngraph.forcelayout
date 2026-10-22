@@ -1,280 +1,296 @@
-// "Pieces push only on contact": the forces behind the v1-7-contact-push prototype (2D only).
+// "Pieces push only on contact": the forces behind the v1-7-contact-push prototype.
 //
-// 1. Repulsion inside a piece. The library's own n-body kernel (quad tree or dual tree, as
-//    picked in the panel) runs once per connected piece, so nodes of different pieces no
-//    longer push each other from afar. This replaces the simulator's 'nbody' force.
+// 1. Repulsion inside a piece. Each connected piece gets a simulator of its own that holds
+//    copies of its bodies, and only that simulator's repulsion stage runs (quad tree or dual
+//    tree, as picked in the panel). So nodes of different pieces no longer push each other
+//    from afar. This replaces the simulator's 'repulsion' stage.
 // 2. Contact between pieces. Two nodes of different pieces that come closer than the contact
 //    distance push their pieces apart. The push is applied to the whole piece as one
-//    acceleration, so no piece gets bent. Only nodes outside the largest piece look for
-//    contacts, so the big piece's nodes are never walked against each other.
-// 3. A wall around all pieces, as in the v4 prototype: a piece that pokes out of a circle
-//    sized from the pieces' own areas is pulled back toward the common centre. The pull is
-//    paired (the total momentum stays the same), so the picture doesn't drift away.
+//    acceleration, so no piece gets bent. Close pairs come from the simulator's neighbor grid.
+// 3. A wall around all pieces, as in the v4 prototype: a piece that pokes out of a ball sized
+//    from the pieces' own volumes is pulled back toward the common centre. The pull is paired
+//    (the total momentum stays the same), so the picture doesn't drift away.
 // Pieces that hold a pinned node get neither contact nor wall pushes (as in v4), so the
 // pinned node doesn't hold back one part of its piece while the rest is pushed.
+import createLayout from '../../../../index.js';
+
 const SMALL_PIECE = 8; // pieces up to this size use a plain double loop instead of a tree
 const CONTACT_STIFFNESS = 2; // times springCoefficient
 const MAX_CONTACT = 100; // larger contact distances count as 100 (the help text says so)
 const DEFAULT_WALL_SLACK = 1.3;
+const STAGE_NAME = 'v1-7-contact-and-wall';
 
-export default function createPiecePush(simulator, options, kernels) {
-  const bodies = simulator.bodies;
-  const springs = simulator.springs;
+export default function createPiecePush(simulator, options) {
   const settings = simulator.settings;
+  const D = settings.dimensions;
+  const random = simulator.random;
   const contact = Math.min(MAX_CONTACT, Math.max(0, Number(options.contact) || 0));
   const farPush = !!Number(options.farPush);
   // 0 turns the wall off, other values below 1 count as 1, NaN falls back to the default
   const slack = Number(options.wallSlack);
   const wallSlack = Number.isNaN(slack) ? DEFAULT_WALL_SLACK : (slack === 0 ? 0 : Math.max(1, slack));
 
-  // Pieces (connected components), rebuilt when bodies or springs are added or removed
-  let knownBodies = -1, knownSprings = -1;
-  let pieceOf = new Int32Array(0), pieces = [], pieceCount = 0, largest = 0;
-  let quadTrees = [], dualTrees = [];
-  let mass, sumX, sumY, spread, accX, accY, pinnedPiece;
-  // Spatial hash for contacts
-  let cellX = new Int32Array(0), cellY = new Int32Array(0), next = new Int32Array(0), head = new Int32Array(0);
-  // first piece seen in each bucket, or -2 when the bucket holds more than one piece
-  let bucketPiece = new Int32Array(0);
+  // Pieces (connected components), found again when bodies or springs are added or removed.
+  // The rows of piece p are rows[start[p]] .. rows[start[p + 1] - 1], in row order.
+  let piecesKnown = false;
+  let pieceOf = new Int32Array(0), rows = new Int32Array(0), start = new Int32Array(1);
+  let pieceCount = 0, largest = 0;
+  let pieceSimulators = [];
+  let mass, sum, spread, acc, pinnedPiece;
+  const d = new Float64Array(D), center = new Float64Array(D), pull = new Float64Array(D);
 
-  if (!farPush) {
-    const springForce = simulator.getForces().get('spring');
-    simulator.removeForce('nbody');
-    simulator.removeForce('spring');
-    simulator.addForce('nbody', repulsionInsidePieces);
-    // springs must run after repulsion, which resets the forces
-    if (springForce) simulator.addForce('spring', springForce);
-  }
-  simulator.addForce('v1-7-contact-and-wall', contactAndWall);
+  const onTopology = () => { piecesKnown = false; };
+  simulator.on('topology', onTopology);
+  const repulsion = farPush ? null : simulator.replaceStage('repulsion', repulsionInsidePieces);
+  simulator.addStage(STAGE_NAME, contactAndWall);
 
   return {
     dispose() {
-      simulator.removeForce('v1-7-contact-and-wall');
+      simulator.off('topology', onTopology);
+      simulator.removeStage(STAGE_NAME);
+      if (repulsion) simulator.replaceStage('repulsion', repulsion);
     }
   };
 
-  function updatePieces() {
-    if (knownBodies === bodies.length && knownSprings === springs.length) return;
-    knownBodies = bodies.length;
-    knownSprings = springs.length;
-    const n = bodies.length;
-    const index = new Map();
-    bodies.forEach((body, i) => index.set(body, i));
+  function updatePieces({ n }) {
+    if (piecesKnown) return;
+    piecesKnown = true;
     const parent = new Int32Array(n);
     for (let i = 0; i < n; i++) parent[i] = i;
     const find = x => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
-    for (const spring of springs) {
-      const a = find(index.get(spring.from)), b = find(index.get(spring.to));
+    const { from, to } = simulator.springStore;
+    for (let s = 0; s < simulator.springStore.n; s++) {
+      const a = find(from[s]), b = find(to[s]);
       if (a !== b) parent[a] = b;
     }
     const pieceByRoot = new Map();
     pieceOf = new Int32Array(n);
-    pieces = [];
+    const sizes = [];
     for (let i = 0; i < n; i++) {
       const root = find(i);
       let id = pieceByRoot.get(root);
-      if (id === undefined) { id = pieces.length; pieceByRoot.set(root, id); pieces.push([]); }
+      if (id === undefined) { id = sizes.length; pieceByRoot.set(root, id); sizes.push(0); }
       pieceOf[i] = id;
-      pieces[id].push(bodies[i]);
+      sizes[id] += 1;
     }
-    pieceCount = pieces.length;
+    pieceCount = sizes.length;
+    start = new Int32Array(pieceCount + 1);
     largest = 0;
-    for (let p = 1; p < pieceCount; p++) if (pieces[p].length > pieces[largest].length) largest = p;
-    quadTrees = new Array(pieceCount);
-    dualTrees = new Array(pieceCount);
-    mass = new Float64Array(pieceCount); sumX = new Float64Array(pieceCount); sumY = new Float64Array(pieceCount);
-    spread = new Float64Array(pieceCount); accX = new Float64Array(pieceCount); accY = new Float64Array(pieceCount);
-    pinnedPiece = new Uint8Array(pieceCount);
-    cellX = new Int32Array(n); cellY = new Int32Array(n); next = new Int32Array(n);
-    let size = 1; while (size < 2 * n) size *= 2;
-    head = new Int32Array(size);
-    bucketPiece = new Int32Array(size);
-  }
-
-  function repulsionInsidePieces() {
-    updatePieces();
-    const useDualTree = settings.nbody === 'dualtree';
     for (let p = 0; p < pieceCount; p++) {
-      const piece = pieces[p];
-      if (piece.length <= SMALL_PIECE) {
-        directRepulsion(piece);
-      } else if (useDualTree) {
-        if (!dualTrees[p]) dualTrees[p] = kernels.createDualTree(settings);
-        dualTrees[p].computeForces(piece);
-      } else {
-        if (!quadTrees[p]) quadTrees[p] = kernels.createQuadTree({}, simulator.random);
-        const tree = quadTrees[p];
-        tree.options({ gravity: settings.gravity, theta: settings.theta });
-        tree.insertBodies(piece);
-        for (const body of piece) {
-          if (body.isPinned) continue;
-          body.reset();
-          tree.updateBodyForce(body);
-        }
-      }
+      start[p + 1] = start[p] + sizes[p];
+      if (sizes[p] > sizes[largest]) largest = p;
     }
-    // Same drag as the library's own n-body force; FIRE brings its own instead
-    if (settings.integrator !== 'fire') {
-      const drag = settings.dragCoefficient;
-      for (const body of bodies) {
-        if (body.isPinned) continue;
-        body.force.x -= drag * body.velocity.x;
-        body.force.y -= drag * body.velocity.y;
-      }
+    rows = new Int32Array(n);
+    const next = start.slice(0, pieceCount);
+    for (let i = 0; i < n; i++) rows[next[pieceOf[i]]++] = i;
+    pieceSimulators = new Array(pieceCount);
+    mass = new Float64Array(pieceCount); sum = new Float64Array(pieceCount * D);
+    spread = new Float64Array(pieceCount); acc = new Float64Array(pieceCount * D);
+    pinnedPiece = new Uint8Array(pieceCount);
+  }
+
+  function repulsionInsidePieces(store) {
+    updatePieces(store);
+    const charge = store[settings.repulsionCharge];
+    for (let p = 0; p < pieceCount; p++) {
+      if (start[p + 1] - start[p] <= SMALL_PIECE) directRepulsion(store, charge, p);
+      else repulsionInPiece(store, charge, p);
     }
   }
 
-  function directRepulsion(piece) {
-    for (const body of piece) if (!body.isPinned) body.reset();
+  // Runs the repulsion stage of the piece's own simulator on copies of its bodies
+  function repulsionInPiece({ pos, force, pinned }, charge, p) {
+    const first = start[p], count = start[p + 1] - first;
+    let piece = pieceSimulators[p];
+    if (!piece) {
+      piece = pieceSimulators[p] = createLayout.simulator({ ...settings, repulsionCharge: 'mass' });
+      for (let m = 0; m < count; m++) piece.addBodyAt(simulator.bodies[rows[first + m]].pos);
+    }
+    // the panel changes these without a new layout
+    piece.settings.gravity = settings.gravity;
+    piece.settings.theta = settings.theta;
+    piece.settings.nbody = settings.nbody;
+    const own = piece.store;
+    for (let m = 0; m < count; m++) {
+      const i = rows[first + m];
+      for (let k = 0; k < D; k++) own.pos[m * D + k] = pos[i * D + k];
+      own.mass[m] = charge[i];
+      own.pinned[m] = pinned[i];
+    }
+    own.force.fill(0, 0, count * D);
+    piece.getStage('repulsion')(own, piece);
+    for (let m = 0; m < count; m++) {
+      const i = rows[first + m];
+      if (pinned[i]) continue;
+      for (let k = 0; k < D; k++) force[i * D + k] += own.force[m * D + k];
+    }
+  }
+
+  function directRepulsion({ pos, force, pinned }, charge, p) {
     const gravity = settings.gravity;
-    for (let i = 0; i < piece.length; i++) {
-      const a = piece[i];
-      for (let j = i + 1; j < piece.length; j++) {
-        const b = piece[j];
-        let dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
-        let r2 = dx * dx + dy * dy;
-        if (r2 === 0) { dx = (simulator.random.nextDouble() - 0.5) / 50; dy = (simulator.random.nextDouble() - 0.5) / 50; r2 = dx * dx + dy * dy; }
-        const v = gravity * a.mass * b.mass / (r2 * Math.sqrt(r2));
-        if (!a.isPinned) { a.force.x += v * dx; a.force.y += v * dy; }
-        if (!b.isPinned) { b.force.x -= v * dx; b.force.y -= v * dy; }
+    for (let a = start[p]; a < start[p + 1]; a++) {
+      const i = rows[a];
+      for (let b = a + 1; b < start[p + 1]; b++) {
+        const j = rows[b];
+        let r2 = 0;
+        for (let k = 0; k < D; k++) { d[k] = pos[j * D + k] - pos[i * D + k]; r2 += d[k] * d[k]; }
+        if (r2 === 0) {
+          for (let k = 0; k < D; k++) { d[k] = (random.nextDouble() - 0.5) / 50; r2 += d[k] * d[k]; }
+        }
+        const v = gravity * charge[i] * charge[j] / (r2 * Math.sqrt(r2));
+        if (!pinned[i]) for (let k = 0; k < D; k++) force[i * D + k] += v * d[k];
+        if (!pinned[j]) for (let k = 0; k < D; k++) force[j * D + k] -= v * d[k];
       }
     }
   }
 
-  function contactAndWall() {
-    updatePieces();
+  function contactAndWall(store) {
+    updatePieces(store);
     if (pieceCount < 2) return;
-    const n = bodies.length;
-    mass.fill(0); sumX.fill(0); sumY.fill(0); spread.fill(0); accX.fill(0); accY.fill(0); pinnedPiece.fill(0);
-    let totalMass = 0, centerX = 0, centerY = 0;
+    const { n, pos, force, pinned } = store;
+    mass.fill(0); sum.fill(0); spread.fill(0); acc.fill(0); pinnedPiece.fill(0); center.fill(0);
+    let totalMass = 0;
     for (let i = 0; i < n; i++) {
-      const body = bodies[i], p = pieceOf[i], m = body.mass;
-      mass[p] += m; sumX[p] += m * body.pos.x; sumY[p] += m * body.pos.y;
-      totalMass += m; centerX += m * body.pos.x; centerY += m * body.pos.y;
-      if (body.isPinned) pinnedPiece[p] = 1;
+      const p = pieceOf[i], m = store.mass[i];
+      mass[p] += m;
+      totalMass += m;
+      for (let k = 0; k < D; k++) {
+        sum[p * D + k] += m * pos[i * D + k];
+        center[k] += m * pos[i * D + k];
+      }
+      if (pinned[i]) pinnedPiece[p] = 1;
     }
     if (!(totalMass > 0)) return;
-    centerX /= totalMass; centerY /= totalMass;
+    for (let k = 0; k < D; k++) center[k] /= totalMass;
 
-    if (!farPush && contact > 0) addContacts();
-    if (wallSlack > 0) addWall(centerX, centerY, totalMass);
+    if (!farPush && contact > 0) addContacts(store);
+    if (wallSlack > 0) addWall(store, totalMass);
 
     for (let i = 0; i < n; i++) {
-      const body = bodies[i], p = pieceOf[i];
-      if (body.isPinned || pinnedPiece[p]) continue;
-      const k = body.mass / mass[p];
-      body.force.x += k * accX[p];
-      body.force.y += k * accY[p];
+      const p = pieceOf[i];
+      if (pinned[i] || pinnedPiece[p]) continue;
+      const share = store.mass[i] / mass[p];
+      for (let k = 0; k < D; k++) force[i * D + k] += share * acc[p * D + k];
     }
   }
 
-  function averageEdgeLength() {
+  function averageEdgeLength({ pos }) {
+    const { n, from, to } = simulator.springStore;
     let length = 0;
-    for (const spring of springs) {
-      const dx = spring.to.pos.x - spring.from.pos.x, dy = spring.to.pos.y - spring.from.pos.y;
-      length += Math.sqrt(dx * dx + dy * dy);
+    for (let s = 0; s < n; s++) {
+      let r2 = 0;
+      for (let k = 0; k < D; k++) {
+        const dk = pos[to[s] * D + k] - pos[from[s] * D + k];
+        r2 += dk * dk;
+      }
+      length += Math.sqrt(r2);
     }
-    return springs.length ? length / springs.length : settings.springLength;
+    return n ? length / n : settings.springLength;
   }
 
-  // Contact pushes, summed per piece into accX/accY (as forces; divided by mass when applied)
-  function addContacts() {
-    const reach = contact * averageEdgeLength();
+  // Contact pushes, summed per piece into acc (as forces; divided by mass when applied)
+  function addContacts(store) {
+    const reach = contact * averageEdgeLength(store);
     if (!(reach > 0)) return;
     const stiffness = CONTACT_STIFFNESS * settings.springCoefficient;
-    const mask = head.length - 1;
-    const bucket = (u, v) => (Math.imul(u, 73856093) ^ Math.imul(v, 19349663)) & mask;
-    head.fill(-1);
-    bucketPiece.fill(-1);
-    const n = bodies.length;
-    for (let i = 0; i < n; i++) {
-      const pos = bodies[i].pos;
-      const u = Math.floor(pos.x / reach), v = Math.floor(pos.y / reach);
-      cellX[i] = u; cellY[i] = v;
-      const h = bucket(u, v);
-      next[i] = head[h]; head[h] = i;
-      if (bucketPiece[h] === -1) bucketPiece[h] = pieceOf[i];
-      else if (bucketPiece[h] !== pieceOf[i]) bucketPiece[h] = -2;
+    const pos = store.pos;
+    const grid = simulator.neighbors(reach);
+    if (start[largest + 1] - start[largest] < store.n / 4) {
+      // Only small pieces: every close pair once
+      grid.forEachPair(reach, (i, j, r) => {
+        const pa = pieceOf[i], pb = pieceOf[j];
+        if (pa === pb) return;
+        if (r === 0) { pushFromSameSpot(pa, pb, reach, stiffness); return; }
+        const f = stiffness * (reach - r) / r;
+        for (let k = 0; k < D; k++) {
+          const dk = pos[i * D + k] - pos[j * D + k];
+          acc[pa * D + k] += f * dk;
+          acc[pb * D + k] -= f * dk;
+        }
+      });
+      return;
     }
-    for (let i = 0; i < n; i++) {
-      const a = bodies[i].pos, pa = pieceOf[i], u0 = cellX[i], v0 = cellY[i];
-      // The largest piece never starts a pair: its contacts are found from the other side
-      if (pa === largest) continue;
-      // Skip nodes that have no other piece in the 3x3 cells around them
-      let nearOther = false;
-      for (let du = -1; du <= 1 && !nearOther; du++) {
-        for (let dv = -1; dv <= 1; dv++) {
-          const owner = bucketPiece[bucket(u0 + du, v0 + dv)];
-          if (owner !== -1 && owner !== pa) { nearOther = true; break; }
-        }
+    // A big piece: only nodes outside it look for contacts, so its nodes are never walked
+    // against each other. Each pair counts once: the largest piece's pairs from the other side.
+    let i = 0;
+    const fromOutside = (j, r) => {
+      const pa = pieceOf[i], pb = pieceOf[j];
+      if (pb === pa || (j <= i && pb !== largest)) return;
+      if (r === 0) { pushFromSameSpot(pa, pb, reach, stiffness); return; }
+      const f = stiffness * (reach - r) / r;
+      for (let k = 0; k < D; k++) {
+        const dk = pos[i * D + k] - pos[j * D + k];
+        acc[pa * D + k] += f * dk;
+        acc[pb * D + k] -= f * dk;
       }
-      if (!nearOther) continue;
-      for (let du = -1; du <= 1; du++) {
-        for (let dv = -1; dv <= 1; dv++) {
-          const u = u0 + du, v = v0 + dv;
-          for (let j = head[bucket(u, v)]; j !== -1; j = next[j]) {
-            // the bucket may also hold other cells; skip them, and count each pair once
-            if (cellX[j] !== u || cellY[j] !== v) continue;
-            const pb = pieceOf[j];
-            if (pb === pa || (j <= i && pb !== largest)) continue;
-            const b = bodies[j].pos;
-            let dx = a.x - b.x, dy = a.y - b.y;
-            let r = Math.sqrt(dx * dx + dy * dy);
-            if (r >= reach) continue;
-            // same spot: a random direction, as in the library; (dx, dy) stays r long, so the
-            // push below is stiffness * (reach - r), not divided by a made-up tiny r
-            if (r === 0) {
-              dx = (simulator.random.nextDouble() - 0.5) / 50; dy = (simulator.random.nextDouble() - 0.5) / 50;
-              r = Math.sqrt(dx * dx + dy * dy);
-            }
-            const f = stiffness * (reach - r) / r;
-            accX[pa] += f * dx; accY[pa] += f * dy;
-            accX[pb] -= f * dx; accY[pb] -= f * dy;
-          }
-        }
-      }
+    };
+    for (i = 0; i < store.n; i++) {
+      if (pieceOf[i] !== largest) grid.forEachNeighbor(i, reach, fromOutside);
     }
   }
 
-  // The v4 wall: pieces sticking out of a circle around everyone are pulled back in
-  function addWall(centerX, centerY, totalMass) {
-    const n = bodies.length;
+  // Two nodes on the same spot: a random direction, as in the library. It stays r long, so the
+  // push is stiffness * (reach - r), not divided by a made-up tiny r
+  function pushFromSameSpot(pa, pb, reach, stiffness) {
+    let r2 = 0;
+    for (let k = 0; k < D; k++) { d[k] = (random.nextDouble() - 0.5) / 50; r2 += d[k] * d[k]; }
+    const r = Math.sqrt(r2);
+    const f = stiffness * (reach - r) / r;
+    for (let k = 0; k < D; k++) {
+      acc[pa * D + k] += f * d[k];
+      acc[pb * D + k] -= f * d[k];
+    }
+  }
+
+  // The v4 wall: pieces sticking out of a ball around everyone are pulled back in
+  function addWall(store, totalMass) {
+    const { n, pos } = store;
     let L = settings.springLength;
     let strength = Math.abs(settings.gravity) * (totalMass / n) / (L * L);
     if (!(L > 0) || !Number.isFinite(strength)) {
       // spring length 0 (the panel passes through 0 while "0.5" is typed) or tiny:
       // measure the wall in average edge lengths instead, or skip it if there are no edges
-      L = averageEdgeLength();
+      L = averageEdgeLength(store);
       strength = Math.abs(settings.gravity) * (totalMass / n) / (L * L);
       if (!(L > 0) || !Number.isFinite(strength)) return;
     }
     for (let i = 0; i < n; i++) {
-      const body = bodies[i], p = pieceOf[i];
-      const qx = body.pos.x - sumX[p] / mass[p], qy = body.pos.y - sumY[p] / mass[p];
-      spread[p] += body.mass * (qx * qx + qy * qy);
+      const p = pieceOf[i];
+      let q2 = 0;
+      for (let k = 0; k < D; k++) {
+        const q = pos[i * D + k] - sum[p * D + k] / mass[p];
+        q2 += q * q;
+      }
+      spread[p] += store.mass[i] * q2;
     }
-    let area = 0;
+    let volume = 0;
     for (let p = 0; p < pieceCount; p++) {
-      spread[p] = Math.sqrt(2 * spread[p] / mass[p]); // radius of a disc with the same spread
-      area += (spread[p] + L / 2) * (spread[p] + L / 2);
+      spread[p] = Math.sqrt((D + 2) / D * spread[p] / mass[p]); // radius of a ball with the same spread
+      let size = 1;
+      for (let k = 0; k < D; k++) size *= spread[p] + L / 2;
+      volume += size;
     }
-    const wallRadius = wallSlack * Math.sqrt(area);
-    let pullX = 0, pullY = 0;
-    const pulls = [];
+    const wallRadius = wallSlack * Math.pow(volume, 1 / D);
+    pull.fill(0);
     for (let p = 0; p < pieceCount; p++) {
-      const tx = centerX - sumX[p] / mass[p], ty = centerY - sumY[p] / mass[p];
-      const dist = Math.sqrt(tx * tx + ty * ty);
+      let dist = 0;
+      for (let k = 0; k < D; k++) {
+        const t = center[k] - sum[p * D + k] / mass[p];
+        dist += t * t;
+      }
+      dist = Math.sqrt(dist);
       const out = dist + spread[p] - wallRadius;
       if (out <= 0 || dist === 0 || pinnedPiece[p]) continue;
       const scale = mass[p] * strength * Math.min(1, out / L) / dist;
-      pulls.push(p, scale * tx, scale * ty);
-      pullX += scale * tx; pullY += scale * ty;
+      for (let k = 0; k < D; k++) {
+        const t = scale * (center[k] - sum[p * D + k] / mass[p]);
+        acc[p * D + k] += t;
+        pull[k] += t;
+      }
     }
-    for (let k = 0; k < pulls.length; k += 3) { accX[pulls[k]] += pulls[k + 1]; accY[pulls[k]] += pulls[k + 2]; }
     // pair the pull: every piece gives back its share, so the pull can't move the whole picture
     for (let p = 0; p < pieceCount; p++) {
-      accX[p] -= mass[p] * pullX / totalMass;
-      accY[p] -= mass[p] * pullY / totalMass;
+      for (let k = 0; k < D; k++) acc[p * D + k] -= mass[p] * pull[k] / totalMass;
     }
   }
 }

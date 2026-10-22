@@ -1,6 +1,6 @@
-import createLeafFadeForce from './leafFadeForce.js';
+import addLeafFade from './leafFade.js';
 
-// Leaves push only nearby nodes. See leafFadeForce.js for the force itself.
+// Leaves push only nearby nodes. See leafFade.js for the force itself.
 export default {
   id: 'ru-1-leaf-fade',
   title: 'Leaf pushes fade (short reach)',
@@ -20,10 +20,10 @@ of springs with no decay, unless every node is also tied to a fixed spot, and th
 within a few nodes.</p>
 <p>What gets worse: links cross about 2.5× more often on the star graphs, neighbouring fans
 overlap in leafy trees (paTree3k: 0.07 → 0.30 crossings per link), graphs with many pieces (CSphd)
-draw their main piece smaller, and each step costs about 1.6–2× stock. <i>Fade every push</i> = 1
+draw their main piece smaller, and each step costs about 1.75× the stock quad tree. <i>Fade every push</i> = 1
 packs the stars tighter, but trees and sheets stop unfolding (paTree3k: 0.85 crossings per link).
-It works in 2D only and ignores the Repulsion setting: with dual tree it still computes the pushes
-its own way, about 8–10× slower than none.</p>`,
+It works in 2D only. Its pushes always walk one quad tree, whichever Repulsion method is picked, so
+with dual tree a step takes about 10× as long as the stock dual tree.</p>`,
   tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: grid20'],
   params: [
     {
@@ -46,16 +46,8 @@ its own way, about 8–10× slower than none.</p>`,
     const fadeAll = Number(params.fadeAll) > 0;
     // Without leaves there is nothing to fade: keep the stock force, so the layout is identical
     if (!fadeAll && !hasLeaves(graph)) return null;
-    const simulator = layout.simulator;
-    const force = createLeafFadeForce(simulator, { reach, fadeAll });
-    // Our push replaces the library's n-body force, whichever Repulsion setting is picked. Springs
-    // must still run after it, because the n-body pass is the one that clears last step's forces.
-    const springForce = simulator.getForces().get('spring');
-    simulator.removeForce('nbody');
-    simulator.removeForce('spring');
-    simulator.addForce('ru1-leaf-fade', force.update);
-    simulator.addForce('spring', springForce);
-    return {};
+    const remove = addLeafFade(layout, { reach, fadeAll });
+    return { dispose: remove };
   },
 };
 

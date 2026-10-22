@@ -1,8 +1,7 @@
 // "Push with a limited reach": nodes repel each other with the law of a flat world that has a
-// range (Yukawa's equation solved in a plane) instead of the library's 3-D law with no range.
-// It replaces the library's 'nbody' force with the same Barnes-Hut walk and a different kernel.
-// 2-D only; it always uses the quad tree (the panel's dual-tree choice is ignored while it's on).
-import createReachTree from './createReachTree.js';
+// range (Yukawa's equation solved in a plane) instead of the library's 3-D law with no range. The
+// law is in reachLaw.js. 2-D only.
+import createReachLaw from './reachLaw.js';
 
 const DEFAULT_REACH = 4;
 // Below about 1/9 spring length the push at one spring length rounds to zero, and matching it to
@@ -27,8 +26,8 @@ keep flying outward and the core shrinks to a dot; with the reach the core keeps
 more of the screen after 6000 steps.</p>
 <p><b>Gets worse.</b> Community groups and EVA's tiny pieces get denser, a reach of 2 or less
 folds trees, and reach 0 ("no limit") blows hub graphs apart, with a reach above about 16 moving
-toward it. It works in 2-D only (nothing happens in 3-D), ignores the dual-tree Repulsion
-setting, and turns itself off at spring length 0.</p>`,
+toward it. It works in 2-D only (nothing happens in 3-D) and turns itself off at spring length
+0. A step costs about 1.1 times as much with the quad tree and 1.3 times with the dual tree.</p>`,
   tryGraphs: ['Benchmark: megaStars', 'Benchmark: starOfStars', 'Benchmark: sciMet', 'Benchmark: yeast', 'Benchmark: binTree8'],
   params: [{
     key: 'reach', label: 'Reach (spring lengths)', value: DEFAULT_REACH, step: '0.5',
@@ -37,69 +36,18 @@ setting, and turns itself off at spring length 0.</p>`,
 
   attach({ layout, params }) {
     const simulator = layout.simulator;
-    const settings = simulator.settings;
     // 2-D only: in other dimensions the library's own force stays in place.
-    if (settings.dimensions !== 2) return null;
+    if (simulator.settings.dimensions !== 2) return null;
 
-    const forces = simulator.getForces();
-    const libraryNbody = forces.get('nbody');
-    if (!libraryNbody) return null;
-
-    const tree = createReachTree({ gravity: settings.gravity, theta: settings.theta }, simulator.random);
     // In spring lengths. 0 or less: no limit. NaN (e.g. a broken URL value): the default.
     const asked = Number(params.reach);
     const reachInUnits = Number.isNaN(asked) ? DEFAULT_REACH : (asked > 0 ? Math.max(asked, MIN_REACH) : 0);
-    // The spring length the reach is measured in; set on the first step.
-    let unit = NaN;
-
-    // Forces run in the order they were added: our n-body force has to stay first, because it
-    // resets each body's force before the springs add theirs.
-    const others = [];
-    forces.forEach((fn, name) => { if (name !== 'nbody') others.push([name, fn]); });
-    others.forEach(([name]) => simulator.removeForce(name));
-    simulator.removeForce('nbody');
-    simulator.addForce('nbody', nbodyWithReach);
-    others.forEach(([name, fn]) => simulator.addForce(name, fn));
-
-    function nbodyWithReach() {
-      const bodies = simulator.bodies;
-      if (bodies.length === 0) return;
-      // The push is matched to the library's at one spring length, which needs a spring length
-      // above 0: otherwise use the library's own push.
-      if (!(settings.springLength > 0)) return libraryNbody();
-      // The panel changes springLength on the running layout: follow it.
-      if (settings.springLength !== unit) {
-        unit = settings.springLength;
-        tree.setReach(reachInUnits * unit, unit);
-      }
-      // Read the live settings, so the panel's gravity/theta/drag still apply.
-      tree.options({ gravity: settings.gravity, theta: settings.theta });
-      // FIRE removes energy its own way and has no drag; Euler gets the library's drag.
-      const drag = settings.integrator === 'fire' ? 0 : settings.dragCoefficient;
-      tree.insertBodies(bodies);
-      for (let i = bodies.length - 1; i >= 0; --i) {
-        const body = bodies[i];
-        if (body.isPinned) continue;
-        body.reset();
-        tree.updateBodyForce(body);
-        if (drag) {
-          body.force.x -= drag * body.velocity.x;
-          body.force.y -= drag * body.velocity.y;
-        }
-      }
-    }
-
+    // At spring length 0 the law is the library's own push (see reachLaw.js)
+    const previousLaw = simulator.repulsionLaw().spec;
+    simulator.repulsionLaw(createReachLaw(reachInUnits));
     return {
       dispose() {
-        // The layout is thrown away after dispose(); put the library force back anyway, in case
-        // the same layout keeps running.
-        if (simulator.getForces().get('nbody') !== nbodyWithReach) return;
-        const after = [];
-        simulator.getForces().forEach((fn, name) => { if (name !== 'nbody') after.push([name, fn]); });
-        after.forEach(([name]) => simulator.removeForce(name));
-        simulator.removeForce('nbody');
-        simulator.addForce('nbody', libraryNbody);
-        after.forEach(([name, fn]) => simulator.addForce(name, fn));
+        simulator.repulsionLaw(previousLaw);
       }
     };
   }

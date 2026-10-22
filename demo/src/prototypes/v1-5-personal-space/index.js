@@ -1,6 +1,11 @@
-import createPersonalSpaceForce from './createPersonalSpaceForce.js';
-
-const FORCE_NAME = 'v1-5-personal-space';
+// Two bodies of the same piece closer than `radius` push each other apart with
+//   F(r) = 2C (1/r^3 - 1/a^3),          a/2 <= r < a
+//   F(r) = F(a/2) + |F'(a/2)| (a/2 - r), r < a/2 (linear, keeps the push bounded)
+// This is the force 2C/r^3 of the pair energy C/r^2, shifted down by 2C/a^3 so that it fades to
+// zero at r = a: squeezing a body into a space r costs energy that grows like 1/r^2 (Feynman,
+// Lectures on Physics I, 38-4). C is chosen so that F(a/2) = strength. Bodies farther apart than
+// `a` feel nothing. The push is a pair formula, so the library finds close pairs, in any
+// dimension, and runs the formula inside its own loop.
 // After the start delay, the push grows from zero to full strength over this many steps
 const FADE_STEPS = 100;
 // "Start after" when the value is not a number
@@ -30,7 +35,7 @@ from it, not from the push; set it to 0 to see the push alone.</p>
 <p>What to look for, compared with <b>none</b>: on starOfStars, EVA and megaStars the rings of
 leaves open into sunbursts, which is the push itself. grid20 ends up exactly the same.</p>
 <p>What gets worse: crossings around hubs go up 1.1–1.9×, small trees such as binTree8 pick up
-crossings, and steps take 1.1–1.4× as long. It does nothing in 3D.</p>
+crossings, and steps take 1.1–1.4× as long. It works in any number of dimensions.</p>
 `,
   tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: EVA', 'Benchmark: grid20'],
   params: [
@@ -52,47 +57,51 @@ crossings, and steps take 1.1–1.4× as long. It does nothing in 3D.</p>
     }
   ],
 
-  attach({ layout, graph, params, settings, steps }) {
-    if ((settings.dimensions || 2) !== 2) return {}; // 2D only: does nothing in 3D or more
-
+  attach({ layout, graph, params, steps }) {
     const simulator = layout.simulator;
-    const bodies = simulator.bodies;
-    let force = null;
-    let knownCount = -1;
-    let stepCount = steps || 0; // the steps the drawing already ran count towards the delay
-    // body.mass is both the body's "charge" (how hard it repels) and its inertia (how fast it
-    // moves under a force). While the push runs, crowded bodies get extra inertia for the
-    // integrator only; `charge` keeps the real masses, which are restored after every step.
-    let charge = new Float64Array(0);
-    let massChanged = false;
-    const markDirty = () => { knownCount = -1; };
-    graph.on('changed', markDirty);
-    layout.on('step', restoreMasses);
+    const stepsBefore = steps || 0; // the steps the drawing already ran count towards the delay
+    // Per body: its piece (only bodies of the same piece push), and how stiff the push is around
+    // it (the sum of 2|dF/dr| over its pairs)
+    simulator.store.define('piece', Int32Array);
+    simulator.store.define('pushStiffness', Float64Array);
 
-    simulator.addForce(FORCE_NAME, () => {
-      stepCount += 1;
+    // Sizes of the push this step. They are read every step, so panel changes apply live.
+    function sizes(sim) {
       const delayValue = Number(params.delay);
       const delay = Number.isNaN(delayValue) ? DEFAULT_DELAY : Math.max(0, delayValue);
-      const fade = Math.min(1, (stepCount - delay) / FADE_STEPS);
-      if (fade <= 0) return;
-
-      if (bodies.length !== knownCount) rebuild();
-      const s = simulator.settings; // read every step, so panel changes apply live
+      const fade = Math.min(1, (sim.iteration() + 1 + stepsBefore - delay) / FADE_STEPS);
+      const s = sim.settings;
       const radius = Math.min(MAX_RADIUS, Number(params.radius)) * s.springLength;
       const strength = fade * Number(params.strength) * s.springCoefficient * s.springLength;
-      force.apply(radius, strength, true);
-      const calm = Number(params.calm);
-      if (Number.isNaN(calm) || calm > 0) slowDownCrowdedBodies(s);
-    });
+      const C = strength * radius * radius * radius / 14; // 2C (8/a^3 - 1/a^3) = strength
+      const slope = 6 * C / Math.pow(radius / 2, 4);
+      // absurd radius or strength values overflow or underflow these; then push nothing
+      const active = fade > 0 && radius > 0 && strength > 0 && C > 0 && Number.isFinite(C) && Number.isFinite(slope);
+      return { active, radius, strength, C, slope };
+    }
 
-    return {
-      dispose() {
-        restoreMasses();
-        graph.off('changed', markDirty);
-        layout.off('step', restoreMasses);
-        simulator.removeForce(FORCE_NAME);
-      }
-    };
+    simulator.on('topology', findPieces);
+    // Bodies on the same spot (r = 0) have no direction to push along, so the simulator skips
+    // them. Pairs of different pieces push nothing and add no stiffness.
+    simulator.addPairFormula('personalSpace', {
+      // the stiffness of this step's pairs, not a running total
+      startAtZero: ['pushStiffness'],
+      radius: sim => { const size = sizes(sim); return size.active ? size.radius : 0; },
+      params: {
+        half: sim => sizes(sim).radius / 2,
+        inv3: sim => { const a = sizes(sim).radius; return 1 / (a * a * a); },
+        strength: sim => sizes(sim).strength,
+        C: sim => sizes(sim).C,
+        slope: sim => sizes(sim).slope
+      },
+      formula: `
+        r3 = r * r * r;
+        f = r >= half ? 2 * C * (1 / r3 - inv3) : strength + slope * (half - r);
+        k = r >= half ? 6 * C / (r3 * r) : slope;
+        pushStiffness_i += piece_i == piece_j ? 2 * k : 0;
+        pushStiffness_j += piece_i == piece_j ? 2 * k : 0;
+        push = piece_i == piece_j ? f : 0`
+    });
 
     // A stiff push makes crowded bodies overshoot and shake when the time step is too long for
     // them. Giving a body inertia m >= K dt^2 / MAX_SWING^2 (K: how stiff its surroundings are)
@@ -101,69 +110,63 @@ crossings, and steps take 1.1–1.4× as long. It does nothing in 3D.</p>
     // rest all forces are zero whatever the masses are. But a layout that still trembles with
     // none (megaStars) is calmed too, and that changes the picture: on megaStars it gives most of
     // the gain on its own. Only bodies the push reaches are touched, so the rest move exactly as
-    // without the idea at any time step.
-    function slowDownCrowdedBodies(s) {
-      const stiffness = force.stiffness;
-      const dt = s.timeStep, springStiffness = 2 * s.springCoefficient;
-      const useDrag = s.integrator !== 'fire';
-      for (let i = 0; i < bodies.length; ++i) {
-        if (!(stiffness[i] > 0)) continue;
-        const body = bodies[i];
-        const k = stiffness[i] + springStiffness * body.springCount;
-        const inertia = k * dt * dt / (MAX_SWING * MAX_SWING);
-        // the finiteness tests only matter at absurd settings, where the numbers overflow
-        if (!(inertia > charge[i]) || !Number.isFinite(inertia)) continue;
-        let fx = body.force.x, fy = body.force.y;
-        if (useDrag) {
-          const extra = s.dragCoefficient * (inertia / charge[i] - 1);
-          fx -= extra * body.velocity.x;
-          fy -= extra * body.velocity.y;
-          if (!Number.isFinite(fx + fy)) continue;
-        }
-        body.force.x = fx;
-        body.force.y = fy;
-        body.mass = inertia;
-        massChanged = true;
+    // without the idea at any time step. The masses stay as they are, so every push uses them;
+    // only the integrator divides forces by the inertia column instead.
+    const calm = Number(params.calm);
+    const calmed = Number.isNaN(calm) || calm > 0;
+    if (calmed) {
+      simulator.store.define('calmInertia', Float64Array);
+      simulator.addNodeFormula('calmCrowdedBodies', {
+        params: {
+          active: sim => sizes(sim).active ? 1 : 0,
+          springStiffness: sim => 2 * sim.settings.springCoefficient,
+          useDrag: sim => sim.settings.integrator !== 'fire' ? 1 : 0,
+          swing2: MAX_SWING * MAX_SWING
+        },
+        formula: `
+          k = pushStiffness + springStiffness * degree;
+          inertia = k * dt * dt / swing2;
+          calm = active > 0 && pushStiffness > 0 && inertia > mass ? 1 : 0;
+          extra = dragCoefficient * (inertia / mass - 1);
+          force = calm > 0 && useDrag > 0 ? force - extra * velocity : force;
+          calmInertia = calm > 0 ? inertia : mass`
+      });
+      simulator.inertia('calmInertia');
+    }
+    return {
+      dispose() {
+        simulator.off('topology', findPieces);
+        if (calmed) simulator.inertia('mass');
+        ['personalSpace', 'calmCrowdedBodies'].forEach(name => {
+          if (simulator.getStage(name)) simulator.removeStage(name);
+        });
+        ['piece', 'pushStiffness', 'calmInertia'].forEach(name => simulator.store.remove(name));
       }
-    }
-
-    function restoreMasses() {
-      if (!massChanged) return;
-      for (let i = 0; i < charge.length && i < bodies.length; ++i) bodies[i].mass = charge[i];
-      massChanged = false;
-    }
+    };
 
     // Numbers every body by its connected piece, so that only bodies of the same piece push
     // each other. Pushing across pieces makes pieces that start on top of each other jam.
-    function rebuild() {
+    function findPieces() {
       const pieceOf = new Map();
-      let piece = 0;
+      let count = 0;
       graph.forEachNode(start => {
         if (pieceOf.has(start.id)) return;
         const stack = [start.id];
-        pieceOf.set(start.id, piece);
+        pieceOf.set(start.id, count);
         while (stack.length) {
           graph.forEachLinkedNode(stack.pop(), other => {
             if (pieceOf.has(other.id)) return;
-            pieceOf.set(other.id, piece);
+            pieceOf.set(other.id, count);
             stack.push(other.id);
           });
         }
-        piece += 1;
+        count += 1;
       });
-      const pieceOfBody = new Map();
-      graph.forEachNode(node => {
-        const body = layout.getBody(node.id);
-        if (body) pieceOfBody.set(body, pieceOf.get(node.id));
-      });
-      const groupOf = new Int32Array(bodies.length);
+      const { bodies, store } = simulator;
       for (let i = 0; i < bodies.length; ++i) {
-        const p = pieceOfBody.get(bodies[i]);
-        groupOf[i] = p === undefined ? -1 - i : p; // unknown bodies push nobody
+        const p = pieceOf.get(bodies[i].id);
+        store.piece[i] = p === undefined ? -1 - i : p; // unknown bodies push nobody
       }
-      force = createPersonalSpaceForce(bodies, groupOf);
-      charge = Float64Array.from(bodies, body => body.mass);
-      knownCount = bodies.length;
     }
   }
 };

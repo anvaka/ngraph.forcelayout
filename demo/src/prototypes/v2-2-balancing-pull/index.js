@@ -4,11 +4,20 @@
 // linearly with distance, -kappa * m * (x - c). kappa is set so the pull exactly balances the
 // bodies' own push when they are spread evenly, one body per springLength^2 (a uniform
 // "background" of opposite charge, as in a plasma). For that balance to hold, the push between
-// far-apart bodies must fall off as 1/r, as in a flat world; slabPush.js blends today's 1/r^2 at
-// short range into 2/(h r) at long range. The two are equal at r = h/2, so at the default
+// far-apart bodies must fall off as 1/r, as in a flat world: bodies push each other as if they
+// lived in a thin flat slab of thickness h,
+//
+//   F = G m_i m_j sqrt(1 + (2r/h)^2) / r^2
+//
+// which is today's 1/r^2 much closer than h/2 and 2/(h r) much farther (an interpolation of the
+// exact sum over mirror images of a source between two insulating walls; within 15% of it
+// everywhere and exact at both ends). The two parts are equal at r = h/2, so at the default
 // h = 2 spring lengths the push is already 1.4x today's at one spring length. One-piece graphs
 // are left alone.
-import createSlabPush from './slabPush.js';
+
+// Upper bound on 4/h^2. It only applies when h is below about 1e-50 layout units (or h*h
+// underflows to 0), where sqrt(1 + K r^2) would overflow and turn positions into NaN.
+const MAX_SLAB_K = 1e100;
 
 export default {
   id: 'v2-2-balancing-pull',
@@ -29,8 +38,7 @@ also spreads out wider (yeast: 1.7× as wide).</p>
 Graphs in one piece are left alone, so grid20 doesn't change.</p>
 <p><b>Worse.</b> Small pieces get pressed against the main one and lose some of their shape, and
 graphs made mostly of tiny pieces (protein) get crowded and overlap. A step costs about the same
-as stock, but it ignores the Repulsion setting (always the plain tree, about 6× slower than "dual
-tree") and does nothing in 3D.</p>`,
+as stock, with either Repulsion setting. It does nothing in 3D.</p>`,
   tryGraphs: ['Benchmark: yeast', 'Benchmark: sciMet', 'Benchmark: CSphd', 'Benchmark: grid20'],
   params: [
     {
@@ -58,21 +66,31 @@ tree") and does nothing in 3D.</p>`,
     if (countPieces(graph) < 2 && !(Number(params.always) > 0)) return {};
 
     const simulator = layout.simulator;
-    const simSettings = simulator.settings;
     const strength = Number.isFinite(Number(params.strength)) ? Math.max(0, Number(params.strength)) : 0;
     const reach = Math.max(0, Number(params.reach) || 0);
-    const getH = () => reach * simSettings.springLength;
 
-    // Forces run in the order they were added, and the push resets every body's force, so it
-    // has to come first: take the springs out, put our push in, put the springs back.
-    const spring = simulator.getForces().get('spring');
-    simulator.removeForce('nbody');
-    simulator.removeForce('spring');
-    simulator.addForce('v2-2-slab-push', createSlabPush(simulator, getH));
-    simulator.addForce('spring', spring);
-    if (strength > 0) simulator.addForce('v2-2-balancing-pull', () => balancingPull(simulator, strength));
+    // The slab law, in both trees; h is read every step, so it follows the spring length.
+    // A reach of 0 is today's push.
+    const previousLaw = simulator.repulsionLaw().spec;
+    if (reach > 0) {
+      simulator.repulsionLaw({
+        force: 'sqrt(1 + K * r * r) / r^2',
+        params: {
+          K(sim) {
+            const h = reach * sim.settings.springLength;
+            return h > 0 ? Math.min(4 / (h * h), MAX_SLAB_K) : 0;
+          }
+        }
+      });
+    }
+    const stages = strength > 0 ? addBalancingPull(simulator, strength) : [];
 
-    return {};
+    return {
+      dispose() {
+        simulator.repulsionLaw(previousLaw);
+        stages.forEach(name => { if (simulator.getStage(name)) simulator.removeStage(name); });
+      }
+    };
   }
 };
 
@@ -82,36 +100,29 @@ tree") and does nothing in 3D.</p>`,
 // far-field constant of the default slab push (h = 2 spring lengths): G' = 2G/h = G/L. The
 // 'reach' parameter changes only the push, so a large reach shows the pull without the
 // flat-world push.
-function balancingPull(simulator, strength) {
-  const bodies = simulator.bodies;
-  const n = bodies.length;
-  if (n < 2) return;
-  const settings = simulator.settings;
-  const L = settings.springLength;
-  let charge = 0, cx = 0, cy = 0;
-  for (let i = 0; i < n; ++i) {
-    const body = bodies[i];
-    charge += body.mass;
-    cx += body.mass * body.pos.x;
-    cy += body.mass * body.pos.y;
-  }
-  cx /= charge;
-  cy /= charge;
-  const flatG = Math.abs(settings.gravity) / L;
-  const radius2 = n * L * L / Math.PI;
-  const kappa = strength * flatG * charge / radius2;
-  // Spring length 0 (the panel passes through it while you type "0.5") and other extreme settings
-  // make kappa 0, negative, infinite or NaN: then there is no pull, rather than NaN positions.
-  if (!(kappa > 0 && kappa < Infinity)) return;
-  for (let i = 0; i < n; ++i) {
-    const body = bodies[i];
-    if (body.isPinned) continue;
-    const fx = kappa * body.mass * (body.pos.x - cx);
-    const fy = kappa * body.mass * (body.pos.y - cy);
-    if (!Number.isFinite(fx) || !Number.isFinite(fy)) continue; // overflow, only at absurd strengths
-    body.force.x -= fx;
-    body.force.y -= fy;
-  }
+//
+// Written as formulas, so the simulator runs the loops: two sums (the total charge and the
+// charge-weighted position) and a formula for every body. Returns the names of the stages.
+function addBalancingPull(simulator, strength) {
+  simulator.addSum('balancingCharge', { formula: 'mass' });
+  simulator.addSum('balancingMoment', { formula: 'mass * pos' });
+  simulator.addNodeFormula('v2-2-balancing-pull', {
+    params: { strength },
+    formula: `
+      center = balancingMoment / balancingCharge;
+      d = pos - center;
+      // the pull balances the push of n bodies spread evenly over a disc, one per springLength^2
+      flatG = abs(gravity) / springLength;
+      radius2 = n * springLength * springLength / pi;
+      kappa = strength * flatG * balancingCharge / radius2;
+      // Spring length 0 (the panel passes through it while you type "0.5") and other extreme
+      // settings make kappa 0, negative, infinite or NaN: then there is no pull, rather than NaN
+      // positions. A body whose pull would be huge (only at absurd strengths) is left alone; 1e30
+      // is a limit that 32-bit floats (a GPU) hold too.
+      force -= select(n >= 2 && kappa > 0 && kappa < 1e30 && pinned == 0 && kappa * mass * length(d) < 1e30,
+        kappa * mass * d, 0 * pos)`
+  });
+  return ['balancingCharge', 'balancingMoment', 'v2-2-balancing-pull'];
 }
 
 // Number of connected pieces (isolated nodes count as pieces)

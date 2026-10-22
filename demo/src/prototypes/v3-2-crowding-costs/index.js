@@ -1,6 +1,6 @@
-import createConfinementForce from './confinement.js';
+import addCrowdingCost from './confinement.js';
 
-const FORCE_NAME = 'v3-2-crowding-costs';
+const NAME = 'v3-2-crowding-costs';
 // The panel has no min/max, so the caps named in the help texts are applied in attach().
 const MAX_STRENGTH = 1e6;
 const MAX_RANGE = 1.5;
@@ -25,7 +25,7 @@ with <b>none</b>, under 1% here).</p>
 about as far apart as with <b>none</b>; grid20 is identical with <i>Start from: pivot MDS</i>.</p>
 <p>What gets worse: more edge crossings (about 3&times; on starOfStars), Range 1 tangles sparse
 graphs (powerGrid), and it costs about 1.5&ndash;1.7&times; the time per step, much more with a
-long spring length. 2D only: in 3D it does nothing.</p>`,
+long spring length.</p>`,
   tryGraphs: ['Benchmark: starOfStars', 'Benchmark: megaStars', 'Benchmark: EVA', 'Benchmark: grid20'],
   params: [
     {
@@ -38,20 +38,11 @@ long spring length. 2D only: in 3D it does nothing.</p>`,
     },
   ],
 
-  attach({ layout, params, settings }) {
-    const dimensions = (settings && settings.dimensions) || layout.simulator.settings.dimensions || 2;
-    if (dimensions !== 2) return {};
-    const simulator = layout.simulator;
-    const confinement = createConfinementForce(simulator, {
+  attach({ layout, params }) {
+    const remove = addCrowdingCost(layout.simulator, NAME, {
       strength: Math.min(Number(params.strength), MAX_STRENGTH),
       range: Math.min(Number(params.range), MAX_RANGE),
     });
-    // Runs after the library's repulsion and springs, so it sees each node's whole force.
-    simulator.addForce(FORCE_NAME, confinement.force);
-    return {
-      dispose() {
-        simulator.removeForce(FORCE_NAME);
-      },
-    };
+    return { dispose: remove };
   },
 };

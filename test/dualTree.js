@@ -1,13 +1,14 @@
 var test = require('tap').test;
 var createDualTreeFor = require('../lib/codeGenerators/generateDualTree');
 var getVariableName = require('../lib/codeGenerators/getVariableName');
+var createBodies = require('./helpers/createBodies');
 var random = require('ngraph.random').random(42);
 
 test('dual tree forces are close to exact forces', function (t) {
   [2, 3, 4].forEach(function (dimensions) {
-    var bodies = createRandomBodies(dimensions, 2000);
+    var {store, bodies} = createRandomBodies(dimensions, 2000);
     var settings = { gravity: -12, theta: 0.8 };
-    createDualTreeFor(dimensions)(settings).computeForces(bodies);
+    createDualTreeFor(dimensions)(settings).computeForces(store);
 
     var exact = exactForces(bodies, dimensions, settings.gravity);
     var names = variableNames(dimensions);
@@ -26,10 +27,10 @@ test('dual tree forces are close to exact forces', function (t) {
 });
 
 test('two bodies repel each other', function (t) {
-  var Body = require('../lib/codeGenerators/generateCreateBody')(2);
-  var bodyA = new Body(1, 0);
-  var bodyB = new Body(2, 0);
-  createDualTreeFor(2)({ gravity: -1, theta: 0.8 }).computeForces([bodyA, bodyB]);
+  var {store, bodies: [bodyA, bodyB]} = createBodies(2, 2);
+  bodyA.setPosition(1, 0);
+  bodyB.setPosition(2, 0);
+  createDualTreeFor(2)({ gravity: -1, theta: 0.8 }).computeForces(store);
 
   t.equal(bodyA.force.x, -1, 'A is pushed left');
   t.equal(bodyB.force.x, 1, 'B is pushed right');
@@ -38,10 +39,9 @@ test('two bodies repel each other', function (t) {
 });
 
 test('bodies at the same position get bounded, opposite forces', function (t) {
-  var Body = require('../lib/codeGenerators/generateCreateBody')(2);
-  var bodies = [];
-  for (var i = 0; i < 40; ++i) bodies.push(new Body(5, 5));
-  createDualTreeFor(2)({ gravity: -12, theta: 0.8 }).computeForces(bodies);
+  var {store, bodies} = createBodies(40, 2);
+  bodies.forEach(function (body) { body.setPosition(5, 5); });
+  createDualTreeFor(2)({ gravity: -12, theta: 0.8 }).computeForces(store);
 
   var sumX = 0, sumY = 0, allFinite = true, someNonZero = false;
   bodies.forEach(function (body) {
@@ -57,12 +57,12 @@ test('bodies at the same position get bounded, opposite forces', function (t) {
 });
 
 test('it does not touch forces of pinned bodies', function (t) {
-  var Body = require('../lib/codeGenerators/generateCreateBody')(2);
-  var bodyA = new Body(1, 0);
-  var bodyB = new Body(2, 0);
+  var {store, bodies: [bodyA, bodyB]} = createBodies(2, 2);
+  bodyA.setPosition(1, 0);
+  bodyB.setPosition(2, 0);
   bodyA.isPinned = true;
   bodyA.force.x = 42;
-  createDualTreeFor(2)({ gravity: -1, theta: 0.8 }).computeForces([bodyA, bodyB]);
+  createDualTreeFor(2)({ gravity: -1, theta: 0.8 }).computeForces(store);
 
   t.equal(bodyA.force.x, 42, 'Pinned body keeps its force');
   t.equal(bodyB.force.x, 1, 'Pinned body still repels others');
@@ -70,18 +70,24 @@ test('it does not touch forces of pinned bodies', function (t) {
 });
 
 test('it follows changes in number of bodies and in settings', function (t) {
-  var bodies = createRandomBodies(2, 300);
+  var {store, bodies} = createRandomBodies(2, 300);
   var settings = { gravity: -12, theta: 0.8 };
   var dualTree = createDualTreeFor(2)(settings);
-  dualTree.computeForces(bodies);
+  dualTree.computeForces(store);
   var before = bodies[0].force.x;
 
+  // The dual tree adds to forces; the simulator clears them before every step
   settings.gravity = -24;
-  dualTree.computeForces(bodies);
+  store.force.fill(0);
+  dualTree.computeForces(store);
   t.ok(Math.abs(bodies[0].force.x - 2 * before) < 1e-9 * Math.abs(before), 'Gravity is read on every call');
 
-  bodies.splice(10, 100);
-  dualTree.computeForces(bodies);
+  var removed = [];
+  for (var row = 10; row < 110; ++row) removed.push(row);
+  store.removeRows(removed);
+  bodies = bodies.slice(0, store.n);
+  store.force.fill(0);
+  dualTree.computeForces(store);
   var exact = exactForces(bodies, 2, settings.gravity);
   var error = 0, norm = 0;
   bodies.forEach(function (body, i) {
@@ -116,20 +122,17 @@ function variableNames(dimensions) {
 }
 
 function createRandomBodies(dimensions, count) {
-  var Body = require('../lib/codeGenerators/generateCreateBody')(dimensions);
   var names = variableNames(dimensions);
-  var bodies = [];
-  for (var i = 0; i < count; ++i) {
-    var body = new Body();
+  var created = createBodies(count, dimensions);
+  created.bodies.forEach(function (body, i) {
     // a few clusters, to make the tree uneven
     var cluster = i % 5;
     names.forEach(function (name) {
       body.pos[name] = cluster * 30 + (random.nextDouble() - 0.5) * (cluster + 1) * 20;
     });
     body.mass = 1 + random.next(4);
-    bodies.push(body);
-  }
-  return bodies;
+  });
+  return created;
 }
 
 function exactForces(bodies, dimensions, gravity) {
