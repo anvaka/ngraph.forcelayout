@@ -378,7 +378,8 @@ params and options. Engines compile from it; functions appear as `{kind: 'host'}
 module describes itself with `addStage(name, run, { describe: { shape: 'grid', ... } })`, and
 `values: function (context) { ... }` gives its numbers for a step.
 `simulator.plan(backend)` tells which stages an engine can run, and why not: the WebGPU module
-in `modules/gpu` exports `gpuBackend` for it. JS stages and pair rules run on the CPU only.
+in `modules/gpu` gives a backend for it (`createWebGPUBackend()`), and runs a layout with
+`runOnGpu(layout, backend)`. JS stages and pair rules run on the CPU only.
 
 ## Space occupied by graph
 
