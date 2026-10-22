@@ -48,8 +48,8 @@ test('every combination plans in 2D and 3D, each kernel within 8 storage buffers
               const p = plan(D, gridStage(D, options).stage);
               const what = `${D}D ${anchor} ${weights} ${smooth ? 'smooth' : 'plain'} ${self}${charge ? ' charge' : ''}`;
               assert.equal(p.refusal, null, what);
-              assert.equal(p.dispatches, 9 + (smooth ? 2 * D + 1 : 0), what);
-              assert.equal(Object.keys(p.kernels).length, 9 + (smooth ? D + 1 : 0), what);
+              assert.equal(p.dispatches, 5 + (smooth ? 2 * D + 1 : 0), what);
+              assert.equal(Object.keys(p.kernels).length, 5 + (smooth ? D + 1 : 0), what);
               for (const [name, kernel] of Object.entries(p.kernels)) {
                 assert.ok(storageBindings(kernel.code) <= 8, `${what} ${name}: ${storageBindings(kernel.code)} storage buffers`);
                 assert.equal(kernel.bindings.length, (kernel.code.match(/@binding\(/g) || []).length, `${what} ${name}: bindings listed`);
@@ -66,14 +66,15 @@ test('every combination plans in 2D and 3D, each kernel within 8 storage buffers
 test('the deposit value reads its column and param; the step slot names them', () => {
   const { stage } = gridStage(2, { anchor: 'box', cell: 'unit / 2', deposit: { value: 'charge * k' }, params: { k: 2 }, charge: true });
   const p = plan(2, stage);
-  assert.ok(p.kernels.GRID_BIN.code.indexOf('H[i + 0u]') >= 0, 'BIN reads the column');
+  assert.ok(p.kernels.GRID_SCATTER.code.indexOf('H[i + 0u]') >= 0, 'SCATTER reads the column');
+  assert.ok(p.kernels.GRID_MINMAX.code.indexOf('H[i + 0u]') >= 0, 'MINMAX finds its largest value');
   assert.deepEqual(p.slotNames, ['cell', 'cellLow', 'margin', 'marginLow', 'diffuse', 'value', 'phase0', 'phase1', 'param:k', 'builtIn:unit']);
 });
 
 test('refusals name the numbers', () => {
   assert.match(planGrid(Object.assign({ stage: gridStage(2, { cell: 1 }).stage, D: 4, n: 10, limits: SPEC_LIMITS }, refs(4))).refusal, /grid fields are 2D and 3D; this layout is 4D/);
   const huge = plan(2, gridStage(2, { cell: 1, maxCells: 8192 }).stage);
-  assert.match(huge.refusal, /a 2D grid of up to 8,192 cells per axis at 50,000 bodies needs 256 MiB for gridStart; this device allows 128 MiB per buffer/);
+  assert.match(huge.refusal, /a 2D grid of up to 8,192 cells per axis at 50,000 bodies needs 513 MiB for gridAcc; this device allows 128 MiB per buffer/);
   const roomy = plan(2, gridStage(2, { cell: 1, maxCells: 8192 }).stage, 50000, Object.assign({}, SPEC_LIMITS, { maxStorageBufferBindingSize: 1 << 30, maxBufferSize: 1 << 30 }));
   assert.equal(roomy.refusal, null, 'a device with larger buffers takes it');
   const { stage } = gridStage(2, { cell: 1e300 });
@@ -82,7 +83,7 @@ test('refusals name the numbers', () => {
 
 test('plan() says how it runs', () => {
   const { stage } = gridStage(2, { anchor: 'lattice', cell: 1, deposit: { weights: 'quadratic' }, self: 'exclude' });
-  assert.deepEqual(checkGrid(stage, 2, 1000, SPEC_LIMITS), { runs: true, how: 'a lattice grid of up to 2,048 cells per axis, quadratic weights, own share left out: 9 dispatches' });
+  assert.deepEqual(checkGrid(stage, 2, 1000, SPEC_LIMITS), { runs: true, how: 'a lattice grid of up to 2,048 cells per axis, quadratic weights, own share left out: 5 dispatches' });
 });
 
 test('numbers per step: the lattice phase puts relative positions back on it', () => {
