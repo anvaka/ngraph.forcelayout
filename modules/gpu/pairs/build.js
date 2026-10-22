@@ -35,7 +35,7 @@ export async function buildPairs(device, plan, { buffers: external, step }) {
     const s = sort.index;
     const params = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | CD, label: 'PP' + s });
     owned.push(params);
-    device.queue.writeBuffer(params, 0, new Uint32Array([plan.n, plan.size - 1, plan.size, plan.blocks, plan.capChunks, s, plan.n + plan.capChunks, 0]));
+    device.queue.writeBuffer(params, 0, new Uint32Array([plan.n, plan.size - 1, plan.size, plan.blocks, plan.capChunks, s, plan.n + plan.capChunks, plan.n + 2 * plan.capChunks]));
     return {
       sort, params,
       count: buffer('pairCount' + s), start: buffer('pairStart' + s), body: buffer('pairBody' + s),
@@ -75,7 +75,7 @@ export async function buildPairs(device, plan, { buffers: external, step }) {
     const b = sorts[stage.sort];
     return {
       stage, sort: b,
-      EVAL: bind(stage.kernels.EVAL, [b.params, stepEntry, b.args, b.start, b.body, b.list, b.snap, partials[stage.index]]
+      EVAL: bind(stage.kernels.EVAL, [b.params, stepEntry, b.args, b.start, b.list, b.snap, partials[stage.index]]
         .concat(stage.sumBuffer ? columnsOf([stage.sumBuffer], 0) : [])),
       GATHER: bind(stage.kernels.GATHER, [b.params, b.args, b.body, partials[stage.index]].concat(columnsOf(stage.gatherColumns, 0))),
     };

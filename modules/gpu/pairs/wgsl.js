@@ -5,8 +5,9 @@
 //              hashed table of 2n or more buckets (the CPU's hash), a slot by u32 atomics
 //   SCAN_*     exclusive scan of the bucket counts (blocks of 1,024, their sums, the offsets back)
 //   PLACE      per body: into its bucket at its slot (run-dependent order); counts the candidates
-//              in the distinct buckets of its 3^D cells and claims ceil(count / 256) chunks of
-//              work; a body of a bucket of more than 1,024 claims chunks to rank itself
+//              in the distinct buckets of its 3^D cells (two cells may share a bucket: a mask
+//              marks the repeats) and adds ceil(count / 256) chunks to the step's work; a body of
+//              a bucket of more than 1,024 claims chunks to rank itself
 //   ARGS       one thread: the total work against the cap. Over it: no work at all this step,
 //              and the status word for the runner (it halts at the next readback with the stage
 //              and the count). Else the indirect dispatch sizes, as 2D grids
@@ -14,8 +15,9 @@
 //              lower index, added up with atomics (integers, so the order does not matter)
 //   ORDER      per bucket slot: the body's rank in its bucket, by index (counted directly up to
 //              1,024 bodies), so each bucket lists its bodies the same way in every run; writes
-//              the body's snapshot there (position, columns the formulas read, index) and hands
-//              out its chunks in bucket order, so threads next to each other read the same cells
+//              the body's snapshot there (position, columns the formulas read, index) and its home
+//              record (first chunk, cell, mask), and hands out its chunks in bucket order, so
+//              threads next to each other read the same cells
 //   EVAL       per chunk: up to 256 candidates, filtered by r < radius, the formula with the
 //              CPU's roles; one partial (push and accumulators) per chunk
 //   GATHER     per body: its chunks added up in order, into the plan's output columns
@@ -45,7 +47,7 @@ export const ARGS = {
 };
 const OVER = 1, CROWDED = 2;
 // Words per body in pairBody: bucket, slot, rank, candidates, first chunk, chunks, first rank
-// chunk, then the cell
+// chunk, then the cell and the mask of neighbour cells whose bucket an earlier one already has
 export const BODY = { BUCKET: 0, SLOT: 1, RANK: 2, CAND: 3, FIRST: 4, COUNT: 5, RANK_FIRST: 6, CELL: 7 };
 
 const AX = 'xyzw';
@@ -63,15 +65,17 @@ function u32(value) {
 const LINEAR = '@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u';
 const linearId = wg => `gid.x + gid.y * nwg.x * ${u32(wg)}`;
 
-const PARAMS = `struct PairParams { n: u32, mask: u32, size: u32, blocks: u32, cap: u32, sort: u32, owners: u32, pad: u32 };
+const PARAMS = `struct PairParams { n: u32, mask: u32, size: u32, blocks: u32, cap: u32, sort: u32, owners: u32, home: u32 };
 @group(0) @binding(0) var<uniform> PP: PairParams;`;
 
 /**
- * Words per body record and per snapshot entry for `D` and the snapshot's columns ([{width}]).
+ * Words per body record, per home record (first chunk, cell, mask) and per snapshot entry for `D`
+ * and the snapshot's columns ([{width}]).
  */
 export function pairLayout(D, columns) {
   const words = D + columns.reduce((total, c) => total + c.width, 0) + 1;
-  return { body: BODY.CELL + D, snap4: Math.ceil(words / 4), index: words - 1 };
+  const maskWords = Math.ceil(3 ** D / 32);
+  return { body: BODY.CELL + D + maskWords, home: 1 + D + maskWords, maskWords, snap4: Math.ceil(words / 4), index: words - 1 };
 }
 
 // The bucket of a cell: the CPU's hash (lib/createNeighborGrid.js), masked by the table's size
@@ -83,18 +87,50 @@ function hashFn(D) {
 }`;
 }
 
-// Code that walks the distinct buckets of the 3^D cells around cell (c0, c1, ...): `body` runs
-// for each, with `pb` its bucket. Two neighbour cells may share a bucket; it is visited once.
+// The neighbour cell o of cell (c0, c1, ...): offset (o / 3^k) % 3 - 1 on axis k
+function neighbourHash(D, o) {
+  return `pair_hash(${each(D, k => `c${k} + i32((${o} / ${u32(3 ** k)}) % 3u) - 1`, ', ')})`;
+}
+
+// Code that counts the candidates in the distinct buckets of the 3^D cells around (c0, c1, ...)
+// into `candidates`, and sets bit o of mask<o / 32> when cell o's bucket repeats an earlier one.
+// Unrolled up to 3D, so the buckets stay in registers
+function countNeighbours(D, indent) {
+  const cells = 3 ** D, words = Math.ceil(cells / 32);
+  const lines = ['var candidates = 0u;'];
+  for (let w = 0; w < words; w++) lines.push(`var mask${w} = 0u;`);
+  if (D <= 3) {
+    for (let o = 0; o < cells; o++) {
+      lines.push(`let pb${o} = ${neighbourHash(D, u32(o))};`);
+      const repeats = [];
+      for (let q = 0; q < o; q++) repeats.push(`pb${o} == pb${q}`);
+      const add = `candidates += pairStart[pb${o} + 1u] - pairStart[pb${o}];`;
+      lines.push(o ? `if (${repeats.join(' || ')}) { mask${o >> 5} |= ${u32(2 ** (o & 31))}; } else { ${add} }` : add);
+    }
+  } else {
+    lines.push(
+      `var seen: array<u32, ${cells}>;`,
+      `for (var o = 0u; o < ${u32(cells)}; o++) {`,
+      `  let pb = ${neighbourHash(D, 'o')};`,
+      '  var repeat = false;',
+      '  for (var q = 0u; q < o; q++) { repeat = repeat || seen[q] == pb; }',
+      '  seen[o] = pb;',
+      `  if (repeat) { ${each(words, w => `if ((o >> 5u) == ${u32(w)}) { mask${w} |= 1u << (o & 31u); }`)} continue; }`,
+      '  candidates += pairStart[pb + 1u] - pairStart[pb];',
+      '}');
+  }
+  return lines.map(line => indent + line).join('\n');
+}
+
+// Code that walks the distinct buckets of the 3^D cells around (c0, c1, ...), skipping those the
+// mask marks: `body` runs for each, with `pb` its bucket
 function forNeighbourBuckets(D, body, indent) {
-  const cells = 3 ** D;
+  const cells = 3 ** D, words = Math.ceil(cells / 32);
+  const word = words === 1 ? 'mask0' : `select(select(mask0, mask1, o >= 32u), mask2, o >= 64u)`;
   const lines = [
-    `var seen: array<u32, ${cells}>;`,
     `for (var o = 0u; o < ${u32(cells)}; o++) {`,
-    `  let pb = pair_hash(${each(D, k => `c${k} + i32((o / ${u32(3 ** k)}) % 3u) - 1`, ', ')});`,
-    '  var dup = false;',
-    '  for (var q = 0u; q < o; q++) { dup = dup || seen[q] == pb; }',
-    '  seen[o] = pb;',
-    '  if (dup) { continue; }',
+    `  if (((${word} >> (o & 31u)) & 1u) != 0u) { continue; }`,
+    `  let pb = ${neighbourHash(D, 'o')};`,
   ].concat(body.map(line => '  ' + line), ['}']);
   return lines.map(line => indent + line).join('\n');
 }
@@ -216,6 +252,7 @@ fn main(${LINEAR}) {
 `,
   };
 
+  // The step's work adds up per workgroup first: one global atomic per 256 bodies
   out.PLACE = {
     bindings: ['uniform', 'read', 'storage', 'storage', 'storage'],
     code: `${PARAMS}
@@ -223,34 +260,40 @@ fn main(${LINEAR}) {
 @group(0) @binding(2) var<storage, read_write> pairBody: array<u32>;
 @group(0) @binding(3) var<storage, read_write> pairList: array<u32>;
 @group(0) @binding(4) var<storage, read_write> pairArgs: array<atomic<u32>>;
+var<workgroup> work: atomic<u32>;
 ${hash}
 @compute @workgroup_size(${WG})
-fn main(${LINEAR}) {
+fn main(${LINEAR}, @builtin(local_invocation_index) li: u32) {
   let i = ${linearId(WG)};
-  if (i >= PP.n) { return; }
-  let record = i * ${u32(B)};
-  let h = pairBody[record + ${u32(BODY.BUCKET)}];
-  let s = pairStart[h];
-  let k = pairStart[h + 1u] - s;
-  pairList[s + pairBody[record + ${u32(BODY.SLOT)}]] = i;
-  ${cellsOf(D, 'record')}
-  var candidates = 0u;
-${forNeighbourBuckets(D, ['candidates += pairStart[pb + 1u] - pairStart[pb];'], '  ')}
-  pairBody[record + ${u32(BODY.CAND)}] = candidates;
-  // the body's own bucket is among them, so every body has a chunk
-  let chunks = (candidates + ${u32(CHUNK - 1)}) / ${u32(CHUNK)};
-  let before = atomicAdd(&pairArgs[${ARGS.EVAL_TOTAL}], chunks);
-  // the thread that passes the cap says so (a total past 2^32 has passed it before)
-  if (before <= PP.cap && before + chunks > PP.cap) { atomicOr(&pairArgs[${ARGS.FLAGS}], ${u32(OVER)}); }
-  if (k > ${u32(RANK_DIRECT)}) {
-    atomicOr(&pairArgs[${ARGS.FLAGS}], ${u32(CROWDED)});
-    let ranks = (k + ${u32(CHUNK - 1)}) / ${u32(CHUNK)};
-    let first = atomicAdd(&pairArgs[${ARGS.RANK_TOTAL}], ranks);
-    pairBody[record + ${u32(BODY.RANK_FIRST)}] = first;
-    // rank work is at most the pair work, so the cap covers both; past it nothing is written
-    if (first + ranks <= PP.cap) {
-      for (var c = 0u; c < ranks; c++) { pairList[PP.n + first + c] = i; }
+  if (i < PP.n) {
+    let record = i * ${u32(B)};
+    let h = pairBody[record + ${u32(BODY.BUCKET)}];
+    let s = pairStart[h];
+    let k = pairStart[h + 1u] - s;
+    pairList[s + pairBody[record + ${u32(BODY.SLOT)}]] = i;
+    ${cellsOf(D, 'record')}
+${countNeighbours(D, '    ')}
+    pairBody[record + ${u32(BODY.CAND)}] = candidates;
+    ${each(layout.maskWords, w => `pairBody[record + ${u32(BODY.CELL + D + w)}] = mask${w};`)}
+    // the body's own bucket is among them, so every body has a chunk
+    atomicAdd(&work, (candidates + ${u32(CHUNK - 1)}) / ${u32(CHUNK)});
+    if (k > ${u32(RANK_DIRECT)}) {
+      atomicOr(&pairArgs[${ARGS.FLAGS}], ${u32(CROWDED)});
+      let ranks = (k + ${u32(CHUNK - 1)}) / ${u32(CHUNK)};
+      let first = atomicAdd(&pairArgs[${ARGS.RANK_TOTAL}], ranks);
+      pairBody[record + ${u32(BODY.RANK_FIRST)}] = first;
+      // rank work is at most the pair work, so the cap covers both; past it nothing is written
+      if (first + ranks <= PP.cap) {
+        for (var c = 0u; c < ranks; c++) { pairList[PP.n + first + c] = i; }
+      }
     }
+  }
+  workgroupBarrier();
+  if (li == 0u) {
+    let chunks = atomicLoad(&work);
+    let before = atomicAdd(&pairArgs[${ARGS.EVAL_TOTAL}], chunks);
+    // the workgroup that passes the cap says so (a total past 2^32 has passed it before)
+    if (before <= PP.cap && before + chunks > PP.cap) { atomicOr(&pairArgs[${ARGS.FLAGS}], ${u32(OVER)}); }
   }
 }
 `,
@@ -347,28 +390,43 @@ fn main(${LINEAR}) {
 @group(0) @binding(5) var<storage, read_write> pairSnap: array<vec4u>;
 @group(0) @binding(6) var<storage, read> X: array<f32>;
 ${columnBuffers.map((name, k) => `@group(0) @binding(${7 + k}) var<storage, read> ${name}: array<f32>;`).join('\n')}
+var<workgroup> claimed: atomic<u32>;
+var<workgroup> base: u32;
 @compute @workgroup_size(${WG})
-fn main(${LINEAR}) {
+fn main(${LINEAR}, @builtin(local_invocation_index) li: u32) {
   let q = ${linearId(WG)};
-  if (q >= PP.n) { return; }
-  if (atomicLoad(&pairArgs[${ARGS.OK}]) == 0u) { return; }
-  let i = pairList[q];
-  let record = i * ${u32(B)};
-  let h = pairBody[record + ${u32(BODY.BUCKET)}];
-  let s = pairStart[h];
-  let e = pairStart[h + 1u];
-  var rank = pairBody[record + ${u32(BODY.RANK)}];
-  if (e - s <= ${u32(RANK_DIRECT)}) {
-    rank = 0u;
-    for (var t = s; t < e; t++) { rank += select(0u, 1u, pairList[t] < i); }
+  let live = q < PP.n && atomicLoad(&pairArgs[${ARGS.OK}]) != 0u;
+  var i = 0u; var p = 0u; var chunks = 0u; var mine = 0u;
+  if (live) {
+    i = pairList[q];
+    let record = i * ${u32(B)};
+    let h = pairBody[record + ${u32(BODY.BUCKET)}];
+    let s = pairStart[h];
+    let e = pairStart[h + 1u];
+    var rank = pairBody[record + ${u32(BODY.RANK)}];
+    if (e - s <= ${u32(RANK_DIRECT)}) {
+      rank = 0u;
+      for (var t = s; t < e; t++) { rank += select(0u, 1u, pairList[t] < i); }
+    }
+    p = s + rank;
+    ${each(layout.snap4, w => `pairSnap[p * ${u32(layout.snap4)} + ${u32(w)}] = vec4u(${words.slice(4 * w, 4 * w + 4).join(', ')});`, '\n    ')}
+    chunks = (pairBody[record + ${u32(BODY.CAND)}] + ${u32(CHUNK - 1)}) / ${u32(CHUNK)};
+    mine = atomicAdd(&claimed, chunks);
   }
-  let p = s + rank;
-  ${each(layout.snap4, w => `pairSnap[p * ${u32(layout.snap4)} + ${u32(w)}] = vec4u(${words.slice(4 * w, 4 * w + 4).join(', ')});`, '\n  ')}
-  let chunks = (pairBody[record + ${u32(BODY.CAND)}] + ${u32(CHUNK - 1)}) / ${u32(CHUNK)};
-  let first = atomicAdd(&pairArgs[${ARGS.ALLOC}], chunks);
-  pairBody[record + ${u32(BODY.FIRST)}] = first;
-  pairBody[record + ${u32(BODY.COUNT)}] = chunks;
-  for (var c = 0u; c < chunks; c++) { pairList[PP.owners + first + c] = p; }
+  // chunks are handed out per workgroup, in bucket order
+  workgroupBarrier();
+  if (li == 0u) { base = atomicAdd(&pairArgs[${ARGS.ALLOC}], atomicLoad(&claimed)); }
+  workgroupBarrier();
+  if (live) {
+    let first = base + mine;
+    let record = i * ${u32(B)};
+    pairBody[record + ${u32(BODY.FIRST)}] = first;
+    pairBody[record + ${u32(BODY.COUNT)}] = chunks;
+    let home = PP.home + p * ${u32(layout.home)};
+    pairList[home] = first;
+    ${each(D + layout.maskWords, w => `pairList[home + ${u32(1 + w)}] = pairBody[record + ${u32(BODY.CELL + w)}];`)}
+    for (var c = 0u; c < chunks; c++) { pairList[PP.owners + first + c] = p; }
+  }
 }
 `,
   };
@@ -410,18 +468,17 @@ export function stageKernels(spec) {
   const load = (who, base) => each(layout.snap4, w => `let ${who}${w} = pairSnap[${base} * ${u32(layout.snap4)} + ${u32(w)}];`, ' ');
 
   const EVAL = {
-    bindings: ['uniform', 'dynamic', 'read', 'read', 'read', 'read', 'read', 'storage'].concat(sumsRead ? ['read'] : []),
+    bindings: ['uniform', 'dynamic', 'read', 'read', 'read', 'read', 'storage'].concat(sumsRead ? ['read'] : []),
     indirect: ARGS.EVAL_X,
     partialWords,
     code: `${PARAMS}
 ${slot.decl(1)}
 @group(0) @binding(2) var<storage, read> pairArgs: array<u32>;
 @group(0) @binding(3) var<storage, read> pairStart: array<u32>;
-@group(0) @binding(4) var<storage, read> pairBody: array<u32>;
-@group(0) @binding(5) var<storage, read> pairList: array<u32>;
-@group(0) @binding(6) var<storage, read> pairSnap: array<vec4u>;
-@group(0) @binding(7) var<storage, read_write> pairPartial: array<f32>;
-${sumsRead ? `@group(0) @binding(8) var<storage, read> ${spec.sums.buffer}: array<f32>;` : ''}
+@group(0) @binding(4) var<storage, read> pairList: array<u32>;
+@group(0) @binding(5) var<storage, read> pairSnap: array<vec4u>;
+@group(0) @binding(6) var<storage, read_write> pairPartial: array<f32>;
+${sumsRead ? `@group(0) @binding(7) var<storage, read> ${spec.sums.buffer}: array<f32>;` : ''}
 ${hashFn(D)}
 @compute @workgroup_size(${EVAL_WG})
 fn main(${LINEAR}) {
@@ -430,14 +487,15 @@ fn main(${LINEAR}) {
   let p = pairList[PP.owners + t];
   ${load('me', 'p')}
   let me = me${layout.index >> 2}.${AX[layout.index & 3]};
-  let record = me * ${u32(B)};
-  ${cellsOf(D, 'record')}
+  let home = PP.home + p * ${u32(layout.home)};
+  ${each(D, k => `let c${k} = bitcast<i32>(pairList[home + ${u32(1 + k)}]);`)}
+  ${each(layout.maskWords, w => `let mask${w} = pairList[home + ${u32(1 + D + w)}];`)}
   let radius = ${slot.at(spec.radius)};
   // most candidates are farther than the radius: the squared test spares them the root, with a
   // margin that drops only pairs the exact test drops
   let reach2 = radius * radius * 1.0001;
   ${totals.map(name => `var ${name} = 0.0;`).join(' ')}
-  var skip = (t - pairBody[record + ${u32(BODY.FIRST)}]) * ${u32(CHUNK)};
+  var skip = (t - pairList[home]) * ${u32(CHUNK)};
   var left = ${u32(CHUNK)};
 ${forNeighbourBuckets(D, [
     'let s = pairStart[pb];',

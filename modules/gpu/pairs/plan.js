@@ -89,7 +89,7 @@ export function planPairs({ D, n, limits, stages, columns, sums = {}, sumBuffer 
     Math.floor(cap / CHUNK),
     n * Math.ceil(n / CHUNK),
     Math.floor(largest / (4 * partialWords)),
-    Math.floor((largest / 4 - n) / 2),
+    Math.floor((largest / 4 - n * (1 + 4 + 3)) / 2),
   ));
 
   const maxGroups = limits.maxComputeWorkgroupsPerDimension;
@@ -113,7 +113,8 @@ export function planPairs({ D, n, limits, stages, columns, sums = {}, sumBuffer 
     buffers['pairCount' + s] = sizeOf(size * 4);
     buffers['pairStart' + s] = sizeOf((size + 1 + size / 1024) * 4);
     buffers['pairBody' + s] = sizeOf(n * sort.layout.body * 4);
-    buffers['pairList' + s] = sizeOf((n + 2 * capChunks) * 4);
+    // [bodies by atomic slot | rank chunk owners | chunk owners | home records by bucket slot]
+    buffers['pairList' + s] = sizeOf((n + 2 * capChunks + n * sort.layout.home) * 4);
     buffers['pairArgs' + s] = sizeOf(ARGS.WORDS * 4);
     buffers['pairSnap' + s] = sizeOf(n * sort.layout.snap4 * 16);
   }

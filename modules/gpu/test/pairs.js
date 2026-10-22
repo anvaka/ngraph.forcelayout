@@ -111,7 +111,7 @@ test('kernels fit 8 storage buffers when formulas read columns from S and H', ()
       assert.ok(storage <= 8, `${D}D ${name}: ${storage}`);
     }
     assert.equal(p.dispatches, 10, '8 for the sort and work list, chunks and gather');
-    assert.match(p.kernels.PAIR_EVAL_0, new RegExp(`array<u32, ${3 ** D}>`), '3^D neighbour cells');
+    assert.match(p.kernels.PAIR_EVAL_0, new RegExp(`o < ${3 ** D}u`), '3^D neighbour cells');
   }
 });
 
