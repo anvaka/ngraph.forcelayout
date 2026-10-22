@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import addGridField from '../../gridfield/index.js';
-import { planGrid, checkGrid, gridSlotValues, gridIsDynamic, gridStatus } from '../grid/plan.js';
+import { planGrid, checkGrid, gridSlotValues, gridIsDynamic, gridStatus, gridNumberProblem, gridRelaxedMs } from '../grid/plan.js';
 import { gridChunkWords, CROWD } from '../grid/wgsl.js';
 import { SPEC_LIMITS } from '../check.js';
 
@@ -124,5 +124,46 @@ test('gridChunk holds the chunks of the most crowding', () => {
     const chunks = 2 * cells + (rest > CROWD ? Math.ceil(rest / CROWD) : 0);
     assert.ok(4 + 2 * chunks <= gridChunkWords(n), `${n} bodies`);
     assert.ok(4 + 2 * Math.ceil(n / CROWD) <= gridChunkWords(n), `${n} bodies in one cell`);
+  }
+});
+
+test('a device whose compiler sees through the barriers refuses what needs exact arithmetic', () => {
+  const reason = 'this GPU\'s compiler sees through the grid\'s exact arithmetic: its two-sums or grid coordinates are not exact';
+  const sums = Object.assign({}, SPEC_LIMITS, { gridArithmetic: { sums: false, residual: true, reason } });
+  const residual = Object.assign({}, SPEC_LIMITS, { gridArithmetic: { sums: true, residual: false, reason: 'the residual is not exact' } });
+  const exact = Object.assign({}, SPEC_LIMITS, { gridArithmetic: { sums: true, residual: true, reason: null } });
+  const runs = (options, limits, D = 2) => checkGrid(gridStage(D, options).stage, D, 1000, limits);
+  // a box loses its cell's and corner's low words: only narrow ones keep within tolerance
+  assert.match(runs({ anchor: 'box', cell: 1 }, sums).reason, /sees through the grid's exact arithmetic: its two-sums .* a 2D box grid wider than 16 cells per axis is off by more than half the tolerance, and this one may reach 1024\. Set maxCells to 16, use the 'lattice' anchor, or run on the CPU/);
+  assert.equal(runs({ anchor: 'box', cell: 1, maxCells: 16 }, sums).runs, true);
+  assert.match(runs({ anchor: 'box', cell: 1, maxCells: 64 }, sums, 3).reason, /a 3D box grid wider than 8 cells/);
+  assert.equal(runs({ anchor: 'lattice', cell: 1 }, sums).runs, true, 'a lattice takes its cell from the host');
+  // smoothing that needs the refinement step: refused when it may, by the description's numbers
+  for (const limits of [sums, residual]) {
+    assert.match(runs({ anchor: 'lattice', cell: 2, smooth: { diffuse: 64 } }, limits).reason, /smoothing with diffuse \/ cell\^2 of 2 or more is off by more than half the tolerance, and this grid's is 16\. Run it on the CPU/);
+    assert.match(runs({ anchor: 'lattice', cell: 'h', params: { h: () => 2 }, smooth: { diffuse: 1 } }, limits).reason, /and this grid's comes from expressions, known only as it runs/);
+    assert.equal(runs({ anchor: 'lattice', cell: 2, smooth: { diffuse: 4 } }, limits).runs, true, 'gamma 1 needs no refinement');
+  }
+  assert.equal(runs({ anchor: 'box', cell: 2, smooth: { diffuse: 64 } }, exact).runs, true);
+  assert.equal(runs({ anchor: 'box', cell: 2, smooth: { diffuse: 64 } }, SPEC_LIMITS).runs, true, 'no device checked: no refusal');
+});
+
+test('grid numbers of a step that do not fit f32 are named', () => {
+  assert.equal(gridNumberProblem({ cell: 2, margin: 0, diffuse: 4, value: 1 }), null);
+  assert.equal(gridNumberProblem({ cell: 2, margin: 0, diffuse: 0, value: null }), null);
+  assert.deepEqual(gridNumberProblem({ cell: 2, margin: 0, diffuse: 1e40, value: 1 }), { name: 'smoothing\'s diffuse', value: 1e40 });
+  assert.deepEqual(gridNumberProblem({ cell: 2, margin: 0, diffuse: 0, value: -1e40 }), { name: 'deposit value', value: -1e40 });
+  assert.deepEqual(gridNumberProblem({ cell: NaN, margin: 0, diffuse: 0, value: 1 }), { name: 'grid cell', value: NaN });
+});
+
+test('a relaxed step\'s cost on an M4 Max is below every measured one', () => {
+  // GPU ms measured (gridlower.md, cost table): [D, anchor, smoothed, n, grid points, ms]
+  const measured = [[2, 'lattice', false, 1e5, 321 * 321, 0.067], [2, 'lattice', false, 1e6, 1003 * 1003, 0.374], [3, 'lattice', false, 1e6, 103 ** 3, 0.727],
+    [2, 'box', true, 1e5, 659 * 659, 0.245], [2, 'box', true, 1e6, 1026 * 1026, 0.610], [3, 'box', true, 1e5, 119 ** 3, 0.451], [3, 'box', true, 1e6, 130 ** 3, 0.901]];
+  for (const [D, anchor, smooth, n, points, ms] of measured) {
+    const options = { anchor, cell: 1 };
+    if (smooth) options.smooth = { diffuse: 4 };
+    const p = plan(D, gridStage(D, options).stage, n);
+    assert.ok(gridRelaxedMs(p, points) <= ms, `${D}D ${anchor} ${n}: ${gridRelaxedMs(p, points)} > ${ms}`);
   }
 });
