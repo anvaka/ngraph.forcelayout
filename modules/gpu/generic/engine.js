@@ -395,6 +395,11 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     pairs: !!pairs,
     // slices each pair sort's last encoded step ran in (0: one submit), for tests
     pairSlices: () => (pairs ? pairs.slices() : []),
+    // the runner's measured GPU ms a step: the pairs take the device's rate from it, for their cap
+    // and the pair work of a submit
+    observeTiming(msPerStep) {
+      if (pairs) pairs.observeTime(msPerStep);
+    },
 
     destroy() {
       owned.forEach(b => b.destroy());

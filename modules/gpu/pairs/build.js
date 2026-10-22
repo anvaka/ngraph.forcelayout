@@ -23,6 +23,14 @@ import { WG, ARGS, CHUNK, MAX_SLICES } from './wgsl.js';
 // A step runs sliced when its expected work times this passes the cap: the work may grow between
 // the measurement and the step (a readback comes once per call)
 const MARGIN = 1.5;
+// Chunks a millisecond at the slowest rate measured on an M4 Max (43 billion pair tests a second,
+// full chunks: v1-5 on a piled-up 100k layout). The device's rate is taken from the runner's
+// timings (observeTime()), never above this, so slower GPUs get a smaller cap and smaller submits
+const RATE_MAX = 43e6 / 256;
+// A capped slice of one stage should take at most this many ms, and the pair work of one submit
+// at most SUBMIT_MS: far from the GPU watchdog (2 s on macOS)
+const CAPPED_MS = 25;
+const SUBMIT_MS = 100;
 // Bytes between two entries of the slices' uniform (the dynamic offset alignment)
 const SLICE_STRIDE = 256;
 
@@ -108,6 +116,7 @@ export async function buildPairs(device, plan, { buffers: external, step, positi
     b.known = null;
     b.lastRadius = 0;
     b.lastSlices = 0;
+    b.lastStages = 0;
   });
   const stages = plan.stages.map(stage => {
     const b = sorts[stage.sort];
@@ -121,7 +130,18 @@ export async function buildPairs(device, plan, { buffers: external, step, positi
       GATHER_S: bind(stage.kernels.GATHER_S, [b.params, b.args, b.body, partials[stage.index]].concat(columnsOf(stage.gatherColumns, 0), [slice])),
     };
   });
-  let cap = plan.capChunks;
+  // the cap in chunks: the plan's (it sized the buffers), lowered by setCap() and by a slow rate
+  let cap = plan.capChunks, capLimit = plan.capChunks;
+  // chunks a millisecond this device runs, as measured (see observeTime())
+  let rate = RATE_MAX;
+  // pair work (expected chunks) encoded into the current submit, and its pass
+  let submitPass = null, submitChunks = 0;
+  function updateCap() {
+    const next = Math.max(1, Math.min(capLimit, Math.floor(rate * CAPPED_MS)));
+    if (next === cap) return;
+    cap = next;
+    sorts.forEach(b => device.queue.writeBuffer(b.params, 16, new Uint32Array([cap])));
+  }
 
   const limit = device.limits.maxComputeWorkgroupsPerDimension;
   // Workgroups for `threads`, as a 2D grid past the per-dimension limit (kernels read the linear id)
@@ -147,9 +167,9 @@ export async function buildPairs(device, plan, { buffers: external, step, positi
   const on = (stage, values) => stage.gate === undefined || values[stage.gate] !== 0;
   const sliceAt = s => SLICE_STRIDE * (s + 1);
 
-  // Slices a step of sort `b` needs at `radius`: 0 when its expected work fits one submit. The
-  // work grows about as radius^D (more bodies per cell)
-  function slicesFor(b, radius) {
+  // The chunks a step of sort `b` is expected to need at `radius`: the device's last measurement,
+  // or at first the host's count; the work grows about as radius^D (more bodies per cell)
+  function expectedChunks(b, radius) {
     if (!b.known && positions) {
       const work = estimateWork(positions, plan.n, plan.D, radius, plan.size);
       b.known = { chunks: Math.max(work.chunks, work.ranks) * estimateScale, radius };
@@ -157,6 +177,11 @@ export async function buildPairs(device, plan, { buffers: external, step, positi
     if (!b.known) return 0;
     let chunks = b.known.chunks;
     if (radius > b.known.radius) chunks *= (radius / b.known.radius) ** plan.D;
+    return chunks;
+  }
+
+  // Slices a step of sort `b` needs: 0 when its expected work fits one submit
+  function slicesFor(chunks) {
     const need = chunks * MARGIN;
     return need <= cap ? 0 : Math.min(MAX_SLICES, Math.ceil(need / cap));
   }
@@ -213,13 +238,27 @@ export async function buildPairs(device, plan, { buffers: external, step, positi
         const active = stages.filter(s => s.sort === b && on(s.stage, values) && (!names || names.indexOf(s.stage.name) >= 0));
         const radius = values[b.sort.radius];
         if (!active.length || !(radius > 0)) continue;
-        const count = split ? slicesFor(b, radius) : 0;
+        const expected = split ? expectedChunks(b, radius) : 0;
+        const count = split ? slicesFor(expected) : 0;
         b.lastRadius = radius;
         b.lastSlices = count;
+        b.lastStages = active.length;
         if (count) {
           pass = encodeSliced(pass, b, active, count, split, offsets, parity);
+          submitPass = pass;
+          submitChunks = 0;
           continue;
         }
+        // steps that each fit go many to a submit; once the pair work in this one would pass
+        // SUBMIT_MS at the device's rate, the next goes in a new submit
+        if (pass !== submitPass) { submitPass = pass; submitChunks = 0; }
+        const work = expected * active.length;
+        if (split && submitChunks > 0 && submitChunks + work > rate * SUBMIT_MS) {
+          pass = split();
+          submitPass = pass;
+          submitChunks = 0;
+        }
+        submitChunks += work;
         const k = b.sort.kernels, g = b.groups;
         dispatch(pass, k.BIN, g.BIN[parity], bodies, offsets);
         dispatch(pass, k.SCAN_BLOCKS, g.SCAN_BLOCKS, [plan.blocks, 1]);
@@ -247,6 +286,26 @@ export async function buildPairs(device, plan, { buffers: external, step, positi
       });
     },
     /**
+     * The runner's measured GPU ms a step (a timed readback's average): with the pair work of the
+     * last measured step, the device's rate. The whole step counts as pair work, so the rate can
+     * only come out low (the safe side); it never passes RATE_MAX. The cap follows, so that a
+     * capped slice takes at most CAPPED_MS.
+     */
+    observeTime(msPerStep) {
+      let chunks = 0;
+      sorts.forEach(b => { if (b.known && b.lastRadius > 0) chunks += b.known.chunks / estimateScale * (b.lastStages || 1); });
+      if (!(chunks > 0 && msPerStep > 0)) return;
+      rate = Math.min(RATE_MAX, chunks / msPerStep);
+      updateCap();
+    },
+    /**
+     * GPU ms a capped slice of one stage takes at the measured rate (at most CAPPED_MS, unless
+     * setCap() asked for more than the rate allows).
+     */
+    cappedMs() {
+      return cap / rate;
+    },
+    /**
      * Slices each sort's last encoded step ran in (0: one submit).
      */
     slices() {
@@ -257,8 +316,8 @@ export async function buildPairs(device, plan, { buffers: external, step, positi
      * for); it cannot rise above the plan's, which sized the buffers.
      */
     setCap(tests) {
-      cap = Math.max(1, Math.min(plan.capChunks, Math.floor(tests / CHUNK)));
-      sorts.forEach(b => device.queue.writeBuffer(b.params, 16, new Uint32Array([cap])));
+      capLimit = Math.max(1, Math.min(plan.capChunks, Math.floor(tests / CHUNK)));
+      updateCap();
     },
     /**
      * The runner's message for status words read back from `status.buffer`, or null.
