@@ -187,16 +187,20 @@ export function statusMessage(plan, words) {
   if (!words || words[0] === 0) return null;
   const code = words[0];
   const sort = plan.sorts[words[1]];
-  const names = sort ? sort.stages.map(entry => entry.stage.name).join(', ') : 'a pair stage';
+  const names = sort ? sort.stages.map(entry => entry.stage.name) : ['a pair stage'];
   const cap = words[3] * CHUNK;
-  const needs = words[2] === 0xffffffff ? `more than ${count(cap)}` : `about ${count(words[2] * CHUNK)}`;
-  const what = code === 2 || code === 4 ? 'tests to order its crowded cells' : 'pair tests';
-  // codes 3 and 4: a sliced step that needed more slices than the last measurement predicted
+  // codes 2 and 4: rank work (ordering crowded cells) is what tripped, and the pair work after it
+  // is larger still; codes 3 and 4: a sliced step needed more slices than its last measurement
+  const rank = code === 2 || code === 4;
+  const needs = words[2] === 0xffffffff ? `more than ${count(cap)}` : `${rank ? 'at least' : 'about'} ${count(words[2] * CHUNK)}`;
+  const what = rank ? 'pair tests (counting only the work of ordering its crowded cells)' : 'pair tests';
+  const who = names.length > 1 ? `the pair formulas ${names.join(', ')} needed ${needs} ${what} each` : `the pair formula ${names[0]} needed ${needs} ${what}`;
   const limit = code >= 3
-    ? `more than the ${count(cap)} planned for it from the last measurement (in slices that each stay far from the GPU watchdog)`
-    : `more than the ${count(cap)} the GPU runs in one submit, so that it stays far from the GPU watchdog`;
-  return `the pair formula ${names} needed ${needs} ${what} in one step, ${limit}. Bodies crowd into a few cells, or the ` +
-    "radius is large for the layout: start the stage later (when: 'step > 40') or lower its radius";
+    ? `more than the ${count(cap)} planned for it from the last measurement, in slices that each keep a submit short`
+    : `the GPU runs at most ${count(cap)} in one submit, to keep submits short (the GPU watchdog stops long ones)`;
+  return `${who} in one step; ${limit}. Bodies crowd into a few cells, or the radius is large for the layout. A ` +
+    'layout that starts with its bodies piled up clears in 20 to 40 steps at 100k bodies: start the stage later ' +
+    "(when: 'step > 40') or lower its radius";
 }
 
 // The node kernel's part of a stage: at the stage's place, `x += v` columns start from their value

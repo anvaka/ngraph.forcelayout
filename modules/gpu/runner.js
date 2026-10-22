@@ -583,6 +583,7 @@ function createRunner(layout, backend) {
   }
 
   function addSample(ms, steps) {
+    if (engine && engine.observeTiming) engine.observeTiming(ms / steps);
     samples.push({ ms, steps });
     if (samples.length > STATS_WINDOW) samples.shift();
   }
