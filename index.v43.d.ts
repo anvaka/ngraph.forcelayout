@@ -326,13 +326,17 @@ declare module "ngraph.forcelayout" {
     listeners: Record<string, number>;
   }
 
-  /** What stageValues() gives: a stage's numbers for one step */
+  /** What stageValues() gives: a stage's numbers for one step, a new object every call */
   export interface StageValues {
     [value: string]: any;
     params?: Record<string, number>;
     radius?: number;
     when: boolean;
-    /** Repulsion passes: the compiled law, its `values` set for that step */
+    /** Built in values the stage reads (step, unit, gravity, ...), as formulas see them */
+    builtIns?: Record<string, number>;
+    /** Repulsion passes: the law's numbers for that step (parameters, `$h<n>`, `$range`) */
+    lawValues?: Record<string, number>;
+    /** Repulsion passes: the compiled law, for generating code. Its `values` change with the next call. */
     law?: RepulsionLaw;
   }
 
@@ -675,6 +679,11 @@ declare module "ngraph.forcelayout" {
      * What a stage reads in the step of `context` (the current step without one).
      */
     stageValues(name: string, context?: StepContext): StageValues;
+
+    /**
+     * The version program() would report, without building it.
+     */
+    programVersion(): number;
 
     /**
      * The step context of the current step, or of `step`.
