@@ -31,7 +31,7 @@ test('at theta 0 the walk is the exact sum of every charge', function (t) {
     function (r) { return (r < 6 * L ? 1 - fade(r) : 1) / (r * r); },
     function (r) { return 1 / (r * r); }
   ];
-  [2, 3].forEach(function (dimension) {
+  [2, 3, 4].forEach(function (dimension) {
     ['own', 'shared'].forEach(function (centroid) {
       var store = randomStore(dimension, 300, 3);
       // Charge 0 is missing on a few bodies, so some cells have none of it
@@ -45,6 +45,30 @@ test('at theta 0 the walk is the exact sum of every charge', function (t) {
       t.ok(relativeDifference(store.force, expected) < 1e-12, dimension + 'D, ' + centroid + ' centres: ' + relativeDifference(store.force, expected));
     });
   });
+  t.end();
+});
+
+test('charges with one law object evaluate it once', function (t) {
+  var law = createRepulsionLaw({ force: 'exp(-r / L) / r^2', params: { L: 20 }, range: '3 * L' });
+  law.update(fakeSimulator(2));
+  var exact = function (r) { return r <= 60 ? Math.exp(-r / 20) / (r * r) : 0; };
+  ['own', 'shared'].forEach(function (centroid) {
+    // At theta 0.8 every range test runs too; the law sits on charges 0 and 2, or 1 and 2
+    [[law, null, law], [null, law, law]].forEach(function (laws) {
+      [0, 0.8].forEach(function (theta) {
+        var store = randomStore(2, 300, 3);
+        var tree = generateQuadTree(2, laws, { centroid: centroid })({ gravity: -1, theta: theta }, Random.random(1), laws);
+        tree.insertBodies(store, store.charges, store.sensitivities);
+        for (var i = 0; i < store.n; ++i) tree.updateBodyForce(i);
+        var inverseSquare = function (r) { return 1 / (r * r); };
+        var expected = exactForces(store, laws.map(function (l) { return l ? exact : inverseSquare; }), -1);
+        var error = relativeDifference(store.force, expected);
+        t.ok(error < (theta ? 0.05 : 1e-12), centroid + ' centres, law on ' + (laws[0] ? '0 and 2' : '1 and 2') + ', theta ' + theta + ': ' + error);
+      });
+    });
+  });
+  var code = generateQuadTree.generateQuadTreeFunctionBody(2, [null, law, law], { centroid: 'shared' });
+  t.equal(code.split('Math.exp').length - 1, 2, 'one exp for a body, one for a cell');
   t.end();
 });
 
