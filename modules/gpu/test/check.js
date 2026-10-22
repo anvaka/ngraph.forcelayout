@@ -186,6 +186,29 @@ test('adaptive step, per-link springs, the shape of the step, settings', () => {
   assert.deepEqual(reasons({ simulator: other }), ['the setting gravity: the number 1e+300 does not fit a 32-bit float']);
 });
 
+test('hub gathers carry the force a link formula adds at its ends; groups up to one dispatch', () => {
+  // a star: one body with 1,999 links, so gathers above N* go through chunks
+  const graph = createGraph();
+  for (let i = 1; i < 2000; i++) graph.addLink(0, i);
+  const sim = createLayout(graph).simulator;
+  sim.addLinkFormula('lean', { formula: 'force_i += 0.5 * axis(1) * mass_j; force_j -= 0.25 * axis(0)' });
+  const plan = planOf({ simulator: sim });
+  assert.ok(plan.chunked);
+  const section = plan.sections.find(s => s.stage && s.stage.name === 'lean');
+  assert.deepEqual(section.chunks.parts.map(part => part.column), ['force']);
+  assert.ok(/fn main/.test(plan.kernels()[plan.kernelList.find(k => k.kind === 'chunks' && k.section === section).name]));
+
+  const many = layoutOf(20).simulator;
+  const group = many.store.define('group', Int32Array, 1, 0);
+  group[3] = 16777000;
+  many.addSum('perGroup', { formula: '1', group: 'group' });
+  // (with buffers large enough for that many groups)
+  const large = { maxStorageBufferBindingSize: 2 ** 31, maxBufferSize: 2 ** 31 };
+  assert.deepEqual(reasons({ simulator: many }, large), ['perGroup: WebGPU sums up to 16,776,960 groups (one thread each); the largest group id is 16,777,000']);
+  group[3] = 16776959;
+  assert.deepEqual(reasons({ simulator: many }, large), []);
+});
+
 test("the guard stage runs; 'step' listeners are a warning", () => {
   const layout = layoutOf(20);
   layout.simulator.addStage(GUARD, () => {}, { before: 'clear', describe: { shape: 'guard', how: 'guards' } });

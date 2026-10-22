@@ -374,7 +374,12 @@ bodies (`pos` is read only; `integrate` and host steps move them).
   takes its `reduce: 'min'` or `'max'`. With `group: 'column'` it keeps one result per group id;
   formulas read that as `name[group]`. Place sums before the formulas that read them.
 * `addRepulsion(name, { law, charge, sensitivity })` adds another tree pass with its own law and
-  columns, e.g. a short push between leaves only.
+  columns, e.g. a short push between leaves only. Passes next to each other and to `repulsion`
+  walk one quad tree with a charge each (under `nbody: 'dualtree'` too), so a pass costs a fraction
+  of a walk of its own. Each charge acts from its own centre in a tree cell, so it should not be
+  negative; with `centroid: 'shared'` it acts from the centre of the walk's first charge, which is
+  faster and lets it be signed. A pass that is gated with `when`, or kept apart by another stage,
+  walks alone. `program()` lists each tree stage's walk in `args.walk`.
 
 All of them take `before`, `after` or `replace` as stages do, and `when`; `removeStage(name)`
 removes them (a replaced stage comes back).

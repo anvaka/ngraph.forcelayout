@@ -139,7 +139,7 @@ function createRunner(layout, backend) {
     get lastMove() { return lastMove; },
     get halted() { return halted; },
     // For the test harness: the buffers the last kernel of every step writes
-    _debug: { get fence() { return engine ? engine.fence : []; } },
+    _debug: { get fence() { return engine ? engine.fence : []; }, get engine() { return engine; } },
   };
 
   return { start, api };

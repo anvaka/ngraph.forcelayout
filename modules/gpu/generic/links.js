@@ -14,6 +14,8 @@ import { LINK_CHUNK } from './plan.js';
 
 // Bodies per tile of the all-pairs loop of a pair formula, whose totals are added up per tile
 const PAIR_TILE = 256;
+// Chunks of a row added up per block before the blocks are (a power of 2)
+const CHUNK_BLOCK = 16;
 
 /**
  * The stock springs, or a link formula that pulls or adds into body columns: lines of a node
@@ -27,14 +29,20 @@ export function gatherCode(plan, section, printer) {
   zero.forEach(column => locals(plan, column).forEach(name => out.push(`${name} = 0.0;`)));
   out.push('if (live) {');
   if (section.chunks) {
+    // the row's chunks add up in blocks of CHUNK_BLOCK, then the blocks, then the total joins the
+    // locals: a hub's hundreds of partials added one by one into a large running force drift
+    // (rounding of small terms of one sign onto a large number)
     const { offset, width, parts } = section.chunks;
+    const names = [];
+    parts.forEach(part => locals(plan, part.column).forEach(name => names.push(name)));
     out.push(`  let cb = L[${L_HEADER}];`);
-    out.push('  for (var c = L[cb + 1u + row]; c < L[cb + 2u + row]; c++) {');
-    let at = 0;
-    parts.forEach(part => {
-      locals(plan, part.column).forEach(name => { out.push(`    ${name} += S[${u32(offset)} + c * ${u32(width)} + ${u32(at)}];`); at++; });
-    });
+    out.push('  let cFirst = L[cb + 1u + row];');
+    out.push('  ' + names.map((name, at) => `var ct${at} = 0.0; var cs${at} = 0.0;`).join(' '));
+    out.push('  for (var c = cFirst; c < L[cb + 2u + row]; c++) {');
+    out.push('    ' + names.map((name, at) => `cs${at} += S[${u32(offset)} + c * ${u32(width)} + ${u32(at)}];`).join(' '));
+    out.push(`    if (((c - cFirst) & ${u32(CHUNK_BLOCK - 1)}) == ${u32(CHUNK_BLOCK - 1)}) { ${names.map((name, at) => `ct${at} += cs${at}; cs${at} = 0.0;`).join(' ')} }`);
     out.push('  }');
+    out.push('  ' + names.map((name, at) => `${name} += ct${at} + cs${at};`).join(' '));
   } else {
     out.push('  for (var e = L[row]; e < L[row + 1u]; e++) {');
     entryBody(plan, section, printer).forEach(line => out.push('    ' + line));
@@ -105,8 +113,11 @@ function entryBody(plan, section, printer) {
   body.push(axes.map(k => `var dm${k} = X[j * ${u32(D)} + ${u32(k)}] - ${pos[k]};`).join(' '));
   body.push(`var lr = sqrt(${axes.map(k => `dm${k} * dm${k}`).join(' + ')});`);
   // ends on one spot: a link that pulls goes along a small direction both ends agree on (the CPU
-  // draws a random one); one that does not sees r = 0, as on the CPU
-  if (pulls) body.push(`if (lr == 0.0) { ${axes.map(k => `dm${k} = nudge(row, j, ${u32(k)});`).join(' ')} lr = sqrt(${axes.map(k => `dm${k} * dm${k}`).join(' + ')}); }`);
+  // draws a random one); one that does not sees r = 0, as on the CPU. A link from a body to itself
+  // sits twice in its row: the role gives the two entries opposite directions, so their pulls
+  // cancel as on the CPU (the stock springs, which do not read the role, drop its pull)
+  const sign = needsLink ? 'select(1.0, select(-1.0, 1.0, isFrom), j == row) * ' : '';
+  if (pulls) body.push(`if (lr == 0.0) { ${axes.map(k => `dm${k} = ${sign}nudge(row, j, ${u32(k)});`).join(' ')} lr = sqrt(${axes.map(k => `dm${k} * dm${k}`).join(' + ')}); }`);
   body.push(...linkValues(plan, stage, stock, 's', 'e'));
   if (stock) {
     body.push('let lpull = lk_coefficient * (lr - lk_length);');
@@ -127,7 +138,7 @@ function entryBody(plan, section, printer) {
   }
   // from: force_i += k d; to: force_j -= k d; with d = to - from, both are k times dm
   if (pulls) {
-    body.push('let kp = lpull / lr;');
+    body.push(needsLink ? 'let kp = lpull / lr;' : 'let kp = select(lpull / lr, 0.0, j == row);');
     body.push(axes.map(k => `${force[k]} += kp * dm${k};`).join(' '));
   }
   return body;

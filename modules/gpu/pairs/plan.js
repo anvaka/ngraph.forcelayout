@@ -98,7 +98,7 @@ export function planPairs({ D, n, limits, stages, columns, sums = {}, sumBuffer 
     Math.floor(cap / CHUNK),
     n * Math.ceil(n / CHUNK),
     Math.floor(largest / (4 * partialWords)),
-    Math.floor((largest / 4 - n * (1 + 1 + 4 + 3)) / 2),
+    Math.floor((largest / 4 - n * (1 + 1 + 1 + 4 + 3)) / 2),
   ));
 
   const maxGroups = limits.maxComputeWorkgroupsPerDimension;
@@ -122,8 +122,9 @@ export function planPairs({ D, n, limits, stages, columns, sums = {}, sumBuffer 
     buffers['pairCount' + s] = sizeOf(size * 4);
     buffers['pairStart' + s] = sizeOf((size + 2 + size / 1024) * 4);
     buffers['pairBody' + s] = sizeOf(n * sort.layout.body * 4);
-    // [bodies by atomic slot | rank chunk owners | chunk owners | home records by bucket slot]
-    buffers['pairList' + s] = sizeOf((n + 2 * capChunks + n * sort.layout.home) * 4);
+    // [bodies by atomic slot | rank chunk owners | chunk owners | home records by bucket slot |
+    // each body's bucket slot (sliced steps)]
+    buffers['pairList' + s] = sizeOf((n + 2 * capChunks + n * sort.layout.home + n) * 4);
     buffers['pairArgs' + s] = sizeOf(ARGS.WORDS * 4);
     buffers['pairSnap' + s] = sizeOf(n * sort.layout.snap4 * 16);
   }
@@ -146,11 +147,14 @@ export function planPairs({ D, n, limits, stages, columns, sums = {}, sumBuffer 
     const names = [entry.stage.name];
     add(`PAIR_EVAL_${k}`, out.EVAL, names);
     add(`PAIR_GATHER_${k}`, out.GATHER, names);
+    add(`PAIR_EVAL_S_${k}`, out.EVAL_S, names);
+    add(`PAIR_GATHER_S_${k}`, out.GATHER_S, names);
     buffers['pairPartial' + k] = sizeOf(capChunks * out.partialWords * 4);
     planned.push({
       name: entry.stage.name, index: k, sort: sort.index, gate: entry.gate, radius: sort.radius,
       accumulators: out.accumulators, partialWords: out.partialWords, outputs: entry.outputs,
-      kernels: { EVAL: `PAIR_EVAL_${k}`, GATHER: `PAIR_GATHER_${k}` }, gatherColumns: out.GATHER.columns,
+      kernels: { EVAL: `PAIR_EVAL_${k}`, GATHER: `PAIR_GATHER_${k}`, EVAL_S: `PAIR_EVAL_S_${k}`, GATHER_S: `PAIR_GATHER_S_${k}` },
+      gatherColumns: out.GATHER.columns,
       sumBuffer: entry.stage.sums.length ? sumBuffer : null,
       params: entry.params, builtIns: entry.builtIns,
     });
@@ -168,6 +172,8 @@ export function planPairs({ D, n, limits, stages, columns, sums = {}, sumBuffer 
     sorts, stages: planned, kernels, bindings, kernelStages, buffers,
     reads: Array.from(reads),
     // per sort: bin, 2 scans, place, rank args, rank, order, args; per stage: chunks and gather
+    // (a sliced step adds per slice: rank owners, rank, chunk owners, and per stage chunks and
+    // gather, each slice in a submit of its own)
     dispatches: 8 * sorts.length + 2 * stages.length,
     section: name => section(planned.find(s => s.name === name), D, slot),
   };
@@ -179,15 +185,18 @@ export function planPairs({ D, n, limits, stages, columns, sums = {}, sumBuffer 
  */
 export function statusMessage(plan, words) {
   if (!words || words[0] === 0) return null;
+  const code = words[0];
   const sort = plan.sorts[words[1]];
   const names = sort ? sort.stages.map(entry => entry.stage.name).join(', ') : 'a pair stage';
   const cap = words[3] * CHUNK;
   const needs = words[2] === 0xffffffff ? `more than ${count(cap)}` : `about ${count(words[2] * CHUNK)}`;
-  const what = words[0] === 2 ? 'tests to order its crowded cells' : 'pair tests';
-  return `the pair formula ${names} needed ${needs} ${what} in one step; the GPU stops at ${count(cap)}, so that ` +
-    'a step stays far from the GPU watchdog. Bodies crowd into a few cells, or the radius is large for the layout. ' +
-    'A layout that starts with its bodies piled up clears in 20 to 40 steps at 100k bodies: start the stage later ' +
-    "(when: 'step > 40') or lower its radius";
+  const what = code === 2 || code === 4 ? 'tests to order its crowded cells' : 'pair tests';
+  // codes 3 and 4: a sliced step that needed more slices than the last measurement predicted
+  const limit = code >= 3
+    ? `more than the ${count(cap)} planned for it from the last measurement (in slices that each stay far from the GPU watchdog)`
+    : `more than the ${count(cap)} the GPU runs in one submit, so that it stays far from the GPU watchdog`;
+  return `the pair formula ${names} needed ${needs} ${what} in one step, ${limit}. Bodies crowd into a few cells, or the ` +
+    "radius is large for the layout: start the stage later (when: 'step > 40') or lower its radius";
 }
 
 // The node kernel's part of a stage: at the stage's place, `x += v` columns start from their value

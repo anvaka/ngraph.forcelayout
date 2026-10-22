@@ -86,9 +86,14 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   if (integerProblem) throw new Error(`the column ${integerProblem} holds integers above 2^24, which 32-bit floats cannot hold exactly`);
   plan.tables.forEach(table => hData.set(table.values, table.offset));
   const results = simulator.sums();
+  // the sums' last results: a gated sum is read with them until it runs again
   Object.values(plan.sums).forEach(sum => {
     const result = results[sum.name];
-    if (result && result.value) for (let k = 0; k < sum.width; k++) sData[sum.offset + k] = result.value[k];
+    if (!result) return;
+    if (sum.grouped) {
+      const count = Math.min(sum.count, result.count || 0) * sum.width;
+      for (let k = 0; k < count; k++) sData[sum.offset + k] = result.groups[k];
+    } else if (result.value) for (let k = 0; k < sum.width; k++) sData[sum.offset + k] = result.value[k];
   });
   sData.set(fireState || [0.1, 0, 0, 0], plan.S.fire);
   device.queue.writeBuffer(S, 0, sData);
@@ -123,7 +128,8 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   let pairs = null;
   if (plan.pairs) {
     try {
-      pairs = await buildPairs(device, plan.pairs, { buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes } });
+      // the store's positions let it count the first step's work on the host (slices, see run())
+      pairs = await buildPairs(device, plan.pairs, { buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes }, positions: store.pos });
     } catch (e) {
       owned.forEach(b => b.destroy());
       if (tree) tree.destroy();
@@ -131,7 +137,12 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     }
   }
   const statuses = [];
-  if (pairs) statuses.push({ buffer: pairs.status.buffer, offset: 0, size: pairs.status.bytes, message: words => pairs.statusMessage(words), stages: plan.pairs.stages.map(s => s.name) });
+  if (pairs) {
+    statuses.push({
+      buffer: pairs.status.buffer, offset: 0, size: pairs.status.bytes, message: words => pairs.statusMessage(words),
+      observe: words => pairs.observe(words), stages: plan.pairs.stages.map(s => s.name),
+    });
+  }
   if (tree && tree.status) {
     statuses.push(Object.assign({ message: pyramidStatus, stages: plan.pyramid.channels.map(c => c.stage) }, tree.status));
   }
@@ -245,7 +256,8 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     segments: segments.length,
 
     // The status words of the structures that have them, for every readback: copyStatus() puts
-    // them at `offset` of a readback, statusMessage() says why to halt, or null
+    // them at `offset` of a readback, statusMessage() says why to halt, or null; it also shows the
+    // structures what the device measured (the pair work that plans the next steps' slices)
     statusBytes,
     copyStatus,
     statusMessage,
@@ -274,7 +286,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
       for (let done = 0; done < ran;) {
         const c = Math.min(perSubmit, ran - done, filled.perStep ? ringSlots : Infinity);
         if (filled.perStep) device.queue.writeBuffer(ring, 0, filled.data, done * floats, c * floats);
-        const enc = device.createCommandEncoder();
+        let enc = device.createCommandEncoder();
         const first = done === 0, last = done + c === ran;
         let tw;
         if (timestampWrites && (first || last)) {
@@ -282,7 +294,18 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
           if (first) tw.beginningOfPassWriteIndex = 0;
           if (last) tw.endOfPassWriteIndex = 1;
         }
-        const cp = enc.beginComputePass(tw ? { timestampWrites: tw } : undefined);
+        let cp = enc.beginComputePass(tw ? { timestampWrites: tw } : undefined);
+        // A pair step past its work cap runs in slices, each in a submit of its own: split() ends
+        // the pass, submits, and starts the next; the last pass of the call still writes the end
+        // timestamp
+        const end = tw && tw.endOfPassWriteIndex !== undefined ? { timestampWrites: { querySet: tw.querySet, endOfPassWriteIndex: 1 } } : undefined;
+        const split = () => {
+          cp.end();
+          device.queue.submit([enc.finish()]);
+          enc = device.createCommandEncoder();
+          cp = enc.beginComputePass(end);
+          return cp;
+        };
         for (let s = 0; s < c; s++) {
           const slot = filled.perStep ? s : 0;
           const offset = [slot * plan.slot.bytes];
@@ -296,7 +319,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
             // its kernel, so it is built even on steps where its passes are gated off
             if (kernel.tree) tree.encode(cp, { stepOffset: offset[0], parity });
             // the pair formulas' sort, chunks and gathers, from this step's positions and numbers
-            if (kernel.pairStages) pairs.encode(cp, { stepOffset: offset[0], parity, values, stages: kernel.pairStages });
+            if (kernel.pairStages) cp = pairs.encode(cp, { stepOffset: offset[0], parity, values, stages: kernel.pairStages, split });
             cp.setPipeline(pipeline);
             cp.setBindGroup(0, bind[parity], offset);
             cp.dispatchWorkgroups(g);
@@ -403,6 +426,8 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     // below the watchdog with it rather than with the steps it timed
     cappedMs: (pairs ? plan.pairs.stages.length * PAIR_STAGE_CAPPED_MS : 0) + (tree ? PYRAMID_CAPPED_MS : 0) +
       [...grids.keys()].reduce((total, kernel) => total + gridCappedMs(kernel.section.grid), 0),
+    // slices each pair sort's last encoded step ran in (0: one submit), for tests
+    pairSlices: () => (pairs ? pairs.slices() : []),
 
     destroy() {
       owned.forEach(b => b.destroy());
@@ -420,6 +445,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   function statusMessage(words) {
     let at = 0;
     for (const status of statuses) {
+      if (status.observe) status.observe(words.subarray(at, at + status.size / 4));
       const message = status.message(words.subarray(at, at + status.size / 4));
       if (message) return { message, stages: status.stages };
       at += status.size / 4;

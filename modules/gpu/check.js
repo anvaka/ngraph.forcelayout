@@ -383,6 +383,10 @@ function budgets(plan, limits, reasons, printer) {
   });
   const most = limits.maxComputeWorkgroupsPerDimension * THREADS;
   if (plan.nodes > most) reasons.push(`WebGPU runs up to ${most.toLocaleString('en-US')} bodies (one thread each); this layout has ${plan.nodes.toLocaleString('en-US')}`);
+  // GROUP_SUM: a thread per group
+  Object.values(plan.sums || {}).forEach(sum => {
+    if (sum.grouped && sum.count > most) reasons.push(`${sum.name}: WebGPU sums up to ${most.toLocaleString('en-US')} groups (one thread each); the largest group id is ${(sum.count - 1).toLocaleString('en-US')}`);
+  });
 }
 
 // Why lookup tables do not fit 32-bit floats, or null (values beyond f32; tiny ones may become 0,
