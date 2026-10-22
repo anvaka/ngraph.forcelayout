@@ -5,8 +5,9 @@ layout's own simulator, and positions come back into the layout after every batc
 Today it runs, in any number of dimensions, the built in step (springs, repulsion with any law,
 drag, Euler or FIRE, any inertia column), extra repulsion passes with their own charge and
 sensitivity columns, node formulas and sums over bodies, all in the CPU's stage order and with
-`when` gates. Repulsion is exact over all pairs up to 16,384 bodies; the stock step in 2D has a
-grid pyramid beyond that. `plan()` says why it cannot run anything else.
+`when` gates. Repulsion is exact over all pairs up to 1,024 bodies (2,560 in 3D); larger 2D and
+3D layouts use a grid pyramid, and 4D and up runs exact pairs up to 16,384 bodies. `plan()` says
+why it cannot run anything else.
 
 ## Usage
 
@@ -73,6 +74,7 @@ compiles that description; it never reads the library's internals.
 | `generic/emit.js` | The WGSL of a generic plan: node kernels with formulas through the printer, the exact all-pairs tile loop for any law, charge and sensitivity, fixed-order reductions for sums and FIRE. |
 | `generic/values.js` | The per-step slot: settings, every stage's parameters, built in values, gate bits and law numbers, from `simulator.stageValues()` for each queued step. |
 | `generic/engine.js` | A generic plan on a device: buffers from the store, the ring of slots, encoding, readbacks of positions, columns, sums and FIRE's state. |
+| `pyramid/` | The generic grid pyramid (2D and 3D, K charges, any law): its plan and buffers without a device (`plan.js`), the structure kernels and the section a node kernel fuses (`wgsl.js`), the buffers and dispatches on a device (`build.js`). A generic plan uses it above 1,024 bodies in 2D and 2,560 in 3D. |
 | `templates/grid.js`, `templates/stock.js` | Today's grid engine as the stock template, WGSL byte for byte (test/t4.js), and the engine around it: settings and law numbers into its uniforms, uploads, readbacks in the store's order. |
 | `buffers.js`, `rows.js` | Store to device and back: the f64 origin, Hilbert renumbering, readback into the store as f64; rows the host wrote between syncs, found and uploaded row by row (one scatter dispatch for many), kept from readbacks encoded before the upload. |
 | `runner.js` | `runOnGpu`: the guard stage, uploads by column version, batching, readbacks, `sync`, `stop`, events, the listener check, errors and device loss, sync points for graph edits and structure changes. It drives either engine through one interface. |
@@ -92,6 +94,7 @@ node modules/gpu/test/t3.js       # law WGSL against what the library printed (4
 node modules/gpu/test/t4.js       # the stock template against today's kernels (16 laws)
 node modules/gpu/test/print.js    # the printer: numbers agree with JS, literals, names, every builtin
 node modules/gpu/test/check.js    # plan() verdicts and budgets
+node modules/gpu/test/pyramid.js  # the pyramid's plans, refusals and WGSL
 node modules/gpu/test/t8.js <demo root>   # every idea of the demo: how many run, 2D and 3D, both profiles
 ```
 
