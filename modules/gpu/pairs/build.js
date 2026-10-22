@@ -7,7 +7,7 @@
 //   const message = pairs.statusMessage(words);          // non-null: halt the runner with it
 import { getPipeline } from '../device.js';
 import { statusMessage } from './plan.js';
-import { WG, ARGS } from './wgsl.js';
+import { WG, ARGS, CHUNK } from './wgsl.js';
 
 /**
  * Buffers, pipelines and bind groups for `plan` (planPairs()). `buffers` are the caller's, by the
@@ -128,6 +128,14 @@ export async function buildPairs(device, plan, { buffers: external, step }) {
           dispatch(pass, s.stage.kernels.GATHER, s.GATHER, bodies);
         }
       }
+    },
+    /**
+     * Lowers the cap on a step's pair tests (a device slower than the one the default was sized
+     * for); it cannot rise above the plan's, which sized the buffers.
+     */
+    setCap(tests) {
+      const chunks = Math.max(1, Math.min(plan.capChunks, Math.floor(tests / CHUNK)));
+      sorts.forEach(b => device.queue.writeBuffer(b.params, 16, new Uint32Array([chunks])));
     },
     /**
      * The runner's message for status words read back from `status.buffer`, or null.

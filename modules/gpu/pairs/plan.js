@@ -18,9 +18,14 @@ import { pairAccumulators, pairReads } from './formula.js';
 import { sortKernels, stageKernels, pairLayout, ARGS, CHUNK } from './wgsl.js';
 
 // Pair tests a step may make: past it the step runs no pair work and the runner halts, naming the
-// stage and the count. About 25 ms of chunk work on an M4 Max, so a first submit of 64 steps at
-// the cap stays under the 2-second watchdog (see pairs.md)
+// stage and the count. An M4 Max makes 43 to 260 billion tests a second (the fewer pass the
+// radius, the faster), so the cap is at most 6 ms a step there, and a first submit of 64 steps
+// at the cap 0.4 s, far from the 2-second watchdog. It is also 2.7e8 pair tests: the CPU's own
+// step would take seconds
 export const PAIR_WORK_CAP = 1 << 28;
+// Above N*, in 5 dimensions and more, pair formulas run as exact pairs up to this many bodies
+// (the scheduler's all-pairs loop, with pairCandidate())
+export const MAX_PAIRS = 16384;
 
 /**
  * The totals a pair stage's gather writes per body: [{name, width}], `force` first. The caller
@@ -38,7 +43,11 @@ export function pairOutputs(stage, D, columns) {
  */
 export function planPairs({ D, n, limits, stages, columns, sums = {}, sumBuffer = 'S', slot, pos, origin, cap = PAIR_WORK_CAP, warn }) {
   const refuse = reason => ({ refusal: reason, kernels: {}, bindings: {}, buffers: {}, sorts: [], stages: [] });
-  if (D >= 5) return refuse('pair formulas in 5D and more need a tree search');
+  if (D >= 5) {
+    if (n <= MAX_PAIRS) return refuse(`the cell sort runs in 2 to 4 dimensions; ${D}D pair formulas run in the all-pairs loop`);
+    return refuse(`pair formulas in ${D}D run as exact pairs up to ${MAX_PAIRS.toLocaleString('en-US')} bodies; this layout has ` +
+      `${n.toLocaleString('en-US')} (more needs a tree search)`);
+  }
   const printer = createPrinter(warn);
 
   // Sorts: one per radius; radii that are the same number share one

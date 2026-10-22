@@ -129,7 +129,8 @@ test('stages with the same number as radius share a sort; others get their own',
 
 test('refusals: 5D and more, memory', () => {
   const sim5 = simulatorWith(5, symmetric);
-  assert.equal(plan(sim5, ['crowd']).refusal, 'pair formulas in 5D and more need a tree search');
+  assert.equal(plan(sim5, ['crowd'], { n: 20000 }).refusal, 'pair formulas in 5D run as exact pairs up to 16,384 bodies; this layout has 20,000 (more needs a tree search)');
+  assert.match(plan(sim5, ['crowd']).refusal, /5D pair formulas run in the all-pairs loop/);
   const sim = simulatorWith(2, symmetric);
   const small = plan(sim, ['crowd'], { limits: Object.assign({}, SPEC_LIMITS, { maxStorageBufferBindingSize: 4096 }) });
   assert.match(small.refusal, /the pair formulas at 2,000 bodies need .* this device allows 0\.0 MiB per buffer/);
