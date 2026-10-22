@@ -28,5 +28,6 @@ export async function createWebGPUBackend(options = {}) {
   watchDevice(device);
   const limits = {};
   for (const name of LIMIT_NAMES) limits[name] = device.limits[name];
-  return Object.assign(createCapabilities(limits), { device });
+  // `generic: true` runs the stock step with the generic engine too (tests compare the two)
+  return Object.assign(createCapabilities(limits, { generic: !!options.generic }), { device });
 }

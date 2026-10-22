@@ -9,8 +9,9 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { gpuCapabilities } from '../index.js';
 
-// Ideas that run, by dimension, when this module was last changed (M0b: the stock step only)
-const EXPECTED = { 2: 5, 3: 0 };
+// Ideas that run, by dimension, when this module was last changed (M1: node formulas, sums, extra
+// passes, any D), on a demo with the ideas track's rewrites (v2-2 guards with 1e30)
+const EXPECTED = { 2: 7, 3: 17 };
 const PROFILES = {
   'default (8)': {},
   'wide (10)': { maxStorageBuffersPerShaderStage: 10, maxComputeInvocationsPerWorkgroup: 1024, maxComputeWorkgroupSizeX: 1024, maxComputeWorkgroupStorageSize: 32768 },
