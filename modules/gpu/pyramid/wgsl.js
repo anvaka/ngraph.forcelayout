@@ -80,6 +80,8 @@ export function pyramidLayout(D, channels, tableWords = 0) {
     if (c === 0 || channel.own) { C.push(w); w += D; } else C.push(C[0]);
   });
   const CSW = w;
+  // bodies per cell: in the record's padding when it has some, else in treeMeta
+  const CNT = CSW % 4 ? CSW : -1;
   // local expansion: the cell's middle, then per channel the field and the Jacobian
   const F = [], J = [];
   w = D;
@@ -90,7 +92,7 @@ export function pyramidLayout(D, channels, tableWords = 0) {
   return {
     D, K, JN, pairs,
     SPW: D + K, SP4: Math.ceil((D + K) / 4),
-    S, C, CSW, CS4: Math.ceil(CSW / 4),
+    S, C, CSW, CS4: Math.ceil(CSW / 4), CNT,
     F, J, LSW, LS4: Math.ceil(LSW / 4),
     TAB4: Math.ceil(tableWords / 4),
     box: boxLayout(D),
@@ -536,12 +538,13 @@ fn main(${LINEAR}) {
   // mean of the bodies where its charges sum to 0)
   const own = [];
   spec.channels.forEach((ch, c) => { if (c === 0 || ch.own) own.push(c); });
-  const recordWords = (S, C) => {
+  const recordWords = (S, C, count) => {
     const words = [];
     for (let c = 0; c < K; c++) {
       words[L.S[c]] = S(c);
       if (own.indexOf(c) >= 0) for (let k = 0; k < D; k++) words[L.C[c] + k] = C(c, k);
     }
+    if (L.CNT >= 0) words[L.CNT] = `f32(${count})`;
     return words;
   };
   const AGG0 = paramsStruct(spec.lawWords) + /* wgsl */`
@@ -568,17 +571,16 @@ fn main(${LINEAR}) {
   let mean = select(0.0, 1.0 / f32(cnt), cnt > 0u);
   ${own.map(q => `let i${q} = select(0.0, 1.0 / m${q}, m${q} != 0.0);`).join(' ')}
   ${each(D, k => `let c0_${k} = select(u${k} * mean, s0_${k} * i0, m0 != 0.0);`)}
-  ${storeVec4s('treeCells', `${L.TAB4}u + c * ${L.CS4}u`, recordWords(q => `m${q}`, (q, k) => (q === 0 ? `c0_${k}` : `s${q}_${k} * i${q}`)))}
-  treeMeta[TP.metaCount + c] = cnt;
+  ${storeVec4s('treeCells', `${L.TAB4}u + c * ${L.CS4}u`, recordWords(q => `m${q}`, (q, k) => (q === 0 ? `c0_${k}` : `s${q}_${k} * i${q}`), 'cnt'))}${L.CNT < 0 ? `
+  treeMeta[TP.metaCount + c] = cnt;` : ''}
 }`;
 
   // One level up: 2^D children, contiguous in Morton order
-  const PYR = paramsStruct(spec.lawWords) + /* wgsl */`
-struct Level { count: u32, childOff: u32, parentOff: u32, pad: u32 };
-${tp}
-@group(0) @binding(1) var<uniform> lv: Level;
-@group(0) @binding(2) var<storage, read_write> treeMeta: array<u32>;
-@group(0) @binding(3) var<storage, read_write> treeCells: array<vec4f>;
+  const PYR = /* wgsl */`
+struct Level { count: u32, childOff: u32, parentOff: u32, metaCount: u32 };
+@group(0) @binding(0) var<uniform> lv: Level;
+@group(0) @binding(1) var<storage, read_write> treeCells: array<vec4f>;${L.CNT < 0 ? `
+@group(0) @binding(2) var<storage, read_write> treeMeta: array<u32>;` : ''}
 @compute @workgroup_size(${WG})
 fn main(${LINEAR}) {
   let q = ${LINEAR_ID};
@@ -589,10 +591,12 @@ fn main(${LINEAR}) {
   var cnt = 0u;
   for (var ch = 0u; ch < ${1 << D}u; ch++) {
     let child = lv.childOff + ${1 << D}u * q + ch;
-    let n = treeMeta[TP.metaCount + child];
+    ${L.CNT < 0 ? `let n = treeMeta[lv.metaCount + child];
     if (n == 0u) { continue; }
+    ${loadVec4s('a', 'treeCells', `${L.TAB4}u + child * ${L.CS4}u`, L.CS4)}` : `${loadVec4s('a', 'treeCells', `${L.TAB4}u + child * ${L.CS4}u`, L.CS4)}
+    let n = u32(${word('a', L.CNT)});
+    if (n == 0u) { continue; }`}
     cnt += n;
-    ${loadVec4s('a', 'treeCells', `${L.TAB4}u + child * ${L.CS4}u`, L.CS4)}
     ${each(K, c => `m${c} += ${word('a', L.S[c])};`)}
     ${own.map(c => each(D, k => `s${c}_${k} += ${word('a', L.S[c])} * ${word('a', L.C[c] + k)};`)).join(' ')}
     ${each(D, k => `u${k} += f32(n) * ${word('a', L.C[0] + k)};`)}
@@ -600,8 +604,8 @@ fn main(${LINEAR}) {
   let mean = select(0.0, 1.0 / f32(cnt), cnt > 0u);
   ${own.map(c => `let i${c} = select(0.0, 1.0 / m${c}, m${c} != 0.0);`).join(' ')}
   ${each(D, k => `let c0_${k} = select(u${k} * mean, s0_${k} * i0, m0 != 0.0);`)}
-  ${storeVec4s('treeCells', `${L.TAB4}u + (lv.parentOff + q) * ${L.CS4}u`, recordWords(c => `m${c}`, (c, k) => (c === 0 ? `c0_${k}` : `s${c}_${k} * i${c}`)))}
-  treeMeta[TP.metaCount + lv.parentOff + q] = cnt;
+  ${storeVec4s('treeCells', `${L.TAB4}u + (lv.parentOff + q) * ${L.CS4}u`, recordWords(c => `m${c}`, (c, k) => (c === 0 ? `c0_${k}` : `s${c}_${k} * i${c}`), 'cnt'))}${L.CNT < 0 ? `
+  treeMeta[lv.metaCount + lv.parentOff + q] = cnt;` : ''}
 }`;
 
   const lawCode = lawFunctions(spec) + tableWordFn(L);
@@ -631,7 +635,8 @@ fn main(${LINEAR}) {
     lines.push(`let r = sqrt(r2);`);
     groups.forEach(({ g, channels }) => {
       const conds = [];
-      if (K > 1) conds.push(`(${nonzero(channels, c => word('a', L.S[c]))})`);
+      // a source whose charges weigh nothing pushes nothing (in 3D most cells are empty)
+      conds.push(`(${nonzero(channels, c => word('a', L.S[c]))})`);
       if (lawGroups[g].law && lawGroups[g].law.hasRange) conds.push(`tree_in_${g}(r2)`);
       const open = conds.length ? `if (${conds.join(' && ')}) {` : '{';
       lines.push(open);
@@ -656,6 +661,8 @@ fn main(${LINEAR}) {
     return lines.join('\n');
   }).join('\n');
 
+  // Bodies in cell `index` (any level)
+  const countAt = index => (L.CNT < 0 ? `treeMeta[TP.metaCount + ${index}]` : `u32(treeCells[${L.TAB4}u + (${index}) * ${L.CS4}u + ${L.CNT >> 2}u].${AX[L.CNT & 3]})`);
   // The interaction list of cell (xl<k>) at level `off` (cells of size w): children of the
   // parent's 3^D neighbours that are not my neighbours, skipping empty parents
   const interactionList = (body, indent) => `
@@ -663,7 +670,7 @@ ${indent}let poff = off + ${each(D, () => 'Gl', ' * ')};
 ${indent}let Gp = Gi / 2;
 ${indent}${each(D, k => `let lo${k} = max((xl${k} >> 1u) - 1, 0); let hi${k} = min((xl${k} >> 1u) + 1, Gp - 1);`)}
 ${boxLoops(D, `
-if (treeMeta[TP.metaCount + poff + mm0] == 0u) { continue; }
+if (${countAt('poff + mm0')} == 0u) { continue; }
 for (var ch = 0u; ch < ${1 << D}u; ch++) {
   ${each(D, k => `let y${k} = 2 * x${k} + i32((ch >> ${k}u) & 1u);`)}
   if (${each(D, k => `abs(y${k} - xl${k}) <= 1`, ' && ')}) { continue; }
@@ -672,12 +679,13 @@ for (var ch = 0u; ch < ${1 << D}u; ch++) {
   ${body}
 }`, indent)}`;
 
-  // the caller's step values (law numbers per step), when they hold them
-  const valueBinding = stepDecl ? '\n' + stepDecl(3) : '';
+  // treeMeta only when it holds the counts; then the caller's step values (law numbers per
+  // step), when they hold them
+  const localMeta = L.CNT < 0 ? '\n@group(0) @binding(2) var<storage, read> treeMeta: array<u32>;' : '';
+  const valueBinding = stepDecl ? '\n' + stepDecl(L.CNT < 0 ? 3 : 2) : '';
   const LOCAL = common + lawCode + /* wgsl */`
 ${tp}
-@group(0) @binding(1) var<storage, read> treeMeta: array<u32>;
-@group(0) @binding(2) var<storage, read_write> treeCells: array<vec4f>;${valueBinding}
+@group(0) @binding(1) var<storage, read_write> treeCells: array<vec4f>;${localMeta}${valueBinding}
 @compute @workgroup_size(${WG})
 fn main(${LINEAR}) {
   let t = ${LINEAR_ID};
@@ -689,12 +697,12 @@ fn main(${LINEAR}) {
     off += count; Gl >>= 1u; l++;
   }
   let c = t - off;
-  if (treeMeta[TP.metaCount + off + c] == 0u) { return; }
+  ${loadVec4s('m', 'treeCells', `${L.TAB4}u + (off + c) * ${L.CS4}u`, L.CS4)}
+  if (${L.CNT < 0 ? 'treeMeta[TP.metaCount + off + c]' : `u32(${word('m', L.CNT)})`} == 0u) { return; }
   let Gi = i32(Gl);
   ${each(D, k => `let xl${k} = i32(compact(c >> ${k}u));`, ' ')}
   // the expansion centre: the cell's centre of channel 0's charge (of its bodies when that is
   // 0), where its bodies are, rather than its middle: half the error or less on hub graphs
-  ${loadVec4s('m', 'treeCells', `${L.TAB4}u + (off + c) * ${L.CS4}u`, L.CS4)}
   ${each(D, k => `let ce${k} = ${word('m', L.C[0] + k)};`)}
   ${each(K, c => each(D, k => `var F${c}_${k} = 0.0;`) + ' ' + L.pairs.map((_, e) => `var J${c}_${e} = 0.0;`).join(' '), '\n  ')}
 ${interactionList(sourceCell(k => `ce${k}`, true), '  ')}

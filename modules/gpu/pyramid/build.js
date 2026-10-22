@@ -15,7 +15,9 @@ const PARAM_WORDS = 12;
 
 /**
  * Buffers, pipelines and bind groups for `plan` (planPyramid()). `buffers` are the caller's, by
- * the names its colRefs use. `step`, when the caller's step values hold the law numbers:
+ * the names its colRefs use; a pair [a, b] is a buffer that alternates between steps (positions
+ * that ping-pong), a at even steps and b at odd ones (encode()'s `parity`). `step`, when the
+ * caller's step values hold the law numbers:
  * {buffer, size, dynamic} (dynamic: bound at an offset per step, see encode()).
  * Resolves once the pipelines are compiled; rejects naming the kernel when one fails, or when the
  * buffers cannot be created.
@@ -28,7 +30,7 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
 
   const jobs = Object.keys(kernels).map(name => {
     const options = { code: kernels[name], label: name };
-    if (name === 'TREE_LOCAL' && step) options.bindings = ['uniform', 'read', 'storage', step.dynamic ? 'dynamic' : 'uniform'];
+    if (name === 'TREE_LOCAL' && step) options.bindings = ['uniform', 'storage'].concat(plan.layout.CNT < 0 ? ['read'] : [], [step.dynamic ? 'dynamic' : 'uniform']);
     return getPipeline(device, options).then(pipeline => [name, pipeline]);
   });
   const pipes = Object.fromEntries(await Promise.all(jobs));
@@ -73,26 +75,29 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     layout: pipeline.getBindGroupLayout(0),
     entries: list.map((resource, binding) => ({ binding, resource: resource.buffer ? resource : { buffer: resource } })),
   });
-  const cols = name => columns[name].map(column => external[column]);
-  const own = [TP];
+  // The caller's buffers of kernel `name` at step parity p
+  const cols = (name, p) => columns[name].map(column => (Array.isArray(external[column]) ? external[column][p] : external[column]));
+  const alternates = name => columns[name].some(column => Array.isArray(external[column]));
+  // A kernel that reads alternating buffers gets a bind group per parity
+  const both = (name, list) => (alternates(name) ? [0, 1].map(p => bind(name, list(p))) : bind(name, list(0)));
   const groups = {
-    TREE_HIST: bind('TREE_HIST', own.concat(cols('TREE_HIST'), [treeBox])),
+    TREE_HIST: both('TREE_HIST', p => [TP].concat(cols('TREE_HIST', p), [treeBox])),
     TREE_BOX: bind('TREE_BOX', [TP, treeBox]),
-    TREE_BIN: bind('TREE_BIN', own.concat(cols('TREE_BIN'), [treeBox, treeCount, treeWork])),
+    TREE_BIN: both('TREE_BIN', p => [TP].concat(cols('TREE_BIN', p), [treeBox, treeCount, treeWork])),
     TREE_SCAN_BLOCKS: bind('TREE_SCAN_BLOCKS', [treeCount, treeMeta, treeBlocks]),
     TREE_SCAN_TOP: bind('TREE_SCAN_TOP', [treeBlocks, nbU]),
     TREE_SCAN_ADD: bind('TREE_SCAN_ADD', [TP, treeMeta, treeBlocks]),
     TREE_PLACE: bind('TREE_PLACE', [TP, treeMeta, treeWork]),
-    TREE_ORDER: bind('TREE_ORDER', own.concat(cols('TREE_ORDER'), [treeWork, treeMeta, treeSp])),
+    TREE_ORDER: both('TREE_ORDER', p => [TP].concat(cols('TREE_ORDER', p), [treeWork, treeMeta, treeSp])),
     TREE_AGG0: bind('TREE_AGG0', [TP, treeSp, treeMeta, treeCells]),
-    TREE_LOCAL: bind('TREE_LOCAL', [TP, treeMeta, treeCells].concat(step ? [{ buffer: step.buffer, size: step.size }] : [])),
+    TREE_LOCAL: bind('TREE_LOCAL', [TP, treeCells].concat(plan.layout.CNT < 0 ? [treeMeta] : [], step ? [{ buffer: step.buffer, size: step.size }] : [])),
   };
   const levels = [];
   for (let l = 0; l < sizes.levels; l++) {
     const count = (sizes.G >> (l + 1)) ** D;
     const u = buf(16, U | CD);
-    device.queue.writeBuffer(u, 0, new Uint32Array([count, sizes.levelOff[l], sizes.levelOff[l + 1], 0]));
-    levels.push({ count, group: bind('TREE_PYR', [TP, u, treeMeta, treeCells]) });
+    device.queue.writeBuffer(u, 0, new Uint32Array([count, sizes.levelOff[l], sizes.levelOff[l + 1], sizes.metaCount]));
+    levels.push({ count, group: bind('TREE_PYR', [u, treeCells].concat(plan.layout.CNT < 0 ? [treeMeta] : [])) });
   }
   const errors = await Promise.all([device.popErrorScope(), device.popErrorScope()]);
   const setupError = errors.find(Boolean);
@@ -111,9 +116,10 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
   }
   const nodes = grid(sizes.n), cells = grid(sizes.nCells), locals = grid(sizes.localCells);
   const histGroups = Math.min(nodes[0] * nodes[1], 128);
+  let parity = 0;
   function dispatch(pass, name, size) {
     pass.setPipeline(pipes[name]);
-    pass.setBindGroup(0, groups[name]);
+    pass.setBindGroup(0, Array.isArray(groups[name]) ? groups[name][parity] : groups[name]);
     pass.dispatchWorkgroups(size[0], size[1]);
   }
 
@@ -134,8 +140,10 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
       device.queue.writeBuffer(TP, 0, params);
     },
     // The structure dispatches of one step. `stepOffset`: the dynamic offset of the caller's
-    // step values for this step.
-    encode(pass, { stepOffset } = {}) {
+    // step values for this step; `parity`: which buffer of an alternating pair holds this step's
+    // positions (0 or 1).
+    encode(pass, { stepOffset, parity: p = 0 } = {}) {
+      parity = p;
       dispatch(pass, 'TREE_HIST', [histGroups, 1]);
       dispatch(pass, 'TREE_BOX', [1, 1]);
       dispatch(pass, 'TREE_BIN', nodes);
