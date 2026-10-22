@@ -10,7 +10,7 @@ import formula from '../../../lib/formula.js';
 import WGSL, { emitLaw, lawPrologue } from '../wgsl/print.js';
 import { THREADS, readsOf, writesOf, slotValue } from './plan.js';
 import { header, BINDINGS, bindingsOf, u32, columnRef, local, locals, settingsLines, scopeOf, NUDGE, AXES } from './common.js';
-import { gatherCode, linkKernel, groupValueCode, groupRunsKernel, groupSumKernel } from './links.js';
+import { gatherCode, chunkKernel, linkKernel, groupValueCode, groupRunsKernel, groupSumKernel } from './links.js';
 
 export { BINDINGS, bindingsOf };
 
@@ -23,6 +23,7 @@ export function kernelCode(plan, printer = WGSL) {
   plan.kernelList.forEach(kernel => {
     if (kernel.kind === 'node') out[kernel.name] = nodeKernel(plan, kernel, printer);
     else if (kernel.kind === 'link') out[kernel.name] = linkKernel(plan, kernel, printer);
+    else if (kernel.kind === 'chunks') out[kernel.name] = chunkKernel(plan, kernel, printer);
     else if (kernel.kind === 'groupRuns') out[kernel.name] = groupRunsKernel(plan, kernel);
     else if (kernel.kind === 'groupSum') out[kernel.name] = groupSumKernel(plan, kernel);
     else if (kernel.kind === 'reduce') out[kernel.name] = reduceKernel(plan, kernel);

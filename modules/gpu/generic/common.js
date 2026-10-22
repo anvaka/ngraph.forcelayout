@@ -36,7 +36,8 @@ export const L_ROLE = 'P.n + 1u + 2u * P.links';
 export const L_FROM_ENTRY = 'P.n + 1u + 4u * P.links';
 export const L_FROM = 'P.n + 1u + 5u * P.links';
 export const L_TO = 'P.n + 1u + 6u * P.links';
-export const L_GROUPS = 'P.n + 1u + 7u * P.links';
+// where the chunks of links start, then where each group column's block starts
+export const L_HEADER = 'P.n + 1u + 7u * P.links';
 
 export function u32(value) {
   return value + 'u';

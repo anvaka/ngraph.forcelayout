@@ -46,7 +46,8 @@ export function schedule(program, laws, limits, options = {}) {
 // Bytes of L: rows, links at both ends, and a block per group column (see generic/plan.js)
 function lBytes(plan) {
   const n = plan.nodes, m = plan.links;
-  let words = n + 1 + 7 * m + plan.groupColumns.length;
+  let words = n + 1 + 7 * m + 1 + plan.groupColumns.length;
+  if (plan.chunked) words += 2 + n + 2 * (Math.ceil(2 * m / 8) + n);
   plan.groupColumns.forEach(column => {
     const count = (Object.values(plan.sums).find(sum => sum.column === column) || {}).count || 0;
     const runs = Math.ceil(n / 256) + count;

@@ -145,13 +145,21 @@ function programFacts(program) {
 }
 
 // What a plan needs to know of the store's numbers: whether any link has its own length or
-// stiffness (the stock template runs only while none has), and how many groups each column that
-// sums are grouped by has (the largest id + 1, as on the CPU)
+// stiffness (the stock template runs only while none has), the most links of one body, and how
+// many groups each column that sums are grouped by has (the largest id + 1, as on the CPU)
 function storeFacts(program, simulator) {
   const springs = simulator.springStore;
   let linksDefault = true;
   for (let i = 0; i < springs.n && linksDefault; i++) {
     if (springs.length[i] >= 0 || springs.coefficient[i] > 0) linksDefault = false;
+  }
+  // the most links one body has: hubs make gathers go through chunks of links
+  const degree = new Uint32Array(simulator.store.n);
+  let maxDegree = 0;
+  for (let s = 0; s < springs.n; s++) {
+    const a = ++degree[springs.from[s]], b = ++degree[springs.to[s]];
+    if (a > maxDegree) maxDegree = a;
+    if (b > maxDegree) maxDegree = b;
   }
   const groups = {};
   program.sums.forEach(sum => {
@@ -164,7 +172,7 @@ function storeFacts(program, simulator) {
     }
     groups[sum.group] = largest + 1;
   });
-  return { linksDefault, groups };
+  return { linksDefault, maxDegree, groups };
 }
 
 // The lowering table: what each kind of stage needs to run here

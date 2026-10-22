@@ -4,7 +4,7 @@
 // and swap between X and Y every step.
 import { getPipeline } from '../device.js';
 import { kernelCode, bindingsOf } from './emit.js';
-import { THREADS, GROUP_RUN } from './plan.js';
+import { THREADS, GROUP_RUN, LINK_CHUNK } from './plan.js';
 import { buildPyramid } from '../pyramid/build.js';
 import { slotFiller } from './values.js';
 import { chooseOrigin, relativePositions as relative, writePositionsBack, rowsMoved } from '../buffers.js';
@@ -47,7 +47,8 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   const groupData = plan.groupColumns.map(name => groupBlock(store[name], n));
   const groupProblem = plan.groupColumns.find((name, k) => groupData[k].count !== countOf(plan, name));
   if (groupProblem) throw new Error(`the groups of ${groupProblem} changed while the plan was made`);
-  const lWords = linkWords(links, groupData, n, springs.n);
+  const chunkData = plan.chunked ? chunkBlock(links, n) : null;
+  const lWords = linkWords(links, chunkData, groupData, n, springs.n);
   const L = buffer(lWords.byteLength, SB | CD, 'L');
   device.queue.writeBuffer(L, 0, lWords);
   const groups = Math.max(1, Math.ceil(n / THREADS));
@@ -125,7 +126,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   // The gates of a kernel whose every part is gated (it is left out on steps where none holds),
   // or null
   function kernelGates(kernel) {
-    if (kernel.kind === 'reduce' || kernel.kind === 'groupRuns' || kernel.kind === 'groupSum') return kernel.gates.every(g => g !== undefined) ? kernel.gates : null;
+    if (kernel.kind === 'reduce' || kernel.kind === 'groupRuns' || kernel.kind === 'groupSum' || kernel.kind === 'chunks') return kernel.gates.every(g => g !== undefined) ? kernel.gates : null;
     if (kernel.kind !== 'node' && kernel.kind !== 'link') return null;
     const gates = [];
     for (const section of kernel.sections) {
@@ -142,6 +143,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     if (kernel.kind === 'reduce' || kernel.kind === 'fireState') return 1;
     if (kernel.kind === 'fireReduce') return Math.min(THREADS, groups);
     if (kernel.kind === 'link') return Math.max(1, Math.ceil(springs.n / THREADS));
+    if (kernel.kind === 'chunks') return Math.max(1, Math.ceil(chunkData.chunks / THREADS));
     const block = kernel.column !== undefined ? groupData[plan.groupColumns.indexOf(kernel.column)] : null;
     if (kernel.kind === 'groupRuns') return Math.max(1, Math.ceil(block.runs / THREADS));
     if (kernel.kind === 'groupSum') return Math.max(1, Math.ceil(block.count / THREADS));
@@ -390,10 +392,11 @@ function linkTable(springs, n) {
   return { starts, other, linkRole, fromEntry, from, to, m };
 }
 
-// L: [starts | other | link and role | entry of each link's from end | from | to | where each group
-// block starts | the blocks]
-function linkWords(links, groupData, n, m) {
-  let size = n + 1 + 7 * m + groupData.length;
+// L: [starts | other | link and role | entry of each link's from end | from | to | where the
+// chunks and each group block start | the chunks | the group blocks]
+function linkWords(links, chunkData, groupData, n, m) {
+  const header = n + 1 + 7 * m;
+  let size = header + 1 + groupData.length + (chunkData ? chunkData.words.length : 0);
   groupData.forEach(block => { size += block.words.length; });
   const out = new Uint32Array(Math.max(4, size));
   out.set(links.starts, 0);
@@ -401,13 +404,38 @@ function linkWords(links, groupData, n, m) {
   out.set(links.linkRole, n + 1 + 2 * m);
   out.set(links.fromEntry, n + 1 + 4 * m);
   for (let s = 0; s < m; s++) { out[n + 1 + 5 * m + s] = links.from[s]; out[n + 1 + 6 * m + s] = links.to[s]; }
-  let at = n + 1 + 7 * m + groupData.length;
+  let at = header + 1 + groupData.length;
+  if (chunkData) {
+    out[header] = at;
+    out.set(chunkData.words, at);
+    at += chunkData.words.length;
+  }
   groupData.forEach((block, k) => {
-    out[n + 1 + 7 * m + k] = at;
+    out[header + 1 + k] = at;
     out.set(block.words, at);
     at += block.words.length;
   });
   return out;
+}
+
+// Chunks of up to LINK_CHUNK entries of one row, the chunks of a row in a row: [chunks, first chunk
+// of each row (n + 1), row of each chunk, first entry of each chunk]
+function chunkBlock(links, n) {
+  const starts = links.starts;
+  let chunks = 0;
+  for (let i = 0; i < n; i++) chunks += Math.ceil((starts[i + 1] - starts[i]) / LINK_CHUNK);
+  const words = new Uint32Array(2 + n + 2 * chunks);
+  words[0] = chunks;
+  let c = 0;
+  for (let i = 0; i < n; i++) {
+    words[1 + i] = c;
+    for (let e = starts[i]; e < starts[i + 1]; e += LINK_CHUNK, c++) {
+      words[2 + n + c] = i;
+      words[2 + n + chunks + c] = e;
+    }
+  }
+  words[1 + n] = c;
+  return { words, chunks };
 }
 
 // A link column into its place in `target` (at column.offset): in CSR order (each link at both of

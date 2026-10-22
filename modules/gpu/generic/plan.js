@@ -14,8 +14,10 @@
 // Links (design section 6.3). Every link sits in the rows of both its bodies (CSR), with its index
 // and the body's role (from or to). A link stage that pulls, or adds into body columns, is a
 // gather in a node kernel: each body evaluates the formula for its links with the true roles and
-// keeps its own end's share. A link stage that only writes link columns runs a thread per link,
-// in a link kernel of its own.
+// keeps its own end's share. Above N*, a hub's thousands of links would keep one thread busy while
+// its workgroup waits: there LINK_CHUNKS goes through chunks of 8 links of a row first, a thread
+// each, and the body's section adds its chunks in order. A link stage that only writes link
+// columns runs a thread per link, in a link kernel of its own.
 //
 // Sums per group (section 6.5): a node section writes each row's value, then GROUP_RUNS adds up
 // runs of up to 256 rows of one group (in an order the host sorts by group) and GROUP_SUM adds
@@ -31,7 +33,8 @@
 //      the host writes, in CSR order (each link at both of its ends)
 //   L  storage read (u32): [first entry of each row (n + 1) | other body of each entry (2m) | link
 //      and role of each entry (2m) | entry of each link at its from end (m) | from (m) | to (m) |
-//      a block per group column (sums per group)]
+//      where the blocks below start (1 + group columns) | the chunks of links | a block per group
+//      column (sums per group)]
 //   X, Y  storage read / read_write: positions at the start of the step and after it; they swap
 //      every step, so other rows' positions are always read from a buffer nothing writes
 // Every column is a block of `cap` rows (`cap * D` numbers for vectors, row by row), at an
@@ -49,6 +52,10 @@ export const SMALL_GRAPH_3D = 2560;
 export const MAX_PAIRS = 16384;
 // Rows of one group that one thread of GROUP_RUNS adds up
 export const GROUP_RUN = 256;
+// Links of a row that one thread of LINK_CHUNKS goes through, above N* (today's SPRINGS does 8)
+export const LINK_CHUNK = 8;
+// A body with more links than this makes gathers go through chunks
+const HUB_DEGREE = 64;
 const AXES = 'xyzw';
 // Floats per slot of the step ring: a multiple of the 256-byte uniform offset alignment
 const SLOT_FLOATS = 64;
@@ -75,6 +82,10 @@ export function genericPlan(program, laws, options = {}) {
   const D = program.dims, n = program.spaces.nodes, m = program.spaces.links;
   const data = options.data || { linksDefault: true, groups: {} };
   const smallGraph = options.smallGraph || (D === 3 ? SMALL_GRAPH_3D : SMALL_GRAPH);
+  // above N*, when a body has many links, gathers go through chunks of links first (on graphs
+  // without hubs going through a row's links in place is faster: 10k 1.07 against 1.12 of
+  // today's step, 100k 1.05 against 1.08; megaStars 1.28 against 3.67)
+  const chunked = n > smallGraph && (data.maxDegree === undefined || data.maxDegree > HUB_DEGREE);
   const stages = physicsStages(program);
   const columnInfo = Object.create(null);
   program.columns.nodes.forEach(column => { columnInfo[column.name] = column; });
@@ -224,6 +235,24 @@ export function genericPlan(program, laws, options = {}) {
   // what the stock springs read: the settings while every link has the defaults
   sections.forEach(section => { if (section.kind === 'springs') section.own = !!(linkColumns.length || linkColumns.coefficient); });
 
+  // chunked gathers: per chunk, the force it adds and what it adds into each column
+  const maxChunks = Math.ceil(2 * m / LINK_CHUNK) + n;
+  sections.forEach(section => {
+    if ((section.kind !== 'springs' && section.kind !== 'gather') || !chunked) return;
+    const parts = [];
+    if (section.kind === 'springs' || section.pulls) parts.push({ column: 'force', width: D });
+    if (section.kind === 'gather') {
+      section.stage.writes.forEach(write => {
+        if (write.space === 'nodes' && write.end && write.column !== 'force' && !parts.some(p => p.column === write.column)) {
+          parts.push({ column: write.column, width: columns[write.column].width });
+        }
+      });
+    }
+    const width = parts.reduce((total, part) => total + part.width, 0);
+    section.chunks = { offset: sSize, width, parts };
+    sSize += maxChunks * width;
+  });
+
   // --- sums: results, per-row values of sums per group, FIRE's state, partial sums -------------
   const groups = Math.max(1, Math.ceil(cap / THREADS));
   const sums = Object.create(null);
@@ -335,6 +364,13 @@ export function genericPlan(program, laws, options = {}) {
       current.sections.forEach(s => writesOf(s).forEach(column => kernelWrites.add(column)));
       if ([...others].some(column => kernelWrites.has(column)) || (section.kind === 'tree' && current.tree)) { close(); open(); }
     }
+    // the chunks of a gather run before its node kernel: they must not read what it writes
+    if (section.chunks) {
+      const kernelWrites = new Set();
+      current.sections.forEach(s => writesOf(s).forEach(column => kernelWrites.add(column)));
+      if ([...readsOf(section)].some(column => kernelWrites.has(column))) { close(); open(); }
+      kernels.splice(kernels.indexOf(current), 0, { kind: 'chunks', name: '', section, gates: [section.gate] });
+    }
     if (section.kind === 'tree') current.tree = section;
     current.sections.push(section);
     if (section.kind === 'euler') afterIntegrate = true;
@@ -351,7 +387,7 @@ export function genericPlan(program, laws, options = {}) {
   // names in step order
   kernels.forEach((kernel, index) => {
     if (kernel.name) return;
-    const prefix = { node: 'STEP', reduce: 'REDUCE', link: 'LINKS', groupRuns: 'GROUP_RUNS', groupSum: 'GROUP_SUM' }[kernel.kind];
+    const prefix = { node: 'STEP', reduce: 'REDUCE', link: 'LINKS', groupRuns: 'GROUP_RUNS', groupSum: 'GROUP_SUM', chunks: 'LINK_CHUNKS' }[kernel.kind];
     kernel.name = prefix + index;
   });
 
@@ -364,6 +400,7 @@ export function genericPlan(program, laws, options = {}) {
       else names.push(section.stage.name);
     });
     if (kernel.kind === 'reduce' || kernel.kind === 'groupRuns' || kernel.kind === 'groupSum') kernel.sums.forEach(sum => names.push(sum.name));
+    if (kernel.kind === 'chunks') names.push(kernel.section.stage.name);
     if (kernel.kind === 'fireReduce' || kernel.kind === 'fireState') names.push(integrateName(sections));
     kernelStages[kernel.name] = names;
   });
@@ -411,6 +448,7 @@ export function genericPlan(program, laws, options = {}) {
     columns,
     linkColumns,
     groupColumns,
+    chunked,
     sums,
     sumWidth,
     S: { size: sSize, fire, firePartials, partials },

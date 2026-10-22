@@ -5,27 +5,89 @@
 //  - link formulas that only write link columns: a kernel with a thread per link;
 //  - GROUP_RUNS and GROUP_SUM for sums per group.
 import formula from '../../../lib/formula.js';
-import { header, settingsLines, scopeOf, linkRef, locals, columnRef, u32, slotValue, L_OTHER, L_ROLE, L_FROM_ENTRY, L_FROM, L_TO, L_GROUPS } from './common.js';
+import { header, NUDGE, settingsLines, scopeOf, linkRef, locals, columnRef, u32, slotValue, L_OTHER, L_ROLE, L_FROM_ENTRY, L_FROM, L_TO, L_HEADER } from './common.js';
+import { LINK_CHUNK } from './plan.js';
 
 /**
  * The stock springs, or a link formula that pulls or adds into body columns: lines of a node
- * kernel section. `pos` and `force` are the thread's locals.
+ * kernel section. `pos` and `force` are the thread's locals. Up to N* the section goes through
+ * the row's links itself; above it, it adds the row's chunks (LINK_CHUNKS) in order.
  */
 export function gatherCode(plan, section, printer) {
+  const out = [];
+  // a pass's own sums start at zero (the CPU zeroes the column; each row here is its thread's)
+  const zero = section.kind === 'springs' ? [] : section.stage.args.startAtZero || [];
+  zero.forEach(column => locals(plan, column).forEach(name => out.push(`${name} = 0.0;`)));
+  out.push('if (live) {');
+  if (section.chunks) {
+    const { offset, width, parts } = section.chunks;
+    out.push(`  let cb = L[${L_HEADER}];`);
+    out.push('  for (var c = L[cb + 1u + row]; c < L[cb + 2u + row]; c++) {');
+    let at = 0;
+    parts.forEach(part => {
+      locals(plan, part.column).forEach(name => { out.push(`    ${name} += S[${u32(offset)} + c * ${u32(width)} + ${u32(at)}];`); at++; });
+    });
+    out.push('  }');
+  } else {
+    out.push('  for (var e = L[row]; e < L[row + 1u]; e++) {');
+    entryBody(plan, section, printer).forEach(line => out.push('    ' + line));
+    out.push('  }');
+  }
+  out.push('}');
+  return out;
+}
+
+/**
+ * LINK_CHUNKS: a thread per chunk of up to 8 links of one row (the chunks of a row in a row) goes
+ * through them as the row's gather would, and writes what they add (the force, and into each
+ * column) to the chunk's place
+ */
+export function chunkKernel(plan, kernel, printer) {
+  const section = kernel.section;
+  const { offset, width, parts } = section.chunks;
+  const out = [header(plan), NUDGE(plan.D)];
+  out.push('@compute @workgroup_size(256)');
+  out.push('fn main(@builtin(global_invocation_id) gid: vec3u) {');
+  out.push(`  let cb = L[${L_HEADER}];`);
+  out.push('  let chunks = L[cb];');
+  out.push('  let c = gid.x;');
+  out.push('  if (c >= chunks) { return; }');
+  out.push('  let row = L[cb + 2u + P.n + c];');
+  out.push('  let first = L[cb + 2u + P.n + chunks + c];');
+  out.push(`  let last = min(first + ${u32(LINK_CHUNK)}, L[row + 1u]);`);
+  out.push(settingsLines(plan));
+  if (section.gate !== undefined) out.push(`  if (${slotValue(section.gate)} == 0.0) { return; }`);
+  // the row's own values the links read; what they add starts at 0
+  const added = new Set(parts.map(part => part.column));
+  const reads = new Set(['pos']);
+  if (section.kind === 'gather') section.stage.reads.forEach(read => { if (read.space === 'nodes' && plan.columns[read.column]) reads.add(read.column); });
+  reads.forEach(column => {
+    if (added.has(column)) return;
+    const refs = columnRef(plan, column, 'row', false);
+    locals(plan, column).forEach((name, k) => out.push(`  let ${name} = ${refs[k]};`));
+  });
+  added.forEach(column => locals(plan, column).forEach(name => out.push(`  var ${name} = 0.0;`)));
+  out.push('  for (var e = first; e < last; e++) {');
+  entryBody(plan, section, printer).forEach(line => out.push('    ' + line));
+  out.push('  }');
+  let at = 0;
+  parts.forEach(part => {
+    locals(plan, part.column).forEach(name => { out.push(`  S[${u32(offset)} + c * ${u32(width)} + ${u32(at)}] = ${name};`); at++; });
+  });
+  out.push('}');
+  return out.join('\n') + '\n';
+}
+
+// One link of the row (entry e), as the row's end sees it: what the link adds to the row's force
+// and columns
+function entryBody(plan, section, printer) {
   const D = plan.D;
   const pos = locals(plan, 'pos'), force = locals(plan, 'force');
   const axes = Array.from({ length: D }, (_, k) => k);
   const stock = section.kind === 'springs';
   const stage = section.stage;
   const pulls = stock || section.pulls;
-  const out = [];
-  // a pass's own sums start at zero (the CPU zeroes the column; each row here is its thread's)
-  const zero = stock ? [] : stage.args.startAtZero || [];
-  zero.forEach(column => locals(plan, column).forEach(name => out.push(`${name} = 0.0;`)));
-  out.push('if (live) {');
-  out.push(`  for (var e = L[row]; e < L[row + 1u]; e++) {`);
-  out.push(`    let j = L[${L_OTHER} + e];`);
-  const body = [];
+  const body = [`let j = L[${L_OTHER} + e];`];
   const needsLink = !stock || section.own;
   if (needsLink) {
     body.push(`let lrole = L[${L_ROLE} + e];`);
@@ -61,10 +123,7 @@ export function gatherCode(plan, section, printer) {
     body.push('let kp = lpull / lr;');
     body.push(axes.map(k => `${force[k]} += kp * dm${k};`).join(' '));
   }
-  body.forEach(line => out.push('    ' + line));
-  out.push('  }');
-  out.push('}');
-  return out;
+  return body;
 }
 
 // The link's length, stiffness and columns as lk_* locals: the settings while every link has
@@ -156,7 +215,7 @@ export function groupValueCode(plan, kernel, section, printer) {
 function groupBlock(kernel) {
   const block = kernel.sums[0].block;
   return [
-    `  let base = L[${L_GROUPS} + ${u32(block)}];`,
+    `  let base = L[${L_HEADER} + ${u32(block + 1)}];`,
     '  let runs = L[base];',
     '  let count = L[base + 1u];',
     '  let rows = L[base + 2u];',
