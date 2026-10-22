@@ -235,6 +235,7 @@ export default function addGridField(simulator, name, options) {
     return {
       shape: 'grid',
       space: 'grid',
+      how: `generated loops: a ${anchor} grid, ${weights} weights${diffuse ? ', smoothed' : ''}`,
       reads: [{ space: 'nodes', column: 'pos', rows: 'other' }]
         .concat(value.columns.map(column => ({ space: 'nodes', column, rows: 'other' }))),
       writes: [
