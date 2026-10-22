@@ -248,6 +248,12 @@ test('parameter functions get the step context, not the simulator', function (t)
   t.throws(function () { 'use strict'; seen.settings.springLength = 3; }, TypeError, 'settings are read only');
   sim.springLength(9);
   t.equal(seen.settings.springLength, 9, 'and current');
+  t.equal(seen.springLength(), 9);
+  t.equal(seen.unit(), 9);
+  t.equal(formula.liveSettings(seen), sim.settings, 'the library reads the live settings behind the view');
+  t.equal(formula.BUILT_IN_VALUES.springLength(seen), 9);
+  var plain = { settings: { springLength: 4 } };
+  t.equal(formula.liveSettings(plain), plain.settings, 'or the settings of a context without a view');
   t.equal(sim.stepContext(40).iteration(), 40, 'a context for a step to come');
   t.end();
 });
