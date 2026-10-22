@@ -129,11 +129,13 @@ reads over 16 MB and atomic adds, about 1 ms each there (about 9 ms of setup in 
 that falls furthest behind the M4 Max says how many times slower the device is
 (`gpu.stats().slowdown`, 1 to 100; 10 when the probe cannot measure):
 
-- the pyramid's cap is divided by it, so a capped step takes about as long on any device;
+- the pyramid's cap (pair evaluations, weighted by its charges) is divided by it, so a capped
+  step takes about 30 ms on any device; the pyramid then follows the rate it measures on crowded
+  steps;
 - the pair formulas start from a matching cap, then follow the rate they measure on dense steps;
-- a submit holds no more steps than fit 1 s if every step reached its caps (a capped pyramid
-  step counts 30 ms per charge times the factor), far below the 2-second GPU watchdog; and as
-  many as fit 100 ms of the time steps actually take.
+- a grid field's worst step is its estimate for the M4 Max times the factor;
+- a submit holds no more steps than fit 1 s if every step reached its caps, far below the
+  2-second GPU watchdog; and as many as fit 100 ms of the time steps actually take.
 
 A pair step that needs more than its cap runs in several submits ("slices") rather than halting.
 
