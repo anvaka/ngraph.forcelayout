@@ -4,7 +4,7 @@
 // within a call (number params, no `when`, no `step`, no function) is read once per call; when no
 // stage can change, one slot serves every step of the call.
 import { F32_MAX, f32Tiny, writeLawValues, lawValueProblem, lawValueWarnings } from '../wgsl/print.js';
-import { gridSlotValues, gridIsDynamic } from '../grid/plan.js';
+import { gridSlotValues, gridIsDynamic, gridNumberProblem } from '../grid/plan.js';
 
 const SETTINGS = { gravity: 'gravity', timeStep: 'timeStep', dragCoefficient: 'dragCoefficient', springLength: 'springLength', springCoefficient: 'springCoefficient' };
 
@@ -109,9 +109,10 @@ export function slotFiller(simulator, plan, warn, origin) {
       slot[entry.index] = value;
     }
     for (const entry of stage.builtIns) slot[entry.index] = values.builtIns[entry.name];
-    // a grid field's numbers; one that does not fit f32 gives no grid on the device (its field is
-    // 0), as a cell of 0 does on the CPU
+    // a grid field's numbers, each within f32 (the device would make NaN of them, or no grid)
     if (stage.grid.length) {
+      const problem = gridNumberProblem(values);
+      if (problem) return `the ${problem.name} of ${stage.name} is ${valueProblem(problem.value)}`;
       const numbers = gridSlotValues(values, origin, plan.D, stage.anchor);
       for (const entry of stage.grid) slot[entry.index] = numbers[entry.name];
     }
