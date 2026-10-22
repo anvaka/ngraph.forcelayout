@@ -7,8 +7,11 @@
 
 // Graphs at least this large are renumbered along a Hilbert curve (stock template)
 const HILBERT_MIN_NODES = 4096;
-// Movement is measured on about this many bodies of a large graph
-const MOVEMENT_SAMPLE = 65536;
+// Movement is measured on about this many bodies of a large graph, in runs of MOVEMENT_RUN rows
+// spread over it: one row in every k would cost a cache miss per row (twice as much on readback
+// memory that was just mapped)
+const MOVEMENT_SAMPLE = 16384;
+const MOVEMENT_RUN = 256;
 
 /**
  * The origin of positions on the device: per axis 0 when the drawing's middle is no farther from
@@ -43,7 +46,8 @@ export function relativePositions(pos, n, D, origin) {
  * as f64. Returns the CPU integrator's measure of movement per step (the squared sum over axes of
  * the summed |dx|, over the bodies), measured on a sample of a large graph. When graph edits
  * moved rows since `bodies` (the simulator's bodies when the data was read), bodies get their
- * positions wherever they are now, and bodies that left are skipped.
+ * positions wherever they are now, bodies that left are skipped, and the movement is unknown
+ * (null): the store's rows are not the ones the device moved.
  */
 export function writePositionsBack(simulator, bodies, data, D, origin, steps) {
   const store = simulator.store, n = bodies.length;
@@ -54,25 +58,32 @@ export function writePositionsBack(simulator, bodies, data, D, origin, steps) {
       if (body.store !== store) continue;
       for (let k = 0; k < D; k++) store.pos[body.index * D + k] = origin[k] + data[i * D + k];
     }
-    return 0;
+    return null;
   }
   const pos = store.pos;
-  const stride = Math.max(1, Math.floor(n / MOVEMENT_SAMPLE));
   const sums = new Float64Array(D);
-  for (let i = 0; i < n; i += stride) {
-    for (let k = 0; k < D; k++) sums[k] += Math.abs(origin[k] + data[i * D + k] - pos[i * D + k]);
+  const runs = n <= MOVEMENT_SAMPLE ? 1 : Math.floor(MOVEMENT_SAMPLE / MOVEMENT_RUN);
+  const gap = n / runs, length = runs === 1 ? n : MOVEMENT_RUN;
+  for (let r = 0; r < runs; r++) {
+    const from = Math.floor(r * gap) * D, to = from + length * D;
+    for (let at = from; at < to; at += D) {
+      for (let k = 0; k < D; k++) sums[k] += Math.abs(origin[k] + data[at + k] - pos[at + k]);
+    }
   }
   if (origin.every(x => x === 0)) pos.set(data.subarray(0, n * D));
   else for (let i = 0, at = 0; i < n; i++) for (let k = 0; k < D; k++, at++) pos[at] = origin[k] + data[at];
   let total = 0;
-  for (let k = 0; k < D; k++) { const t = sums[k] * stride / steps; total += t * t; }
+  const scale = n / (runs * length) / steps;
+  for (let k = 0; k < D; k++) { const t = sums[k] * scale; total += t * t; }
   return total / n;
 }
 
 /**
- * The same for positions in another order: row i's are at toInternal[i] of `data`.
+ * The same for positions in another order: row i's are at toInternal[i] of `data`. `mirror`, when
+ * given, gets the f32 numbers in the store's order in the same pass (reading the readback in
+ * this order costs a cache miss per row: twice would cost twice).
  */
-export function writePermutedBack(simulator, bodies, data, toInternal, origin, steps) {
+export function writePermutedBack(simulator, bodies, data, toInternal, origin, steps, mirror) {
   const store = simulator.store, n = bodies.length;
   if (!n) return 0;
   const moved = rowsMoved(simulator, bodies);
@@ -80,7 +91,8 @@ export function writePermutedBack(simulator, bodies, data, toInternal, origin, s
   let tx = 0, ty = 0;
   for (let i = 0; i < n; i++) {
     const k = 2 * toInternal[i];
-    const x = ox + data[k], y = oy + data[k + 1];
+    const fx = data[k], fy = data[k + 1];
+    const x = ox + fx, y = oy + fy;
     if (moved) {
       const body = bodies[i];
       if (body.store === store) { pos[2 * body.index] = x; pos[2 * body.index + 1] = y; }
@@ -88,9 +100,10 @@ export function writePermutedBack(simulator, bodies, data, toInternal, origin, s
     }
     tx += Math.abs(x - pos[2 * i]); ty += Math.abs(y - pos[2 * i + 1]);
     pos[2 * i] = x; pos[2 * i + 1] = y;
+    if (mirror) { mirror[2 * i] = fx; mirror[2 * i + 1] = fy; }
   }
   tx /= steps; ty /= steps;
-  return moved ? 0 : (tx * tx + ty * ty) / n;
+  return moved ? null : (tx * tx + ty * ty) / n;
 }
 
 /**

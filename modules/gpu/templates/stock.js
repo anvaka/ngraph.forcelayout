@@ -7,6 +7,7 @@ import { createGridEngine, KERNEL_STAGES } from './grid.js';
 import { getPipeline } from '../device.js';
 import { lawValueCount, writeLawValues, lawValueProblem, lawValueWarnings } from '../wgsl/print.js';
 import { readLayout, relativePositions, writeVelocities, writeMasses, writePositionsBack, writePermutedBack, rowsMoved } from '../buffers.js';
+import { createRowWriter, trackHostPositions } from '../rows.js';
 
 // Calls with at least this many steps undo the Hilbert order on the GPU for their readback (its
 // cost is spread over the steps); shorter ones read the template's order and undo it on the CPU,
@@ -14,8 +15,6 @@ import { readLayout, relativePositions, writeVelocities, writeMasses, writePosit
 const ORDER_ON_GPU = 16;
 // Settings the template reads from its uniforms
 const SETTINGS = ['gravity', 'springLength', 'springCoefficient', 'dragCoefficient', 'timeStep', 'maxVelocity', 'integrator'];
-// More rows written by the host than this go up whole
-const MAX_ROW_WRITES = 4096;
 // The stock step's repulsion stage, whose law the template compiles
 const REPULSION = 'repulsion';
 
@@ -41,9 +40,10 @@ export async function createStockEngine(device, { simulator, plan, fireState, wa
   let lawValues = law ? new Float32Array(lawCount) : null;
   const data = readLayout(simulator, true);
   const n = data.n;
-  const [engine, unpermute] = await Promise.all([
+  const [engine, unpermute, writeRows] = await Promise.all([
     createGridEngine(device, { n, edges: data.edges, init: data.init, mass: data.mass, law, variants: plan.perStep }),
     data.permuted ? getPipeline(device, { code: UNPERMUTE, label: 'UNPERMUTE' }) : null,
+    createRowWriter(device),
   ]);
   device.queue.writeBuffer(engine.vel, 0, data.velocity);
   if (fireState) engine.setFire(fireState);
@@ -67,7 +67,7 @@ export async function createStockEngine(device, { simulator, plan, fireState, wa
   let written = {};
   writeSettings();
   // What the module last put on the device or into the store, to find rows the host wrote
-  let devicePositions = relativePositions(store.pos, n, 2, data.origin);
+  const host = trackHostPositions(store, n, 2, data.origin, relativePositions(store.pos, n, 2, data.origin));
   let deviceVelocities = Float64Array.from(store.velocity.subarray(0, 2 * n));
   let devicePinned = Uint8Array.from(store.pinned.subarray(0, n), value => (value ? 1 : 0));
   let uploaded = versions();
@@ -80,19 +80,25 @@ export async function createStockEngine(device, { simulator, plan, fireState, wa
     positionBytes: n * 8,
     kernelStages: KERNEL_STAGES,
 
-    prepare(hostOwns) {
+    // `steps`: the steps queued so far, which the uploads follow
+    prepare(hostOwns, steps) {
       writeSettings();
       const now = versions();
       if (hostOwns) {
         // the store is the truth: what sync() read and what the host wrote since
-        devicePositions = relativePositions(store.pos, n, 2, data.origin);
-        device.queue.writeBuffer(engine.pos, 0, permuted(devicePositions, 2));
+        const positions = relativePositions(store.pos, n, 2, data.origin);
+        host.reset(positions);
+        device.queue.writeBuffer(engine.pos, 0, permuted(positions, 2));
         device.queue.writeBuffer(engine.vel, 0, writeVelocities(store, data.toInternal, new Float32Array(4 * n)));
         deviceVelocities = Float64Array.from(store.velocity.subarray(0, 2 * n));
         devicePinned = Uint8Array.from(store.pinned.subarray(0, n), value => (value ? 1 : 0));
       } else {
         // between syncs the device is ahead of the store: only rows the host wrote go up
-        if (now.pos !== uploaded.pos) uploadPositionRows(positionRows());
+        if (now.pos !== uploaded.pos) {
+          const rows = host.written();
+          const values = host.uploaded(rows, steps);
+          writeRows(engine.pos, 0, 2, rows.map(i => data.toInternal[i]), values);
+        }
         if (now.velocity !== uploaded.velocity || now.pinned !== uploaded.pinned) uploadVelocityRows(velocityRows());
       }
       if (now.mass !== uploaded.mass) device.queue.writeBuffer(engine.mass, 0, writeMasses(store, data.toInternal, new Float32Array(n)));
@@ -129,14 +135,23 @@ export async function createStockEngine(device, { simulator, plan, fireState, wa
       return !data.permuted;
     },
 
-    readPositions(positions, steps, inStoreOrder) {
-      if (inStoreOrder) return keepingHostPositions(() => writePositionsBack(simulator, data.bodies, positions, 2, data.origin, steps), positions);
-      const move = keepingHostPositions(() => writePermutedBack(simulator, data.bodies, positions, data.toInternal, data.origin, steps), null);
-      for (let i = 0; i < n; i++) {
-        const k = 2 * data.toInternal[i];
-        devicePositions[2 * i] = positions[k]; devicePositions[2 * i + 1] = positions[k + 1];
+    /**
+     * Positions after `through` steps (`steps` of them since the last readback) into the store;
+     * rows the host wrote keep its numbers (see rows.js). Returns the movement per step, or null
+     * when graph edits moved the rows since.
+     */
+    readPositions(positions, steps, inStoreOrder, through) {
+      if (rowsMoved(simulator, data.bodies)) {
+        return inStoreOrder
+          ? writePositionsBack(simulator, data.bodies, positions, 2, data.origin, steps)
+          : writePermutedBack(simulator, data.bodies, positions, data.toInternal, data.origin, steps);
       }
-      return move;
+      return host.readBack(through, store.versions.pos !== uploaded.pos, () => {
+        if (!inStoreOrder) return writePermutedBack(simulator, data.bodies, positions, data.toInternal, data.origin, steps, host.mirror);
+        const move = writePositionsBack(simulator, data.bodies, positions, 2, data.origin, steps);
+        host.mirror.set(positions.subarray(0, 2 * n));
+        return move;
+      });
     },
 
     async readDevice() {
@@ -252,14 +267,6 @@ export async function createStockEngine(device, { simulator, plan, fireState, wa
     return out;
   }
 
-  function positionRows() {
-    const pos = store.pos, origin = data.origin, rows = [];
-    for (let i = 0; i < n; i++) {
-      if (Math.fround(pos[2 * i] - origin[0]) !== devicePositions[2 * i] || Math.fround(pos[2 * i + 1] - origin[1]) !== devicePositions[2 * i + 1]) rows.push(i);
-    }
-    return rows;
-  }
-
   function velocityRows() {
     const v = store.velocity, pinned = store.pinned, rows = [];
     for (let i = 0; i < n; i++) {
@@ -268,44 +275,15 @@ export async function createStockEngine(device, { simulator, plan, fireState, wa
     return rows;
   }
 
-  // Rows the host wrote since the last upload keep its numbers when the device's come back (the
-  // next step() uploads them), unless graph edits moved the rows
-  function keepingHostPositions(read, positions) {
-    const keep = !rowsMoved(simulator, data.bodies) && store.versions.pos !== uploaded.pos ? positionRows() : [];
-    const saved = keep.map(i => [store.pos[2 * i], store.pos[2 * i + 1]]);
-    const move = read();
-    keep.forEach((i, j) => { store.pos[2 * i] = saved[j][0]; store.pos[2 * i + 1] = saved[j][1]; });
-    if (positions) devicePositions.set(positions.subarray(0, 2 * n));
-    return move;
-  }
-
-  function uploadPositionRows(rows) {
-    if (rows.length > MAX_ROW_WRITES) {
-      devicePositions = relativePositions(store.pos, n, 2, data.origin);
-      device.queue.writeBuffer(engine.pos, 0, permuted(devicePositions, 2));
-      return;
-    }
-    const one = new Float32Array(2), pos = store.pos;
-    for (const i of rows) {
-      one[0] = devicePositions[2 * i] = pos[2 * i] - data.origin[0];
-      one[1] = devicePositions[2 * i + 1] = pos[2 * i + 1] - data.origin[1];
-      device.queue.writeBuffer(engine.pos, data.toInternal[i] * 8, one);
-    }
-  }
-
   // Velocities with the pinned flag, which the template keeps next to them
   function uploadVelocityRows(rows) {
-    if (rows.length > MAX_ROW_WRITES) {
-      device.queue.writeBuffer(engine.vel, 0, writeVelocities(store, data.toInternal, new Float32Array(4 * n)));
-    } else {
-      const one = new Float32Array(4), v = store.velocity, pinned = store.pinned;
-      for (const i of rows) {
-        one[0] = v[2 * i]; one[1] = v[2 * i + 1]; one[3] = pinned[i] ? 1 : 0;
-        device.queue.writeBuffer(engine.vel, data.toInternal[i] * 16, one);
-      }
-    }
-    deviceVelocities = Float64Array.from(store.velocity.subarray(0, 2 * n));
-    devicePinned = Uint8Array.from(store.pinned.subarray(0, n), value => (value ? 1 : 0));
+    const values = new Float32Array(4 * rows.length), v = store.velocity, pinned = store.pinned;
+    rows.forEach((i, r) => {
+      values[4 * r] = deviceVelocities[2 * i] = v[2 * i];
+      values[4 * r + 1] = deviceVelocities[2 * i + 1] = v[2 * i + 1];
+      values[4 * r + 3] = devicePinned[i] = pinned[i] ? 1 : 0;
+    });
+    writeRows(engine.vel, 0, 4, rows.map(i => data.toInternal[i]), values);
   }
 }
 

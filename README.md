@@ -220,7 +220,9 @@ Forces are divided by the mass when bodies move. `simulator.inertia('column')` d
 another column instead, so a body can respond slowly without pushing others harder.
 
 A stage can run on some steps only: `{ when: 'step - floor(step / 25) * 25 == 0' }` (an
-expression of `step` and the settings, or a function of the step context) gates any stage.
+expression of `step` and the settings, or a function of the step context) gates any stage. A
+`when` is tested once per step: stages with the same text (that reads no params of their own)
+share the answer.
 
 JavaScript that needs data in the middle of a step is a host step. It runs at its place among
 the stages; engines that keep their own copy of the numbers (a GPU, a worker) hand over the

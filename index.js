@@ -265,6 +265,11 @@ function createLayout(graph, physicsSettings) {
 
   function initPhysics() {
     bodiesCount = 0;
+    // Rows for every node and link at once: growing the stores one doubling at a time copies
+    // them and re-points every body each time
+    var bodyStore = physicsSimulator.store, springStore = physicsSimulator.springStore;
+    if (bodyStore && bodyStore.reserve && graph.getNodesCount) bodyStore.reserve(graph.getNodesCount());
+    if (springStore && springStore.reserve && graph.getLinksCount) springStore.reserve(graph.getLinksCount());
 
     graph.forEachNode(function (node) {
       initBody(node.id);

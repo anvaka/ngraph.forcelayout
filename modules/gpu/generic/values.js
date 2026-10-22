@@ -28,7 +28,7 @@ export function slotFiller(simulator, plan, warn, origin) {
     }
   });
   plan.sections.forEach(section => {
-    const program = section.kind === 'pairs' ? section.channels : [section];
+    const program = section.kind === 'pairs' || section.kind === 'tree' ? section.channels : [section];
     program.forEach(part => {
       const stage = part.stage;
       if (!stages[stage.name] && !part.law) return;

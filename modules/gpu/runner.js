@@ -15,10 +15,11 @@
 // Errors halt the runner and fire 'error'; nothing falls back to the CPU on its own.
 //
 // The runner drives an engine (the stock grid template, templates/stock.js, or a generic plan,
-// generic/engine.js) through one interface: prepare(hostOwns) uploads, run(count, firstStep, …)
-// encodes steps, copyPositions()/readPositions() read back, readDevice() syncs.
+// generic/engine.js) through one interface: prepare(hostOwns, steps) uploads, run(count,
+// firstStep, …) encodes steps, copyPositions()/readPositions() read back, readDevice() syncs.
 import { watchDevice, submitCost } from './device.js';
 import { GUARD } from './program.js';
+import { DEVICE_LOST } from './check.js';
 import { createStockEngine } from './templates/stock.js';
 import { createGenericEngine } from './generic/engine.js';
 
@@ -29,6 +30,10 @@ const DEFAULT_BATCH = 64;
 const MAX_BATCH = 1024;
 // A submit holds at most this much GPU work, far below the 2-second watchdog
 const MAX_SUBMIT_MS = 100;
+// A readback followed this soon by a newer one (calls in one burst, as a frame that steps several
+// times) is not written into the store: the newer one is a batch away and replaces it. Writing a
+// large graph's positions costs milliseconds of the main thread.
+const BURST_MS = 4;
 // Settings that change the physics: a 'step' listener must not change them
 const PHYSICS_SETTINGS = ['gravity', 'springLength', 'springCoefficient', 'dragCoefficient', 'timeStep', 'maxVelocity', 'integrator', 'theta'];
 const LINK_COLUMNS = ['from', 'to', 'length', 'coefficient'];
@@ -43,6 +48,7 @@ export async function runOnGpu(layout, backend) {
   if (!backend || !backend.device) throw new Error('runOnGpu() needs a backend from createWebGPUBackend()');
   const simulator = layout.simulator;
   if (simulator.getStage(GUARD)) throw new Error('this layout already runs on the GPU');
+  if (watchDevice(backend.device).lost) throw refusal([DEVICE_LOST]);
   const plan = simulator.plan(backend);
   if (!plan.runs) throw refusal(plan.reasons);
   const runner = createRunner(layout, backend);
@@ -89,6 +95,7 @@ function createRunner(layout, backend) {
   const free = [], all = [];
   let querySet = null, resolveBuffer = null;
   let readSerial = 0, appliedSerial = 0, appliedSteps = 0, lastReadSteps = 0;
+  const issuedAt = new Map(); // serial of a readback in flight -> when it was issued
   const samples = [];
   let lastResolve = null;
   let lastMove = 0, wasStable = false;
@@ -203,24 +210,80 @@ function createRunner(layout, backend) {
       return false;
     }
     if (springStore.versions.length !== linkVersions[2] || springStore.versions.coefficient !== linkVersions[3]) {
-      // a change mark re-plans: links may now have their own lengths
+      // a change mark re-plans: links may now have their own lengths (no more stock template,
+      // the springs read the columns), or all have the defaults again
       const verdict = backend.lower(simulator.program(), simulator);
       if (!verdict.runs) {
         halt({ message: refusal(reasonsOf(verdict)).message, kernel: null, stages: ['springs'] });
         return false;
       }
       linkVersions = LINK_COLUMNS.map(name => springStore.versions[name]);
+      if (verdict.plan.dataKey !== lowering.plan.dataKey) {
+        syncPoint();
+        return false;
+      }
     }
-    const prepared = engine.prepare(hostOwns);
+    const prepared = engine.prepare(hostOwns, queued);
     hostOwns = false;
     if (prepared === 'sync') { syncPoint(); return false; }
     if (prepared && prepared.halt) { halt({ message: prepared.halt, kernel: null, stages: [] }); return false; }
     return true;
   }
 
-  // Encodes `count` steps in as few submits as the batching allows, and reads positions back
+  // Encodes `count` steps in as few submits as the batching allows, and reads positions back. A
+  // host step splits the batch at the steps where its `when` holds (asked one step at a time, so
+  // the steps after it see what it did): the steps before it run, then that step stops at the
+  // host step, which runs on the host while later steps wait (as at a sync point).
   function run(count) {
     if (!engine) { queued += count; return; }
+    const hostSteps = (lowering.plan && lowering.plan.hostSteps) || [];
+    for (let s = 0; hostSteps.length && s < count; s++) {
+      const at = firstStep + queued + s;
+      const holding = hostSteps.filter(name => simulator.stageValues(name, simulator.stepContext(at)).when);
+      if (!holding.length) continue;
+      if (s > 0) runSteps(s);
+      if (halted) return;
+      pending += count - s - 1;
+      busy = hostStep(firstStep + queued, holding).then(() => {
+        busy = null;
+        if (pending && !halted && !stopped) {
+          const rest = pending;
+          pending = 0;
+          step(rest);
+        }
+      }, error => {
+        busy = null;
+        halt({ message: error.message, kernel: null, stages: [] });
+      });
+      return;
+    }
+    runSteps(count);
+  }
+
+  // One step at a host step: its kernels up to each host step that holds, the device's numbers
+  // back into the store, the host step on the host, what it wrote back up, then the rest of the
+  // step (whose numbers are read after the host step ran)
+  async function hostStep(at, holding) {
+    const names = lowering.plan.hostSteps;
+    const from = engine;
+    for (let part = 0; part < engine.segments; part++) {
+      engine.run(1, at, { segment: part });
+      if (part === names.length || holding.indexOf(names[part]) < 0) continue;
+      await readDevice();
+      if (released || halted || from !== engine) return;
+      simulator.iteration(at);
+      try {
+        simulator.getStage(names[part])(simulator.store, simulator);
+      } catch (e) {
+        throw new Error(`the host step ${names[part]} failed: ${e.message}`);
+      }
+      const prepared = engine.prepare(false, queued);
+      if (prepared && prepared.halt) throw new Error(prepared.halt);
+    }
+    queued += 1;
+  }
+
+  function runSteps(count) {
     const rb = free.pop();
     const withTs = !!rb && timestamps;
     const at = timestampsAt(engine.positionBytes);
@@ -233,6 +296,8 @@ function createRunner(layout, backend) {
           enc.resolveQuerySet(querySet, 0, 2, resolveBuffer, 0);
           enc.copyBufferToBuffer(resolveBuffer, 0, rb.buffer, at, 16);
         }
+        // the structures' status words (a work cap passed, a lattice too wide) come back too
+        if (engine.statusBytes) engine.copyStatus(enc, rb.buffer, at + 16);
       } : null,
     });
     queued += result.ran;
@@ -253,15 +318,20 @@ function createRunner(layout, backend) {
 
   function readBack(rb, count, withTs) {
     rb.serial = ++readSerial;
+    issuedAt.set(rb.serial, performance.now());
     rb.steps = queued;
     rb.count = count;
     const from = engine;
     rb.buffer.mapAsync(GPUMapMode.READ).then(() => {
       if (released) { rb.buffer.destroy(); return; }
       const bytes = rb.engine.positionBytes;
-      if (rb.serial > appliedSerial && from === engine) {
+      const next = issuedAt.get(rb.serial + 1);
+      const replaced = next !== undefined && next - issuedAt.get(rb.serial) < BURST_MS;
+      issuedAt.delete(rb.serial);
+      if (rb.serial > appliedSerial && from === engine && !replaced) {
         apply(rb.serial, rb.steps, new Float32Array(rb.buffer.getMappedRange(0, bytes)), rb.ordered);
       }
+      const status = from === engine && engine.statusBytes ? engine.statusMessage(new Uint32Array(rb.buffer.getMappedRange(timestampsAt(bytes) + 16, engine.statusBytes))) : null;
       if (withTs) {
         const t = new BigUint64Array(rb.buffer.getMappedRange(timestampsAt(bytes), 16));
         const ns = Number(t[1] - t[0]);
@@ -273,16 +343,26 @@ function createRunner(layout, backend) {
       }
       rb.buffer.unmap();
       if (rb.engine === engine) free.push(rb); else rb.buffer.destroy();
+      if (status) {
+        halt({ message: status.message, kernel: null, stages: status.stages || [] });
+        return;
+      }
       afterReadback();
-    }).catch(() => { /* destroyed, or the device was lost */ });
+    }, () => { issuedAt.delete(rb.serial); /* destroyed, or the device was lost */ }).catch(error => {
+      // a bug here, or a listener that threw: say so, rather than stop reading back in silence
+      if (rb.buffer.mapState === 'mapped') rb.buffer.unmap();
+      if (rb.engine === engine && free.indexOf(rb) < 0) free.push(rb);
+      halt({ message: 'reading positions back failed: ' + error.message, kernel: null, stages: [] });
+    });
   }
 
-  // Positions after `steps` into the store
+  // Positions after `steps` into the store. The movement is unknown (null) across graph edits:
+  // lastMove then stays as it was, rather than read as a layout at rest
   function apply(serial, steps, positions, inStoreOrder) {
     appliedSerial = serial;
     const done = steps - appliedSteps;
-    const move = engine.readPositions(positions, Math.max(1, done), inStoreOrder);
-    if (done > 0) lastMove = move;
+    const move = engine.readPositions(positions, Math.max(1, done), inStoreOrder, steps);
+    if (done > 0 && move !== null) lastMove = move;
     appliedSteps = steps;
     simulator.iteration(firstStep + steps);
   }
@@ -315,7 +395,11 @@ function createRunner(layout, backend) {
       wasStable = isStable;
       layout.fire('stable', isStable);
     }
-    emit('readback', { steps: firstStep + appliedSteps, lastMove });
+    try {
+      emit('readback', { steps: firstStep + appliedSteps, lastMove });
+    } catch (e) {
+      halt({ message: "a 'readback' listener failed: " + e.message, kernel: null, stages: [] });
+    }
   }
 
   /**
@@ -341,7 +425,9 @@ function createRunner(layout, backend) {
   // into the store
   async function readDevice() {
     const serial = ++readSerial, steps = queued, from = engine;
+    issuedAt.set(serial, performance.now());
     const state = await engine.readDevice();
+    issuedAt.delete(serial);
     if (!state || released || from !== engine) return;
     if (serial > appliedSerial) apply(serial, steps, state.positions, true);
     state.apply();
@@ -410,7 +496,8 @@ function createRunner(layout, backend) {
 
   function makeReadbacks() {
     if (!engine) return;
-    const size = Math.max(16, timestampsAt(engine.positionBytes) + (timestamps ? 16 : 0));
+    // positions | timestamps (16 bytes) | the structures' status words
+    const size = Math.max(16, timestampsAt(engine.positionBytes) + 16 + (engine.statusBytes || 0));
     for (let r = 0; r < READBACK_BUFFERS; r++) {
       const rb = { buffer: device.createBuffer({ size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }), engine };
       all.push(rb);
@@ -462,7 +549,8 @@ function createRunner(layout, backend) {
   function markList(plan) {
     const columns = plan.reads || ['pos', 'velocity', 'mass', 'pinned'];
     const out = columns.map(name => ({ name: 'the column ' + name, read: () => store.versions[name] }));
-    LINK_COLUMNS.forEach(name => out.push({ name: 'the link column ' + name, read: () => springStore.versions[name] }));
+    const links = LINK_COLUMNS.concat(Object.keys(plan.linkColumns || {}).filter(name => LINK_COLUMNS.indexOf(name) < 0));
+    links.forEach(name => out.push({ name: 'the link column ' + name, read: () => springStore.versions[name] }));
     PHYSICS_SETTINGS.forEach(key => out.push({ name: 'the setting ' + key, read: () => simulator.settings[key] }));
     out.push({ name: 'the repulsion law', read: () => simulator.repulsionLaw() });
     out.push({ name: 'the inertia', read: () => simulator.settings.inertia });

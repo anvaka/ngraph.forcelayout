@@ -4,12 +4,15 @@
 // WGSL word, and vectors are unrolled to D numbers (D is in the text).
 //
 // A thread past n works on row 0 and writes nothing; it stays to the end, because tile loops and
-// reductions have workgroup barriers (WGSL uniformity).
+// reductions have workgroup barriers (WGSL uniformity). The kernel that holds the pyramid's section
+// runs its threads in the pyramid's order: thread t works on row tree_row(t).
 import formula from '../../../lib/formula.js';
 import WGSL, { emitLaw, lawPrologue } from '../wgsl/print.js';
-import { THREADS, readsOf, writesOf } from './plan.js';
+import { THREADS, readsOf, writesOf, slotValue } from './plan.js';
+import { header, BINDINGS, bindingsOf, u32, columnRef, local, locals, settingsLines, scopeOf, NUDGE, AXES, withTables } from './common.js';
+import { gatherCode, chunkKernel, linkKernel, groupValueCode, groupRunsKernel, groupSumKernel } from './links.js';
 
-const AXES = 'xyzw';
+export { BINDINGS, bindingsOf };
 
 /**
  * The WGSL of every kernel of `plan`, by kernel name. `printer` is a WGSL printer (its warnings
@@ -19,62 +22,16 @@ export function kernelCode(plan, printer = WGSL) {
   const out = {};
   plan.kernelList.forEach(kernel => {
     if (kernel.kind === 'node') out[kernel.name] = nodeKernel(plan, kernel, printer);
+    else if (kernel.kind === 'link') out[kernel.name] = linkKernel(plan, kernel, printer);
+    else if (kernel.kind === 'chunks') out[kernel.name] = chunkKernel(plan, kernel, printer);
+    else if (kernel.kind === 'groupRuns') out[kernel.name] = groupRunsKernel(plan, kernel);
+    else if (kernel.kind === 'groupSum') out[kernel.name] = groupSumKernel(plan, kernel);
     else if (kernel.kind === 'reduce') out[kernel.name] = reduceKernel(plan, kernel);
     else if (kernel.kind === 'fireReduce') out[kernel.name] = fireReduceKernel(plan);
     else if (kernel.kind === 'fireState') out[kernel.name] = fireStateKernel(plan);
+    // a host step is no kernel
   });
   return out;
-}
-
-// The bindings every kernel of a plan shares (one pipeline layout for all of them)
-function header(plan) {
-  return `struct Params { n: u32, groups: u32, fireGroups: u32, links: u32 };
-@group(0) @binding(0) var<uniform> P: Params;
-@group(0) @binding(1) var<uniform> V: array<vec4f, ${plan.slot.floats / 4}>;
-@group(0) @binding(2) var<storage, read_write> S: array<f32>;
-@group(0) @binding(3) var<storage, read> H: array<f32>;
-@group(0) @binding(4) var<storage, read> L: array<u32>;
-@group(0) @binding(5) var<storage, read> X: array<f32>;
-@group(0) @binding(6) var<storage, read_write> Y: array<f32>;
-`;
-}
-
-export const BINDINGS = ['uniform', 'dynamic', 'storage', 'read', 'read', 'read', 'storage'];
-
-// The number at place `index` of the step's slot
-function slotValue(index) {
-  return `V[${index >> 2}].${AXES[index & 3]}`;
-}
-
-function u32(value) {
-  return value + 'u';
-}
-
-// Where row `row` of `column` lives: an expression for each of its numbers
-function columnRef(plan, column, row, afterIntegrate) {
-  const c = plan.columns[column];
-  const out = [];
-  for (let k = 0; k < c.width; k++) {
-    const at = c.width === 1 ? `${u32(c.offset)} + ${row}` : `${u32(c.offset)} + ${row} * ${u32(c.width)} + ${u32(k)}`;
-    const buffer = c.buffer === 'X' ? (afterIntegrate ? 'Y' : 'X') : c.buffer;
-    out.push(`${buffer}[${at}]`);
-  }
-  return out;
-}
-
-function local(column, k, width) {
-  return width === 1 ? `c_${column}` : `c_${column}_${k}`;
-}
-
-function locals(plan, column) {
-  const width = plan.columns[column].width;
-  const out = [];
-  for (let k = 0; k < width; k++) out.push(local(column, k, width));
-  return out;
-}
-
-function settingsLines(plan) {
-  return plan.slot.entries.filter(e => e.kind === 'setting').map(e => `  let s_${e.stage} = ${slotValue(e.index)};`).join('\n');
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -97,13 +54,27 @@ function nodeKernel(plan, kernel, printer) {
     for (let a = 0; a < Math.ceil(plan.tileFloats / 4); a++) decls.push(`var<workgroup> tile${a}: array<vec4f, ${THREADS}>;`);
   }
   if (kernel.sums.length) decls.push(`var<workgroup> red: array<vec4f, ${THREADS}>;`);
-  decls.push(JITTER(D));
+  decls.push(NUDGE(D));
+  if (kernel.tree) {
+    const tree = kernel.tree.pyramid.section;
+    decls.push(tree.uniform.struct, tree.uniform.decl(BINDINGS.length));
+    tree.bindings.forEach((b, k) => decls.push(`@group(0) @binding(${BINDINGS.length + 1 + k}) var<storage, ${b.access}> ${b.name}: ${b.type};`));
+    decls.push(tree.declarations);
+  }
 
   lines.push(`@compute @workgroup_size(${THREADS})`);
   lines.push('fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: vec3u) {');
-  lines.push('  let i = gid.x;');
-  lines.push('  let live = i < P.n;');
-  lines.push('  let row = select(0u, i, live);');
+  if (kernel.tree) {
+    lines.push('  let t = gid.x;');
+    lines.push('  let live = t < P.n;');
+    lines.push('  var i = 0u;');
+    lines.push(`  if (live) { i = ${kernel.tree.pyramid.section.row('t')}; }`);
+    lines.push('  let row = i;');
+  } else {
+    lines.push('  let i = gid.x;');
+    lines.push('  let live = i < P.n;');
+    lines.push('  let row = select(0u, i, live);');
+  }
   lines.push(settingsLines(plan));
   // own columns, once
   touched.forEach(column => {
@@ -116,6 +87,8 @@ function nodeKernel(plan, kernel, printer) {
   kernel.sections.forEach(section => { if (section.stage && section.stage.sums) section.stage.sums.forEach(name => sumsRead.add(name)); });
   sumsRead.forEach(name => {
     const sum = plan.sums[name];
+    // a sum per group is read by index where the formula reads it
+    if (sum.grouped) return;
     for (let k = 0; k < sum.width; k++) lines.push(`  let g_${name}_${k} = S[${u32(sum.offset + k)}];`);
   });
   // what this kernel's sums add up, per row
@@ -146,7 +119,7 @@ function nodeKernel(plan, kernel, printer) {
 
 function sectionCode(plan, kernel, section, index, printer) {
   const code = sectionBody(plan, kernel, section, index, printer);
-  if (section.gate === undefined || section.kind === 'pairs') return code;
+  if (section.gate === undefined || section.kind === 'pairs' || section.kind === 'tree') return code;
   // a stage's `when`: the same branch for every thread
   return [`if (${slotValue(section.gate)} != 0.0) {`].concat(code.map(line => '  ' + line), ['}']);
 }
@@ -161,9 +134,14 @@ function sectionBody(plan, kernel, section, index, printer) {
     case 'drag':
       return [`if (c_pinned == 0.0) { ${force.map((f, k) => `${f} -= s_dragCoefficient * ${velocity[k]};`).join(' ')} }`];
     case 'springs':
-      return springsCode(plan, pos, force);
+    case 'gather':
+      return gatherCode(plan, section, printer);
+    case 'groupsum':
+      return groupValueCode(plan, kernel, section, printer);
     case 'pairs':
       return pairsCode(plan, section, index, pos, force, printer);
+    case 'tree':
+      return treeCode(section, force);
     case 'formula':
       return ['{'].concat(formulaLines(plan, section, index, printer).map(line => '  ' + line), ['}']);
     case 'sum':
@@ -188,31 +166,11 @@ function sectionBody(plan, kernel, section, index, printer) {
   throw new Error('unknown section ' + section.kind);
 }
 
-// The stock springs as a gather: every body adds the pull of its own links (the CPU adds each
-// link to both ends, which is the same sum)
-function springsCode(plan, pos, force) {
-  const D = plan.D;
-  const d = [], k = [];
-  for (let a = 0; a < D; a++) { d.push('d' + a); k.push(a); }
-  return [
-    'if (live) {',
-    '  for (var e = L[row]; e < L[row + 1u]; e++) {',
-    '    let j = L[P.n + 1u + e];',
-    '    ' + k.map(a => `var d${a} = X[j * ${u32(D)} + ${u32(a)}] - ${pos[a]};`).join(' '),
-    `    var r = sqrt(${d.map(x => x + ' * ' + x).join(' + ')});`,
-    `    if (r == 0.0) { ${k.map(a => `d${a} = jitter(row, j, ${u32(a)});`).join(' ')} r = sqrt(${d.map(x => x + ' * ' + x).join(' + ')}); }`,
-    '    let pull = s_springCoefficient * (r - s_springLength) / r;',
-    '    ' + k.map(a => `${force[a]} += pull * d${a};`).join(' '),
-    '  }',
-    '}',
-  ];
-}
-
 // Exact repulsion over all pairs: tiles of 256 bodies (their positions and charges) in workgroup
 // memory, a channel per tree stage of the walk. A body past n has charge 0. The loop has no
 // branch: a pair on the same spot (the body itself, or a body at exactly its position) gets a
 // harmless r and adds 0, because its d is 0. Bodies that met another one on their spot then push
-// it along jitter(i, j) in a second, rare loop, as today's kernels do.
+// it along nudge(i, j) in a second, rare loop, as today's kernels do.
 function pairsCode(plan, section, index, pos, force, printer) {
   const D = plan.D;
   const charges = [];
@@ -237,6 +195,8 @@ function pairsCode(plan, section, index, pos, force, printer) {
   out.push('    }');
   for (let a = 0; a < arrays; a++) out.push(`    tile${a}[li] = e${a};`);
   out.push('    workgroupBarrier();');
+  // each tile adds up on its own first: f32 error then grows with 256 + n / 256 terms, not n
+  section.channels.forEach((c, ch) => axes.forEach(k => out.push(`    var u${ch}_${k} = 0.0;`)));
   // A fixed bound: a body past n has charge 0. A bound from P.n here ran 2.3x slower (harness)
   out.push(`    for (var k = 0u; k < ${u32(THREADS)}; k++) {`);
   for (let a = 0; a < arrays; a++) out.push(`      let b${a} = tile${a}[k];`);
@@ -244,18 +204,19 @@ function pairsCode(plan, section, index, pos, force, printer) {
   out.push(`      let r2 = ${axes.map(k => `d${k} * d${k}`).join(' + ')};`);
   out.push('      let near = r2 == 0.0;');
   out.push('      same += select(0u, 1u, near);');
-  channelTerms(plan, section, charges, tileValue, 'select(r2, 1.0, near)', printer).forEach(line => out.push('      ' + line));
+  channelTerms(plan, section, charges, tileValue, 'select(r2, 1.0, near)', printer, 'u').forEach(line => out.push('      ' + line));
   out.push('    }');
+  section.channels.forEach((c, ch) => out.push('    ' + axes.map(k => `w${ch}_${k} += u${ch}_${k};`).join(' ')));
   out.push('    workgroupBarrier();');
   out.push('  }');
-  // bodies on this body's spot (the body itself counts once): the jitter push, from the buffers
+  // bodies on this body's spot (the body itself counts once): the nudge, from the buffers
   out.push('  if (live && same > 1u) {');
   out.push('    for (var j = 0u; j < P.n; j++) {');
   out.push(`      if (j == i || ${axes.map(k => `X[j * ${u32(D)} + ${u32(k)}] != ${pos[k]}`).join(' || ')}) { continue; }`);
-  axes.forEach(k => out.push(`      let d${k} = jitter(row, j, ${u32(k)});`));
+  axes.forEach(k => out.push(`      let d${k} = nudge(row, j, ${u32(k)});`));
   out.push(`      let r2 = ${axes.map(k => `d${k} * d${k}`).join(' + ')};`);
   const fromBuffers = charges.map(charge => columnRef(plan, charge, 'j', false)[0]);
-  channelTerms(plan, section, charges, q => fromBuffers[q - D], 'r2', printer).forEach(line => out.push('      ' + line));
+  channelTerms(plan, section, charges, q => fromBuffers[q - D], 'r2', printer, 'w').forEach(line => out.push('      ' + line));
   out.push('    }');
   out.push('  }');
   // the stock repulsion and every pass skip pinned bodies
@@ -270,20 +231,37 @@ function pairsCode(plan, section, index, pos, force, printer) {
   return out;
 }
 
-// What one other body adds to every channel's sum, from d0.. and `r2` (an expression); `charge(f)`
-// reads the charge in tile slot f
-function channelTerms(plan, section, charges, charge, r2, printer) {
+// Repulsion from the pyramid (its section's code, see ../pyramid/wgsl.js), on bodies that are
+// not pinned. A channel's sensitivity is the body's column, or its sorted charge when that is the
+// same column; a gated channel's is 0 on steps where its `when` does not hold.
+function treeCode(section, force) {
+  const code = section.pyramid.section.code({
+    t: 't', i: 'row', force,
+    sensitivity: c => {
+      const channel = section.channels[c];
+      const same = channel.sensitivity === channel.charge;
+      const value = same ? `tree_charge(tk, ${u32(c)})` : local(channel.sensitivity, 0, 1);
+      if (channel.gate !== undefined) return `select(0.0, ${value}, ${slotValue(channel.gate)} != 0.0)`;
+      return same ? null : value;
+    },
+  });
+  return [`if (live && c_pinned == 0.0) ${code}`];
+}
+
+// What one other body adds to every channel's sum (`into`: u or w), from d0.. and `r2` (an
+// expression); `charge(f)` reads the charge in tile slot f
+function channelTerms(plan, section, charges, charge, r2, printer, into) {
   const D = plan.D;
   const out = [`let rr = ${r2};`];
   if (section.channels.some(c => c.law)) out.push('let r = sqrt(rr);');
   if (section.channels.some(c => !c.law)) out.push('let inverseCube = 1.0 / (rr * sqrt(rr));');
   section.channels.forEach((c, ch) => {
     const q = charge(D + charges.indexOf(c.charge));
-    const add = k1 => Array.from({ length: D }, (_, k) => `w${ch}_${k} += (${q} * ${k1}) * d${k};`).join(' ');
+    const add = k1 => Array.from({ length: D }, (_, k) => `${into}${ch}_${k} += (${q} * ${k1}) * d${k};`).join(' ');
     let line;
     if (!c.law) line = add('inverseCube');
     else {
-      const code = renameLaw(emitLaw(c.law, D, 'r', 'k' + ch, undefined, printer), ch);
+      const code = withTables(renameLaw(emitLaw(c.law, D, 'r', 'k' + ch, undefined, printer), ch), c.tables);
       line = c.law.hasRange ? `if (rr <= law${ch}Range2) { ${code} ${add('k' + ch)} }` : `{ ${code} ${add('k' + ch)} }`;
     }
     // a gated pass adds nothing on the steps where its `when` does not hold
@@ -313,39 +291,6 @@ function sumCode(plan, kernel, section, index, printer) {
   const lines = compiled.lines.slice();
   codes.forEach((code, k) => lines.push(`sv${s}_${k} = select(0.0, ${code}, live);`));
   return ['{'].concat(lines.map(line => '  ' + line), ['}']);
-}
-
-// What names mean in a formula on the GPU: the body's own columns (locals of the kernel), the
-// stage's params and built in values (from the step's slot), sums (from S)
-function scopeOf(plan, section) {
-  const D = plan.D;
-  return {
-    D,
-    name(key) {
-      const column = plan.columns[key];
-      if (key === 'pos') {
-        // positions are relative to the origin on the device; a formula sees where bodies are
-        return { type: 'vec', codes: locals(plan, 'pos').map((name, k) => `(${name} + s_origin_${k})`), write: null };
-      }
-      if (column) {
-        const names = locals(plan, key);
-        const write = (op, value) => {
-          const codes = value.codes || [value.code];
-          return names.map((name, k) => `${name} ${op} ${codes[k]};`);
-        };
-        return column.width === 1 ? { type: 'num', code: names[0], write } : { type: 'vec', codes: names, write };
-      }
-      if (section.params && section.params[key] !== undefined) return { type: 'num', code: slotValue(section.params[key]) };
-      const sum = plan.sums[key];
-      if (sum) {
-        const codes = [];
-        for (let k = 0; k < sum.width; k++) codes.push(`g_${key}_${k}`);
-        return sum.width === 1 ? { type: 'num', code: codes[0] } : { type: 'vec', codes };
-      }
-      if (section.builtIns && section.builtIns[key] !== undefined) return { type: 'num', code: slotValue(section.builtIns[key]) };
-      return undefined;
-    },
-  };
 }
 
 // Adds up the kernel's sums over its workgroup with a fixed tree, and writes one partial per
@@ -467,20 +412,4 @@ function fireStateKernel(plan) {
   out.push('  }');
   out.push('}');
   return out.join('\n') + '\n';
-}
-
-// A direction for two bodies on the same spot, from their indices: axis k of a unit vector of
-// about 0.01, the same for (a, b) and (b, a) but for the sign, so the two are pushed apart
-function JITTER(D) {
-  return `fn jitterAxis(a: u32, b: u32, k: u32) -> f32 {
-  var h = min(a, b) * 747796405u + max(a, b) * 2891336453u + k * 1013904223u + 1u;
-  h = ((h >> 16u) ^ h) * 0x45d9f3bu; h = ((h >> 16u) ^ h) * 0x45d9f3bu; h = (h >> 16u) ^ h;
-  return f32(h) * (2.0 / 4294967296.0) - 1.0;
-}
-fn jitter(a: u32, b: u32, k: u32) -> f32 {
-  var norm = 0.0;
-  for (var axis = 0u; axis < ${u32(D)}; axis++) { let x = jitterAxis(a, b, axis); norm += x * x; }
-  let x = select(jitterAxis(a, b, k), select(0.0, 1.0, k == 0u), norm == 0.0);
-  return select(-0.01, 0.01, a < b) * x / select(sqrt(norm), 1.0, norm == 0.0);
-}`;
 }
