@@ -602,3 +602,22 @@ test('grouped sums follow groups that grow and shrink', function (t) {
   });
   t.end();
 });
+
+test('pair formulas find pairs just inside the radius, at any scale', function (t) {
+  // 1e-150: squares near underflow, where the squared test is off
+  [1, 1e-150, 1e150].forEach(function (scale) {
+    var sim = createSimulator({ dimensions: 2 });
+    var r = 0.7 * scale;
+    sim.addBodyAt({ x: 0, y: 0 });
+    sim.addBodyAt({ x: r, y: 0 });
+    sim.addBodyAt({ x: 0, y: 3 * r });
+    ['repulsion', 'drag', 'springs', 'integrate'].forEach(function (name) { sim.removeStage(name); });
+    sim.store.define('count');
+    // the next number above r: the pair at distance r is inside, the one at 3r is not
+    var radius = r * (1 + Number.EPSILON);
+    sim.addPairFormula('near', { radius: radius, startAtZero: ['count'], formula: 'count_i += 1; count_j += 1; push = 0' });
+    sim.step();
+    t.same(Array.from(sim.store.count.subarray(0, 3)), [1, 1, 0], 'scale ' + scale);
+  });
+  t.end();
+});
