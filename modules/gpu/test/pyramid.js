@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { planPyramid, chooseGrid, pyramidMemory } from '../pyramid/plan.js';
 import { walkGroups, walkChannels } from '../pyramid/channels.js';
+import { pyramidStatus } from '../pyramid/build.js';
 import { SPEC_LIMITS } from '../check.js';
 
 const require = createRequire(import.meta.url);
@@ -95,7 +96,7 @@ test('refusals name what does not fit, with the numbers', () => {
   assert.equal(planPyramid({ D: 3, n: 1000, limits: SPEC_LIMITS, pos: pos(3), channels: stock, grid: 128 }).refusal,
     'the grid pyramid takes up to 2^20 cells; 128^3 is more');
   const big = plan(2, 1000000, v25());
-  assert.equal(big.refusal, 'the tree pass with 6 charges in 2D at 1,000,000 bodies needs 213 MiB for its cells; this device allows 128 MiB per buffer');
+  assert.equal(big.refusal, 'the tree pass with 6 charges in 2D at 1,000,000 bodies needs 259 MiB for its cells; this device allows 128 MiB per buffer');
   assert.equal(plan(2, 1000000, v25(), Object.assign({}, SPEC_LIMITS, { maxStorageBufferBindingSize: 2 ** 32 - 4, maxBufferSize: 2 ** 32 - 4 })).refusal, null);
   const bytes = pyramidMemory(2, 1000000, v25());
   assert.equal(bytes.treeCells, big.buffers.treeCells);
@@ -124,4 +125,27 @@ test('walk groups: the library\'s walks, else tree stages next to each other', (
   const channels = walkChannels(group, { column: name => ({ buffer: 'H', name }), law: () => null });
   assert.deepEqual(channels.map(c => [c.stage, c.centroid, c.charge.name, c.sensitivity, c.sameColumn]),
     [['repulsion', 'own', 'mass', 'mass', true], ['core', 'own', 'mass', 'mass', true], ['leaves', 'shared', 'leafq', 'core', false]]);
+});
+
+test('laws that fall slower than 1/r^2 get second-order expansions, and wider near cells in 2D', () => {
+  const law = spec => { const compiled = createRepulsionLaw(spec); compiled.update({ settings: { dimensions: 2 } }); return compiled; };
+  const one = (D, compiled) => plan(D, 5000, [{ stage: 'repulsion', law: compiled, centroid: 'own', charge: column('H', 0) }]);
+  const slow = { force: 'a / r', params: { a: 10 } };
+  assert.equal(one(2, law(slow)).groups[0].second, true);
+  assert.equal(one(2, law(slow)).layout.LSW, 2 + 2 + 3 + 4, 'centre, field, Jacobian, 4 second derivatives');
+  assert.equal(one(3, law(slow)).groups[0].second, true);
+  assert.match(one(2, law(slow)).section.declarations, /max\(cx0 - 2, 0\)/, '5 x 5 near cells in 2D');
+  assert.match(one(3, law(slow)).section.declarations, /max\(cx0 - 1, 0\)/, '3 x 3 x 3 near cells in 3D');
+  assert.ok(!one(2, law(slow)).kernels.TREE_HEAVY && one(3, law(slow)).kernels.TREE_HEAVY);
+  assert.equal(one(2, law({ force: 'exp(-r / L) / r^2', params: { L: 30 } })).groups[0].second, false);
+  assert.equal(one(2, null).groups[0].second, false);
+  assert.match(one(2, law(slow)).kernels.TREE_LOCAL, /fn tree_k123_0/);
+});
+
+test('crowded cells: a status word turns into a halt message', () => {
+  assert.equal(pyramidStatus([0, 3, 0, 120]), null);
+  assert.match(pyramidStatus([0, 2, 100000, 20000]), /a grid cell holds 100,000 bodies.*20\.0 billion pair evaluations/);
+  const p = plan(2, 100000, stock);
+  assert.ok(p.buffers.treeLists >= (4 + Math.floor(100000 / 1025) + 1) * 4, 'room for every crowded cell');
+  assert.match(p.section.declarations, /if \(crowded\)/);
 });

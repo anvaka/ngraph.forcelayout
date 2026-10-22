@@ -8,10 +8,13 @@
 //   // then the caller's node kernel, with tree.buffers bound as plan.section.bindings says
 import { getPipeline } from '../device.js';
 import { writeLawValues } from '../wgsl/print.js';
-import { boxLayout, WG } from './wgsl.js';
+import { boxLayout, WG, CROWD_GROUPS } from './wgsl.js';
 import { NEAR_CAP } from './plan.js';
 
-const PARAM_WORDS = 12;
+const PARAM_WORDS = 20;
+// Pair evaluations a step may spend on crowded cells (cells past the near cap) before the step
+// is refused: about 20 ms of this Mac's GPU
+export const WORK_CAP = 2e9;
 
 /**
  * Buffers, pipelines and bind groups for `plan` (planPyramid()). `buffers` are the caller's, by
@@ -22,18 +25,16 @@ const PARAM_WORDS = 12;
  * Resolves once the pipelines are compiled; rejects naming the kernel when one fails, or when the
  * buffers cannot be created.
  */
-export async function buildPyramid(device, plan, { buffers: external = {}, step = null, nearCap = NEAR_CAP, groupLimit = 0 } = {}) {
+export async function buildPyramid(device, plan, { buffers: external = {}, step = null, groupLimit = 0, workCap = WORK_CAP } = {}) {
   if (plan.refusal) throw new Error(plan.refusal);
   const { D, sizes, kernels, columns } = plan;
-  // LOCAL reads treeMeta for counts (when cells have no room for them) or bodies' cells (heads)
-  const localMeta = plan.layout.CNT < 0 || plan.heads;
   const missing = [].concat(...Object.values(columns)).filter(name => !external[name]);
   if (missing.length) throw new Error('buildPyramid: no buffer for ' + missing.join(', '));
 
   const jobs = Object.keys(kernels).map(name => {
     const options = { code: kernels[name], label: name };
     const stepBinding = step ? [step.dynamic ? 'dynamic' : 'uniform'] : [];
-    if (name === 'TREE_LOCAL' && step) options.bindings = ['uniform', 'storage'].concat(localMeta ? ['read'] : [], plan.heavyCells ? ['storage'] : [], stepBinding);
+    if (name === 'TREE_LOCAL' && step) options.bindings = ['uniform', 'storage', 'read', 'storage', 'read'].concat(stepBinding);
     if (name === 'TREE_HEAVY' && step) options.bindings = ['uniform', 'read', 'read', 'storage', 'read'].concat(stepBinding);
     return getPipeline(device, options).then(pipeline => [name, pipeline]);
   });
@@ -56,7 +57,7 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
   const treeMeta = buf(sizesOf.treeMeta, S | CS);
   const treeSp = buf(sizesOf.treeSp, S | CS);
   const treeCells = buf(sizesOf.treeCells, S | CD | CS);
-  const treeHeavy = plan.heavyCells ? buf(sizesOf.treeHeavy) : null;
+  const treeLists = buf(sizesOf.treeLists, S | CS);
   const paramBytes = (PARAM_WORDS + plan.lawWords) * 4;
   const TP = buf(Math.max(64, Math.ceil(paramBytes / 16) * 16), U | CD);
   const nbU = buf(16, U | CD);
@@ -74,7 +75,11 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
   const pu = new Uint32Array(params), pf = new Float32Array(params);
   pu[0] = sizes.n; pu[1] = sizes.G; pu[2] = sizes.levels; pu[3] = sizes.nCells;
   pu[4] = sizes.locOff; pu[5] = sizes.metaTag; pu[6] = sizes.metaRow; pu[7] = sizes.metaCount;
-  pu[8] = nearCap; pu[9] = Math.max(1, Math.floor(sizes.n / 1000)); pf[10] = -1; pu[11] = sizes.pyrSize - 1;
+  pu[8] = NEAR_CAP; pu[9] = Math.max(1, Math.floor(sizes.n / 1000)); pf[10] = -1; pu[11] = sizes.pyrSize - 1;
+  // LOCAL's own workgroups, then CROWD_GROUPS more for the crowded cells
+  const localThreads = plan.heads ? sizes.n + sizes.localCells - sizes.nCells : sizes.localCells;
+  const localGroups = Math.ceil(localThreads / WG);
+  pu[12] = localGroups; pu[13] = sizes.crowdOff; pf[14] = workCap; pu[15] = sizes.crowdList; pu[16] = sizes.occList;
 
   const bind = (name, list, pipeline = pipes[name]) => device.createBindGroup({
     layout: pipeline.getBindGroupLayout(0),
@@ -88,17 +93,17 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
   const stepEntry = step ? [{ buffer: step.buffer, size: step.size }] : [];
   const groups = {
     TREE_HIST: both('TREE_HIST', p => [TP].concat(cols('TREE_HIST', p), [treeBox])),
-    TREE_BOX: bind('TREE_BOX', [TP, treeBox].concat(plan.heavyCells ? [treeHeavy] : [])),
+    TREE_BOX: bind('TREE_BOX', [TP, treeBox, treeLists]),
     TREE_BIN: both('TREE_BIN', p => [TP].concat(cols('TREE_BIN', p), [treeBox, treeCount, treeWork])),
     TREE_SCAN_BLOCKS: bind('TREE_SCAN_BLOCKS', [treeCount, treeMeta, treeBlocks]),
     TREE_SCAN_TOP: bind('TREE_SCAN_TOP', [treeBlocks, nbU]),
     TREE_SCAN_ADD: bind('TREE_SCAN_ADD', [TP, treeMeta, treeBlocks]),
     TREE_PLACE: bind('TREE_PLACE', [TP, treeMeta, treeWork]),
     TREE_ORDER: both('TREE_ORDER', p => [TP].concat(cols('TREE_ORDER', p), [treeWork, treeMeta, treeSp])),
-    TREE_AGG0: bind('TREE_AGG0', [TP, treeSp, treeMeta, treeCells]),
-    TREE_LOCAL: bind('TREE_LOCAL', [TP, treeCells].concat(localMeta ? [treeMeta] : [], plan.heavyCells ? [treeHeavy] : [], stepEntry)),
+    TREE_AGG0: bind('TREE_AGG0', [TP, treeSp, treeMeta, treeCells, treeLists]),
+    TREE_LOCAL: bind('TREE_LOCAL', [TP, treeCells, treeMeta, treeLists, treeSp].concat(stepEntry)),
   };
-  if (plan.heavyCells) groups.TREE_HEAVY = bind('TREE_HEAVY', [TP, treeSp, treeMeta, treeCells, treeHeavy].concat(stepEntry));
+  if (plan.heavyCells) groups.TREE_HEAVY = bind('TREE_HEAVY', [TP, treeSp, treeMeta, treeCells, treeLists].concat(stepEntry));
   const levels = [];
   for (let l = 0; l < sizes.levels; l++) {
     const count = (sizes.G >> (l + 1)) ** D;
@@ -123,7 +128,7 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     return [x, Math.ceil(w / x)];
   }
   const nodes = grid(sizes.n), cells = grid(sizes.nCells);
-  const locals = grid(plan.heads ? sizes.n + sizes.localCells - sizes.nCells : sizes.localCells);
+  const locals = grid((localGroups + CROWD_GROUPS) * WG);
   const histGroups = Math.min(nodes[0] * nodes[1], 128);
   let parity = 0;
   function dispatch(pass, name, size) {
@@ -179,6 +184,9 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
       }
     },
     boxBuffer: treeBox,
+    // Copy these 16 bytes into a readback and give the 4 words to pyramidStatus(): non-null means
+    // the step's crowded cells were refused and the runner should halt with that message
+    status: { buffer: treeLists, offset: 0, size: 16 },
     destroy() {
       for (const b of owned) b.destroy();
     },
@@ -194,4 +202,17 @@ function writeTables(device, treeCells, plan) {
     (group.tables || []).forEach(table => { data.set(table.values, table.base); });
   });
   device.queue.writeBuffer(treeCells, 0, data);
+}
+
+/**
+ * The message to halt with for the 4 status words of a step (tree.status), or null. Cells of more
+ * than NEAR_CAP bodies are summed exactly in workgroups; past `workCap` pair evaluations a step
+ * (a layout piled into a few cells), they are refused rather than sampled.
+ */
+export function pyramidStatus(words) {
+  const biggest = words[2];
+  if (!biggest) return null;
+  return `the tree pass: a grid cell holds ${biggest.toLocaleString('en-US')} bodies, and the crowded cells need about ` +
+    `${(words[3] / 1000).toFixed(1)} billion pair evaluations a step, more than the GPU takes (${WORK_CAP / 1e9} billion); ` +
+    'the layout is piled too densely in one place for the grid';
 }

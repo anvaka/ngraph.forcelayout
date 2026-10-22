@@ -51,7 +51,8 @@ test('WGSL law code gives the same numbers as the JS code', () => {
 
 test('laws the GPU cannot run are refused', () => {
   assert.throws(() => emitLaw(createRepulsionLaw({ force: 'K(r)', functions: { K: { value: Math.cos } } }), 2, 'r', 'k1'), /custom functions/);
-  assert.throws(() => emitLaw(createRepulsionLaw({ force: 'T(r)', tables: { T: { from: 0, to: 1, values: [1, 0] } } }), 2, 'r', 'k1', 'k2'), /tables/);
+  // a table prints as the law compiler's call, for the caller to look up
+  assert.match(emitLaw(createRepulsionLaw({ force: 'T(r)', tables: { T: { from: 0, to: 1, values: [1, 0] } } }), 2, 'r', 'k1', 'k2'), /lawFunctions\.T\.value\(/);
   assert.throws(() => emitLaw(createRepulsionLaw('1e300 / r^2'), 2, 'r', 'k1'), /1e\+300 does not fit a 32-bit float/);
 });
 

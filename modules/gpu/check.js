@@ -19,7 +19,7 @@
 //  - `when` on any of these.
 // Everything else gets a refusal that says what does not run.
 import formula from '../../lib/formula.js';
-import { createPrinter, emitLaw, lawValueProblem, lawValueWarnings, f32Problem } from './wgsl/print.js';
+import { createPrinter, emitLaw, lawValueProblem, lawValueWarnings, f32Problem, F32_MAX } from './wgsl/print.js';
 import { schedule } from './schedule.js';
 import { physicsStages, isGuard } from './program.js';
 
@@ -205,7 +205,7 @@ function checkStage(stage, program, simulator, printer, laws, facts) {
     case 'pair':
       return refuse('WebGPU does not run pair formulas yet');
     case 'host':
-      return refuse('WebGPU does not run host steps yet');
+      return runs(`on the host, on the steps where its \`when\` holds: the step stops there and reads back ${(stage.reads || []).map(r => r.column).join(', ') || 'nothing'}`);
     case 'js':
       return refuse('JavaScript stages run on the CPU only (formula stages and host steps run on other engines too)');
     case 'pair rules':
@@ -232,8 +232,9 @@ function columnsProblem(stage, facts) {
 
 function checkTree(stage, simulator, printer, laws) {
   const described = stage.args.channels[0].law;
-  if (described.tables.length) return refuse('WebGPU does not run laws with lookup tables yet');
   if (described.functions.length) return refuse('laws with JavaScript functions run on the CPU only');
+  const badTable = tableProblem(described.tables);
+  if (badTable) return refuse("the law's " + badTable);
   if (described.isDefault) {
     laws[stage.name] = null;
     return runs('part of the step');
@@ -263,7 +264,8 @@ function checkIntegrate(stage, facts) {
 
 // A node formula or a sum: what it reads must run here, and its WGSL must print
 function checkFormula(stage, facts, printer) {
-  if (stage.tables.length) return refuse('WebGPU does not run lookup tables in formulas yet');
+  const badTable = tableProblem(stage.tables);
+  if (badTable) return refuse(badTable);
   try {
     printFormula(stage, facts, printer);
   } catch (e) {
@@ -277,7 +279,8 @@ function checkFormula(stage, facts, printer) {
 // do both yet
 function checkLink(stage, facts, printer) {
   if (stage.args.counters) return refuse('WebGPU has no adaptive time step');
-  if (stage.tables.length) return refuse('WebGPU does not run lookup tables in formulas yet');
+  const badTable = tableProblem(stage.tables);
+  if (badTable) return refuse(badTable);
   const moves = stage.writes.some(write => write.via === 'pull' || (write.space === 'nodes' && write.end));
   const linkWrites = stage.writes.filter(write => write.space === 'links');
   if (moves && linkWrites.length) return refuse('WebGPU does not run link formulas that both move bodies and write link columns yet');
@@ -318,6 +321,7 @@ function printFormula(stage, facts, printer, link) {
         if (column) return column;
       }
       if (stage.params.some(p => p.name === key)) return { type: 'num', code: 'p_' + key };
+      if (stage.tables.some(t => t.name === key)) return { call: args => `t_${key}(${args[0]})` };
       const sum = facts.sums[key];
       if (sum) {
         const width = sum.width === 'D' ? facts.D : sum.width;
@@ -355,6 +359,17 @@ function budgets(plan, limits, reasons, printer) {
   });
   const most = limits.maxComputeWorkgroupsPerDimension * THREADS;
   if (plan.nodes > most) reasons.push(`WebGPU runs up to ${most.toLocaleString('en-US')} bodies (one thread each); this layout has ${plan.nodes.toLocaleString('en-US')}`);
+}
+
+// Why lookup tables do not fit 32-bit floats, or null (values beyond f32; tiny ones may become 0,
+// which a table can afford)
+function tableProblem(tables) {
+  for (const table of tables || []) {
+    for (const value of [table.from, table.to].concat(Array.from(table.values))) {
+      if (!Number.isFinite(value) || Math.abs(value) > F32_MAX) return `table ${table.name}: ${f32Problem(value)}`;
+    }
+  }
+  return null;
 }
 
 function megabytes(bytes) {

@@ -71,7 +71,8 @@ export function isStockStep(program, laws, data = { linksDefault: true }) {
   if (repulsion.charge !== 'mass' || repulsion.sensitivity !== 'mass') return false;
   if (stages[4].args.inertia !== 'mass') return false;
   const law = laws.repulsion;
-  return !law || lawValueCount(law) <= LAW_VALUES;
+  // the template's law has no lookup tables
+  return !law || (lawValueCount(law) <= LAW_VALUES && !law.describe().tables.length);
 }
 
 function stockPlan(program, law) {

@@ -29,8 +29,9 @@
 //   S  storage read_write: velocity, force, node columns that stages write, link columns that
 //      stages write (link order), sum results, per-row values of sums per group, FIRE state,
 //      partial sums
-//   H  storage read: node columns only the host writes (mass, pinned, ...), and link columns only
-//      the host writes, in CSR order (each link at both of its ends)
+//   H  storage read: node columns only the host writes (mass, pinned, ...), link columns only the
+//      host writes, in CSR order (each link at both of its ends), and lookup tables (formulas' and
+//      laws'), read through table_<id>() functions
 //   L  storage read (u32): [first entry of each row (n + 1) | other body of each entry (2m) | link
 //      and role of each entry (2m) | entry of each link at its from end (m) | from (m) | to (m) |
 //      where the blocks below start (1 + group columns) | the chunks of links | a block per group
@@ -112,7 +113,9 @@ export function genericPlan(program, laws, options = {}) {
       while (at < stages.length && (stages[at].builtIn === 'repulsion' || (!stages[at].builtIn && stages[at].shape === 'tree'))) {
         const tree = stages[at];
         const channel = tree.args.channels[0];
-        walk.push({ stage: tree, charge: channel.charge, sensitivity: channel.sensitivity, law: laws[tree.name] || null });
+        // a charge with the centroid 'shared' acts from its walk's first charge's centre (the K-charge
+        // tree's args, when the library gives them)
+        walk.push({ stage: tree, charge: channel.charge, sensitivity: channel.sensitivity, law: laws[tree.name] || null, centroid: channel.centroid || 'own' });
         at++;
       }
       at--;
@@ -122,6 +125,7 @@ export function genericPlan(program, laws, options = {}) {
       const adds = stage.writes.some(write => write.space === 'nodes' && write.end);
       sections.push({ kind: pulls || adds ? 'gather' : 'linkset', stage, pulls });
     } else if (kind === 'node') sections.push({ kind: 'formula', stage });
+    else if (kind === 'host') sections.push({ kind: 'host', stage });
     else if (kind === 'sum') {
       const sum = sumInfo[stage.name];
       sections.push({ kind: sum.group ? 'groupsum' : 'sum', stage, sum });
@@ -138,7 +142,8 @@ export function genericPlan(program, laws, options = {}) {
   // don't read it (drag, springs, addRepulsion's default place before integrate): the order of
   // additions is all that changes
   for (let k = 0; k < sections.length; k++) {
-    if (sections[k].kind !== 'pairs') continue;
+    // a walk whose charges share its first one's centre keeps that first charge: it stays apart
+    if (sections[k].kind !== 'pairs' || sections[k].channels.some(c => c.centroid === 'shared')) continue;
     let p = k - 1;
     while (p >= 0 && sections[p].kind !== 'pairs' && onlyAddsForce(sections[p])) p--;
     if (p >= 0 && sections[p].kind === 'pairs') {
@@ -235,6 +240,27 @@ export function genericPlan(program, laws, options = {}) {
   // what the stock springs read: the settings while every link has the defaults
   sections.forEach(section => { if (section.kind === 'springs') section.own = !!(linkColumns.length || linkColumns.coefficient); });
 
+  // lookup tables of formulas and of laws in tile loops (the pyramid keeps its own), in H
+  const tables = [];
+  const addTable = spec => {
+    tables.push({ id: tables.length, name: spec.name, from: spec.from, to: spec.to, values: spec.values, offset: hSize });
+    hSize += spec.values.length;
+    return tables.length - 1;
+  };
+  sections.forEach(section => {
+    if (section.kind === 'pairs') {
+      section.channels.forEach(channel => {
+        if (!channel.law) return;
+        channel.tables = Object.create(null);
+        channel.law.describe().tables.forEach(spec => { channel.tables[spec.name] = addTable(spec); });
+      });
+      return;
+    }
+    if (!section.stage || !section.stage.tables || !section.stage.tables.length) return;
+    section.tables = Object.create(null);
+    section.stage.tables.forEach(spec => { section.tables[spec.name] = addTable(spec); });
+  });
+
   // chunked gathers: per chunk, the force it adds and what it adds into each column
   const maxChunks = Math.ceil(2 * m / LINK_CHUNK) + n;
   sections.forEach(section => {
@@ -291,6 +317,8 @@ export function genericPlan(program, laws, options = {}) {
       return;
     }
     const stage = section.stage;
+    // a host step's `when` and numbers are the host's
+    if (section.kind === 'host') return;
     if (stage.when) section.gate = slot.add('gate', stage.name);
     section.params = Object.create(null);
     stage.params.forEach(param => { section.params[param.name] = slot.add('param', stage.name, param.name); });
@@ -344,6 +372,12 @@ export function genericPlan(program, laws, options = {}) {
       afterIntegrate = true;
       continue;
     }
+    if (section.kind === 'host') {
+      // the step stops here on the steps where the host step runs (see runner.js)
+      close();
+      kernels.push({ kind: 'host', name: section.stage.name, section });
+      continue;
+    }
     if (section.kind === 'linkset') {
       // a thread per link: a kernel of its own, shared with the link stages right after it
       const previous = kernels[kernels.length - 1];
@@ -386,7 +420,7 @@ export function genericPlan(program, laws, options = {}) {
   close();
   // names in step order
   kernels.forEach((kernel, index) => {
-    if (kernel.name) return;
+    if (kernel.name || kernel.kind === 'host') return;
     const prefix = { node: 'STEP', reduce: 'REDUCE', link: 'LINKS', groupRuns: 'GROUP_RUNS', groupSum: 'GROUP_SUM', chunks: 'LINK_CHUNKS' }[kernel.kind];
     kernel.name = prefix + index;
   });
@@ -416,7 +450,7 @@ export function genericPlan(program, laws, options = {}) {
     };
     pyramid = planPyramid({
       D, n, limits: options.limits, warn: options.warn,
-      channels: pyramidWalk.channels.map(c => ({ stage: c.stage.name, law: c.law, centroid: 'own', charge: colRef(c.charge) })),
+      channels: pyramidWalk.channels.map((c, k) => ({ stage: c.stage.name, law: c.law, centroid: k === 0 ? 'own' : c.centroid, charge: colRef(c.charge) })),
       pos: { buffer: 'X', at: (row, k) => `X[${row} * ${D}u + ${k}u]` },
       values: {
         decl: binding => `@group(0) @binding(${binding}) var<uniform> V: array<vec4f, ${done.floats / 4}>;`,
@@ -449,6 +483,8 @@ export function genericPlan(program, laws, options = {}) {
     linkColumns,
     groupColumns,
     chunked,
+    tables,
+    hostSteps: kernels.filter(k => k.kind === 'host').map(k => k.name),
     sums,
     sumWidth,
     S: { size: sSize, fire, firePartials, partials },
