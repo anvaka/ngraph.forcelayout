@@ -18,7 +18,8 @@ export { GUARD, STOCK_STAGES, isGuard, physicsStages, SMALL_GRAPH };
 /**
  * The plan for `program`, or {refusal}. `laws` maps every tree stage to its compiled law (null for
  * 1/r^2); `limits` a device's or a capability profile's; `options.generic` keeps the stock step
- * off its template (for tests that compare the two). A plan has {template, nodes, buffers,
+ * off its template (for tests that compare the two), `options.smallGraph` overrides N* (for
+ * measurements). A plan has {template, nodes, buffers,
  * kernels(), kernelStages, how, reads}:
  *  - buffers: bytes per buffer; kernels(): the WGSL of every kernel by name;
  *  - kernelStages: the stages each kernel computes; how: per stage, for plan();
@@ -26,8 +27,9 @@ export { GUARD, STOCK_STAGES, isGuard, physicsStages, SMALL_GRAPH };
  */
 export function schedule(program, laws, limits, options = {}) {
   const nodes = program.spaces.nodes;
-  if (!options.generic && nodes > SMALL_GRAPH && isStockStep(program, laws)) return stockPlan(program, laws.repulsion || null);
-  const plan = genericPlan(program, laws, { limits, warn: options.warn });
+  const smallGraph = options.smallGraph || SMALL_GRAPH;
+  if (!options.generic && nodes > smallGraph && isStockStep(program, laws)) return stockPlan(program, laws.repulsion || null);
+  const plan = genericPlan(program, laws, { limits, warn: options.warn, smallGraph });
   if (plan.refusal) return plan;
   plan.buffers = Object.assign({
     S: plan.S.size * 4, H: plan.H.size * 4, X: plan.cap * plan.D * 4, Y: plan.cap * plan.D * 4,

@@ -48,10 +48,11 @@ export function slotValue(index) {
  * The generic plan of `program`, or {refusal} when it cannot take it (the stages themselves are
  * checked by check.js before). `laws` maps a tree stage's name to its compiled law (null for
  * 1/r^2); `options.limits` the device's (for the pyramid's buffers), `options.warn` takes the
- * printer's warnings.
+ * printer's warnings, `options.smallGraph` overrides N* (for measurements).
  */
 export function genericPlan(program, laws, options = {}) {
   const D = program.dims, n = program.spaces.nodes;
+  const smallGraph = options.smallGraph || SMALL_GRAPH;
   const stages = physicsStages(program);
   const columnInfo = Object.create(null);
   program.columns.nodes.forEach(column => { columnInfo[column.name] = column; });
@@ -103,7 +104,7 @@ export function genericPlan(program, laws, options = {}) {
   }
   // Above N* in 2D and 3D, the first group of tree passes walks the pyramid
   const walks = sections.filter(s => s.kind === 'pairs');
-  const pyramidWalk = n > SMALL_GRAPH && D <= 3 && walks.length ? walks[0] : null;
+  const pyramidWalk = n > smallGraph && D <= 3 && walks.length ? walks[0] : null;
   if (pyramidWalk) pyramidWalk.kind = 'tree';
   if (n > MAX_PAIRS && sections.some(s => s.kind === 'pairs')) {
     return {
