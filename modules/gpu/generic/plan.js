@@ -290,7 +290,9 @@ export function genericPlan(program, laws, options = {}) {
   sections.forEach(section => {
     if ((section.kind !== 'springs' && section.kind !== 'gather') || !chunked) return;
     const parts = [];
-    if (section.kind === 'springs' || section.pulls) parts.push({ column: 'force', width: D });
+    // the force: from a pull, or added at an end (force_i += ...)
+    const forceAtEnd = section.kind === 'gather' && section.stage.writes.some(write => write.space === 'nodes' && write.end && write.column === 'force');
+    if (section.kind === 'springs' || section.pulls || forceAtEnd) parts.push({ column: 'force', width: D });
     if (section.kind === 'gather') {
       section.stage.writes.forEach(write => {
         if (write.space === 'nodes' && write.end && write.column !== 'force' && !parts.some(p => p.column === write.column)) {

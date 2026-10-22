@@ -85,9 +85,14 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   if (integerProblem) throw new Error(`the column ${integerProblem} holds integers above 2^24, which 32-bit floats cannot hold exactly`);
   plan.tables.forEach(table => hData.set(table.values, table.offset));
   const results = simulator.sums();
+  // the sums' last results: a gated sum is read with them until it runs again
   Object.values(plan.sums).forEach(sum => {
     const result = results[sum.name];
-    if (result && result.value) for (let k = 0; k < sum.width; k++) sData[sum.offset + k] = result.value[k];
+    if (!result) return;
+    if (sum.grouped) {
+      const count = Math.min(sum.count, result.count || 0) * sum.width;
+      for (let k = 0; k < count; k++) sData[sum.offset + k] = result.groups[k];
+    } else if (result.value) for (let k = 0; k < sum.width; k++) sData[sum.offset + k] = result.value[k];
   });
   sData.set(fireState || [0.1, 0, 0, 0], plan.S.fire);
   device.queue.writeBuffer(S, 0, sData);
