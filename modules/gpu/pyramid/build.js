@@ -191,6 +191,8 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     // a step since the buffers were made had its crowded cells refused (the words keep the first
     // such step's numbers), and the runner should halt with that message
     status: { buffer: treeLists, offset: 0, size: 16 },
+    // pyramidStatus() with this pyramid's cap
+    statusMessage: words => pyramidStatus(words, workCap),
     destroy() {
       for (const b of owned) b.destroy();
     },
@@ -211,12 +213,13 @@ function writeTables(device, treeCells, plan) {
 /**
  * The message to halt with for the 4 status words of a step (tree.status), or null. Cells of more
  * than NEAR_CAP bodies are summed exactly in workgroups; past `workCap` pair evaluations a step
- * (a layout piled into a few cells), they are refused rather than sampled.
+ * (a layout piled into a few cells; buildPyramid's), they are refused rather than sampled.
  */
-export function pyramidStatus(words) {
+export function pyramidStatus(words, workCap = WORK_CAP) {
   const biggest = words[2];
   if (!biggest) return null;
+  const cap = workCap / 1e9;
   return `the tree pass: a grid cell holds ${biggest.toLocaleString('en-US')} bodies, and the crowded cells need about ` +
-    `${(words[3] / 1000).toFixed(1)} billion pair evaluations a step, more than the GPU takes (${WORK_CAP / 1e9} billion); ` +
+    `${(words[3] / 1000).toFixed(1)} billion pair evaluations a step, more than the GPU takes (${cap >= 1 ? cap.toFixed(0) : cap.toFixed(2)} billion); ` +
     'the layout is piled too densely in one place for the grid';
 }
