@@ -111,7 +111,7 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     const count = plan.blockSteps ? (sizes.G >> from) ** D : (sizes.G >> (from + 1)) ** D;
     device.queue.writeBuffer(u, 0, new Uint32Array(plan.blockSteps ? [count, sizes.levelOff[from], steps, sizes.metaCount] :
       [count, sizes.levelOff[from], sizes.levelOff[from + 1], sizes.metaCount]));
-    return { count, group: bind('TREE_PYR', [u, treeCells].concat(plan.layout.CNT < 0 ? [treeMeta] : [])) };
+    return { count, group: bind('TREE_PYR', [u, treeCells].concat(plan.layout.CNT < 0 ? [treeMeta] : [], plan.hubs ? [treeBox] : [])) };
   });
   const errors = await Promise.all([device.popErrorScope(), device.popErrorScope()]);
   const setupError = errors.find(Boolean);
@@ -188,7 +188,8 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     },
     boxBuffer: treeBox,
     // Copy these 16 bytes into a readback and give the 4 words to pyramidStatus(): non-null means
-    // the step's crowded cells were refused and the runner should halt with that message
+    // a step since the buffers were made had its crowded cells refused (the words keep the first
+    // such step's numbers), and the runner should halt with that message
     status: { buffer: treeLists, offset: 0, size: 16 },
     destroy() {
       for (const b of owned) b.destroy();

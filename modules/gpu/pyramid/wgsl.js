@@ -41,8 +41,10 @@ const HEAVY = 8;
 const HEAVY_GROUPS = 64, HEAVY_THREADS = 64;
 // Workgroups that TREE_LOCAL adds for crowded cells (see tree_crowd)
 export const CROWD_GROUPS = 128;
-// treeLists: heavy count, crowded count, status (the largest crowded cell when their work is over
-// the cap, else 0), work (millions of pair evaluations), occupied count, 3 spare, then the lists
+// treeLists: heavy count, crowded count, status (the largest crowded cell of the first step whose
+// crowded work was over the cap, else 0; it stays until the buffers are made again, so a readback
+// after a batch sees it), that step's work (millions of pair evaluations), occupied count, hub
+// count, 2 spare, then the lists. BOX clears the counts every step, not the status.
 export const LIST_HEAD = 8;
 // Heavy bodies (hubs, 2D): a body whose charges pass HEAVY times the mean takes its far field from
 // TREE_LOCAL's HUB_GROUPS extra workgroups (see tree_hub), at most HUB_MAX of them a step
@@ -353,7 +355,8 @@ ${cols.decl}
 @group(0) @binding(${1 + cols.names.length}) var<storage, read_write> treeBox: array<atomic<u32>>;
 var<workgroup> hist: array<atomic<u32>, ${D * HB}>;
 var<workgroup> wb: array<atomic<u32>, ${2 * D}>;${hubs ? `
-var<workgroup> qpart: array<f32, ${WG}>;` : ''}
+var<workgroup> qpart: array<f32, ${WG}>;
+var<workgroup> qneed: u32;` : ''}
 fn fenc(v: f32) -> u32 { let u = bitcast<u32>(v); return select(u | 0x80000000u, ~u, (u & 0x80000000u) != 0u); }
 fn hbin(d: f32) -> u32 {
   let key = u32(clamp(i32(bitcast<u32>(abs(d)) >> 20u) - 824, 0, 511));
@@ -363,15 +366,18 @@ fn hbin(d: f32) -> u32 {
 fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocation_index) li: u32,
         @builtin(num_workgroups) nwg: vec3u, @builtin(workgroup_id) wid: vec3u) {
   for (var b = li; b < ${D * HB}u; b += ${WG}u) { atomicStore(&hist[b], 0u); }
-  if (li < ${D}u) { atomicStore(&wb[li], 0xffffffffu); } else if (li < ${2 * D}u) { atomicStore(&wb[li], 0u); }
-  workgroupBarrier();
+  if (li < ${D}u) { atomicStore(&wb[li], 0xffffffffu); } else if (li < ${2 * D}u) { atomicStore(&wb[li], 0u); }${hubs ? `
+  // the |charge| total comes from the last step's top cell (BOX); the first step sums it here
+  if (li == 0u) { qneed = select(0u, 1u, atomicLoad(&treeBox[${BL.TOTAL}]) == 0u); }
+  let needQ = workgroupUniformLoad(&qneed) != 0u;` : `
+  workgroupBarrier();`}
   ${each(D, k => `let c${k} = bitcast<f32>(atomicLoad(&treeBox[${BL.CENTRE + k}]));`)}
   ${each(D, k => `var mn${k} = 3e38; var mx${k} = -3e38;`)}${hubs ? `
   var qs = 0.0;` : ''}
   for (var i = gid.x; i < TP.n; i += nwg.x * ${WG}u) {
     ${each(D, k => `let p${k} = ${posAt('i', k)};`)}
     if (!(${each(D, k => `abs(p${k}) < 1e37`, ' && ')})) { continue; } // NaN or inf${hubs ? `
-    qs += ${spec.charges.map(ref => `abs(${ref.at('i', 0)})`).join(' + ')};` : ''}
+    if (needQ) { qs += ${spec.charges.map(ref => `abs(${ref.at('i', 0)})`).join(' + ')}; }` : ''}
     ${each(D, k => `mn${k} = min(mn${k}, p${k}); mx${k} = max(mx${k}, p${k});`)}
     ${each(D, k => `atomicAdd(&hist[${k * HB}u + hbin(p${k} - c${k})], 1u);`)}
   }
@@ -385,12 +391,14 @@ fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(local_invocation_ind
     ${each(D, k => `atomicMin(&treeBox[${BL.BB_MIN + k}], atomicLoad(&wb[${k}])); atomicMax(&treeBox[${BL.BB_MAX + k}], atomicLoad(&wb[${D + k}]));`, '\n    ')}
   }${hubs ? `
   // this workgroup's |charge| sum, in a fixed tree (BOX adds the workgroups' in order)
-  qpart[li] = qs;
-  for (var h = ${WG / 2}u; h > 0u; h >>= 1u) {
-    workgroupBarrier();
-    if (li < h) { qpart[li] += qpart[li + h]; }
-  }
-  if (li == 0u) { atomicStore(&treeBox[${BL.PART}u + wid.x], bitcast<u32>(qpart[0])); }` : ''}
+  if (needQ) {
+    qpart[li] = qs;
+    for (var h = ${WG / 2}u; h > 0u; h >>= 1u) {
+      workgroupBarrier();
+      if (li < h) { qpart[li] += qpart[li + h]; }
+    }
+    if (li == 0u) { atomicStore(&treeBox[${BL.PART}u + wid.x], bitcast<u32>(qpart[0])); }
+  }` : ''}
 }`;
   })();
 
@@ -406,7 +414,8 @@ ${tp}
 var<workgroup> scan: array<u32, ${WG}>;
 var<workgroup> found: array<f32, ${3 * D}>;
 var<workgroup> total: u32;${hubs ? `
-var<workgroup> qsum: array<f32, ${WG}>;` : ''}
+var<workgroup> qsum: array<f32, ${WG}>;
+var<workgroup> qneed: u32;` : ''}
 fn fdec(u: u32) -> f32 { return bitcast<f32>(select(~u, u & 0x7fffffffu, (u & 0x80000000u) != 0u)); }
 fn keyLo(key: u32) -> f32 { return select(bitcast<f32>((key + 824u) << 20u), 0.0, key == 0u); }
 fn keyHi(key: u32) -> f32 { return bitcast<f32>((key + 825u) << 20u); }
@@ -415,14 +424,19 @@ fn edgeHi(s: u32) -> f32 { return select(-keyLo(511u - s), keyHi(s - 512u), s >=
 @compute @workgroup_size(${WG})
 fn main(@builtin(local_invocation_index) li: u32) {
   if (li < ${3 * D}u) { found[li] = 0.0; }
-  if (li < ${LIST_HEAD}u) { treeLists[li] = 0u; }${hubs ? `
-  // the total |charge|: HIST's workgroups' sums, in a fixed tree
-  qsum[li] = select(0.0, bitcast<f32>(treeBox[${BL.PART}u + li]), li < min((TP.n + ${WG - 1}u) / ${WG}u, ${HIST_GROUPS}u));
-  for (var h = ${WG / 2}u; h > 0u; h >>= 1u) {
-    workgroupBarrier();
-    if (li < h) { qsum[li] += qsum[li + h]; }
-  }
-  if (li == 0u) { treeBox[${BL.TOTAL}] = bitcast<u32>(qsum[0]); }` : ''}
+  if (li < ${LIST_HEAD}u && li != 2u && li != 3u) { treeLists[li] = 0u; }${hubs ? `
+  // The total |charge| (AGG0's measure of a hub): the first step adds HIST's workgroups' sums in
+  // a fixed tree; the top cell's writer (tree_block) sets it for the next, so HIST reads no
+  // charges then
+  if (li == 0u) { qneed = select(0u, 1u, treeBox[${BL.TOTAL}] == 0u); }
+  if (workgroupUniformLoad(&qneed) != 0u) {
+    qsum[li] = select(0.0, bitcast<f32>(treeBox[${BL.PART}u + li]), li < min((TP.n + ${WG - 1}u) / ${WG}u, ${HIST_GROUPS}u));
+    for (var h = ${WG / 2}u; h > 0u; h >>= 1u) {
+      workgroupBarrier();
+      if (li < h) { qsum[li] += qsum[li + h]; }
+    }
+    if (li == 0u) { treeBox[${BL.TOTAL}] = bitcast<u32>(qsum[0]); }
+  }` : ''}
   for (var a = 0u; a < ${D}u; a++) {
     let base = ${BL.HEADER}u + a * ${HB}u + li * 4u;
     var cs = array<u32, 4>(treeBox[base], treeBox[base + 1u], treeBox[base + 2u], treeBox[base + 3u]);
@@ -677,7 +691,9 @@ fn tree_block(li: u32, at: u32, r: TreeRec, count: u32, off: u32, steps: u32, me
     var up: TreeRec;
     if (live) {
       up = tree_up(li * ${CH}u);
-      ${putRec('parents + first + li', 'up', 'metaCount')}
+      ${putRec('parents + first + li', 'up', 'metaCount')}${hubs ? `
+      // the top cell: the next step's |charge| total (see BOX)
+      if (cells == 1u) { treeBox[${BL.TOTAL}] = bitcast<u32>(${each(K, c => `abs(up.v[${L.S[c] >> 2}].${AX[L.S[c] & 3]})`, ' + ')}); }` : ''}
     }
     workgroupBarrier();
     if (live) { ${each(L.CS4, j => `wRec[li * ${L.CS4}u + ${j}u] = up.v[${j}];`)}${L.CNT < 0 ? ' wCnt[li] = up.n;' : ''} }
@@ -691,7 +707,7 @@ ${tp}
 @group(0) @binding(2) var<storage, read_write> treeMeta: array<u32>;
 @group(0) @binding(3) var<storage, read_write> treeCells: array<vec4f>;
 @group(0) @binding(4) var<storage, read_write> treeLists: array<atomic<u32>>;${hubs ? `
-@group(0) @binding(5) var<storage, read> treeBox: array<u32>;` : ''}${spec.heads ? `
+@group(0) @binding(5) var<storage, read_write> treeBox: array<u32>;` : ''}${spec.heads ? `
 var<workgroup> wgOccupied: atomic<u32>;
 var<workgroup> wgBase: u32;` : ''}${block}
 @compute @workgroup_size(${WG})
@@ -748,7 +764,8 @@ fn tree_aggregate(c: u32) -> TreeRec {
 struct Level { count: u32, off: u32, steps: u32, metaCount: u32 };
 @group(0) @binding(0) var<uniform> lv: Level;
 @group(0) @binding(1) var<storage, read_write> treeCells: array<vec4f>;${L.CNT < 0 ? `
-@group(0) @binding(2) var<storage, read_write> treeMeta: array<u32>;` : ''}${block}
+@group(0) @binding(2) var<storage, read_write> treeMeta: array<u32>;` : ''}${hubs ? `
+@group(0) @binding(${L.CNT < 0 ? 3 : 2}) var<storage, read_write> treeBox: array<u32>;` : ''}${block}
 @compute @workgroup_size(${WG})
 fn main(${LINEAR}, @builtin(local_invocation_index) li: u32) {
   let q = ${LINEAR_ID};
@@ -762,7 +779,8 @@ fn main(${LINEAR}, @builtin(local_invocation_index) li: u32) {
 struct Level { count: u32, childOff: u32, parentOff: u32, metaCount: u32 };
 @group(0) @binding(0) var<uniform> lv: Level;
 @group(0) @binding(1) var<storage, read_write> treeCells: array<vec4f>;${L.CNT < 0 ? `
-@group(0) @binding(2) var<storage, read_write> treeMeta: array<u32>;` : ''}
+@group(0) @binding(2) var<storage, read_write> treeMeta: array<u32>;` : ''}${hubs ? `
+@group(0) @binding(${L.CNT < 0 ? 3 : 2}) var<storage, read_write> treeBox: array<u32>;` : ''}
 @compute @workgroup_size(${WG})
 fn main(${LINEAR}) {
   let q = ${LINEAR_ID};
@@ -772,7 +790,8 @@ fn main(${LINEAR}) {
     ${loadVec4s('a', 'treeCells', `${L.TAB4}u + child * ${L.CS4}u`, L.CS4)}` : `${loadVec4s('a', 'treeCells', `${L.TAB4}u + child * ${L.CS4}u`, L.CS4)}
     let n = u32(${word('a', L.CNT)});
     if (n == 0u) { continue; }`}`)}
-  ${putRec('lv.parentOff + q', 'r', 'lv.metaCount')}
+  ${putRec('lv.parentOff + q', 'r', 'lv.metaCount')}${hubs ? `
+  if (lv.count == 1u) { treeBox[${BL.TOTAL}] = bitcast<u32>(${each(K, c => `abs(r.v[${L.S[c] >> 2}].${AX[L.S[c] & 3]})`, ' + ')}); }` : ''}
 }`);
 
   const lawCode = lawFunctions(spec) + tableWordFn(L);
@@ -927,9 +946,9 @@ fn tree_crowd(w: u32, li: u32) {
     }
     let over = work > TP.workCap;
     crowdHead = vec4u(crowded, select(0u, 1u, over), 0u, 0u);
-    if (w == 0u) {
+    if (w == 0u && over && atomicLoad(&treeLists[2]) == 0u) {
       atomicStore(&treeLists[3], u32(min(work * 1e-6, 4e9)));
-      if (over) { atomicStore(&treeLists[2], biggest); }
+      atomicStore(&treeLists[2], biggest);
     }
   }
   let head = workgroupUniformLoad(&crowdHead);
