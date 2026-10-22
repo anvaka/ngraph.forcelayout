@@ -5,7 +5,7 @@
 // Regime 'pairs': every tree pass is exact all-pairs inside a node kernel, over tiles of 256
 // bodies in workgroup memory. Up to the small-graph size N* the whole step is then one kernel;
 // sums and FIRE add their own small kernels. In 4 or more dimensions it runs up to 16,384 bodies.
-// Regime 'pyramid' (2D and 3D above N*, which is 3,072 in 3D): the first group of tree passes is the generic grid
+// Regime 'pyramid' (2D and 3D above N*, which is 2,560 in 3D): the first group of tree passes is the generic grid
 // pyramid (../pyramid): its structure dispatches run right before the node kernel that holds its
 // section, and that kernel runs its threads in the pyramid's cell order (thread t works on row
 // tree_row(t)), so bodies near each other in space run together. Further groups stay exact pairs.
@@ -27,9 +27,9 @@ import { planPyramid } from '../pyramid/plan.js';
 export const THREADS = 256;
 // Up to this many bodies the whole step is one kernel and repulsion is exact over all pairs
 // (design section 6.1; it measured about 2k on an M4 Max, so this default is conservative). In 3D
-// the pyramid costs more: exact pairs stay faster up to about 3.2k there (G5, M4 Max)
+// the pyramid costs more: exact pairs stay faster up to 2.7k-3k bodies there (G5, M4 Max)
 export const SMALL_GRAPH = 1024;
-export const SMALL_GRAPH_3D = 3072;
+export const SMALL_GRAPH_3D = 2560;
 // Up to this many bodies the exact all-pairs loop runs where the pyramid does not (4D and up)
 export const MAX_PAIRS = 16384;
 const AXES = 'xyzw';

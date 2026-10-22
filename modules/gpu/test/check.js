@@ -51,8 +51,9 @@ test('the stock step: one kernel up to N*, the grid template above it in 2D', ()
   assert.equal(deep.regime, 'pyramid');
   assert.ok(Object.keys(deep.kernels()).indexOf('TREE_LOCAL') >= 0);
   assert.match(layoutOf(4000, { dimensions: 3 }).simulator.plan(gpuCapabilities()).stages.find(s => s.stage === 'repulsion').how, /grid pyramid/);
-  // in 3D exact pairs stay faster up to 3,072 bodies
-  assert.equal(planOf(layoutOf(3000, { dimensions: 3 })).regime, 'pairs');
+  // in 3D exact pairs stay faster up to 2,560 bodies
+  assert.equal(planOf(layoutOf(2500, { dimensions: 3 })).regime, 'pairs');
+  assert.equal(planOf(layoutOf(3000, { dimensions: 3 })).regime, 'pyramid');
 });
 
 test('node formulas, sums, extra passes, charges, inertia and when run, in any dimension', () => {
