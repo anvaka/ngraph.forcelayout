@@ -190,6 +190,10 @@ A pair step that needs more than its cap runs in several submits ("slices") rath
   unusually exact on the blob (0.7%). From step 10 on it is within the gate (1.99× at step 0,
   0.79× at step 10, 0.50× at step 30); the fixes that close it would cost a third more per 3D
   step.
+- **Hubs in the 3D pyramid are planned when the layout starts on the GPU**, from the charges then
+  (a body whose charge is over 8× the mean). Masses the host changes later that make a hub take
+  effect at the next sync point (a graph edit, a stage added or removed); until then that layout
+  runs without the hub's own far field. This costs accuracy only.
 - **Some costs:**
   - a pair formula in 3D costs about twice 2D (0.20–0.23 ms at 100k);
   - laws that fall slower than 1/r² cost 1.35–1.68× a stock step in 2D;
