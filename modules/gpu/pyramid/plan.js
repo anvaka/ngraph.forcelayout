@@ -14,9 +14,12 @@
 import { pyramidKernels, pyramidLayout, boxLayout, WG } from './wgsl.js';
 import { createPrinter, lawValueCount, lawValueProblem, f32Problem, F32_MAX } from '../wgsl/print.js';
 
-// Bodies of an overfull cell past this many are sampled with weights (today's template: 64, which
-// on relaxed hub graphs left cells of 65 to 330 bodies sampled and pushes 15 to 100% off)
-export const NEAR_CAP = 256;
+// Bodies of an overfull cell past this many are sampled with weights. Today's template samples
+// past 64, which on relaxed hub graphs left cells of 65 to 330 bodies sampled and their pushes
+// 15 to 100% off, and dense clusters (a hub's leaves at the start) further off. Up to 1,024 a
+// cell is exact, as it is also the size up to which ORDER sorts a cell by index; past it a body
+// still sees at most 3^D x 1,024 bodies.
+export const NEAR_CAP = 1024;
 const AX = 'xyzw';
 
 /**
@@ -40,7 +43,7 @@ export function chooseGrid(n, D) {
  * numbers per step instead of the pyramid's uniform: {decl(binding), law(c, k), gravity}.
  * `grid` forces the cells per axis (for measurements).
  */
-export function planPyramid({ D, n, limits, channels, pos, values = null, grid = 0, warn }) {
+export function planPyramid({ D, n, limits, channels, pos, values = null, grid = 0, heads, heavyCells, warn }) {
   const refuse = (reason, buffers = {}) => ({ refusal: reason, buffers, kernels: {}, section: null, dispatches: 0 });
   if (D !== 2 && D !== 3) return refuse(`the grid pyramid is 2D and 3D; this layout is ${D}D`);
   if (!channels.length) return refuse('a tree pass needs at least one charge');
@@ -78,10 +81,12 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
   const L = pyramidLayout(D, own, tableWords);
 
   const G = grid || chooseGrid(n, D);
+  if (G ** D > (1 << 20)) return refuse(`the grid pyramid takes up to 2^20 cells; ${G}^${D} is more`);
   const levels = Math.log2(G), nCells = G ** D;
   const levelOff = [];
   let pyrSize = 0;
   for (let l = 0, g = G; l <= levels; l++, g >>= 1) { levelOff.push(pyrSize); pyrSize += g ** D; }
+  // local expansions: every level but the top
   const localCells = levelOff[levels];
   const size = bytes => Math.max(16, Math.ceil(bytes / 16) * 16);
   const buffers = {
@@ -93,6 +98,10 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
     treeSp: size(n * L.SP4 * 16),
     treeCells: size((L.TAB4 + pyrSize * L.CS4 + localCells * L.LS4) * 16),
   };
+  // Heavy finest cells (hubs amid their leaves, see TREE_HEAVY): 3D needs them, 2D measured within
+  // the accuracy gate without. Their list: a count, then the cells.
+  const heavy = heavyCells === undefined ? D === 3 : heavyCells;
+  if (heavy) buffers.treeHeavy = size((1 + nCells) * 4);
   const sizes = { n, G, levels, nCells, levelOff, pyrSize, localCells, locOff: L.TAB4 + pyrSize * L.CS4, metaTag: nCells, metaRow: nCells + 2 * n, metaCount: nCells + 3 * n };
 
   const largest = Math.min(limits.maxStorageBufferBindingSize, limits.maxBufferSize);
@@ -105,16 +114,17 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
   if (Math.ceil(n / WG) > limits.maxComputeWorkgroupsPerDimension ** 2) return refuse(`the grid pyramid runs up to ${(limits.maxComputeWorkgroupsPerDimension ** 2 * WG).toLocaleString('en-US')} bodies`);
 
   const spec = {
-    D, L, groups, lawWords: values ? 0 : lawWords, values, warn,
+    D, L, groups, lawWords: values ? 0 : lawWords, values, warn, heads: heads === undefined ? nCells > n : heads, heavyCells: heavy,
     channels: own, pos, charges: channels.map(channel => channel.charge),
   };
   const out = pyramidKernels(spec);
   return {
-    refusal: null, D, n, K: channels.length, layout: L, groups, sizes, buffers,
+    refusal: null, D, n, K: channels.length, layout: L, groups, sizes, buffers, heads: spec.heads, heavyCells: spec.heavyCells,
     lawWords: spec.lawWords, values, channels,
     kernels: out.kernels, columns: out.columns, section: out.section,
-    // HIST, BOX, BIN, 3 scans, PLACE, ORDER, AGG0, a PYR per level, LOCAL
-    dispatches: 10 + levels,
+    // HIST, BOX, BIN, 3 scans, PLACE, ORDER, AGG0, a PYR per level, LOCAL, and HEAVY
+    dispatches: 10 + levels + (spec.heavyCells ? 1 : 0),
+    heavyGroups: out.heavyGroups,
   };
 }
 
