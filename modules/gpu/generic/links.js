@@ -180,8 +180,9 @@ export function pairCode(plan, section, printer) {
   if (section.sort) return plan.pairs.section(stage.name).code({ force, local: localOf, row: 'row' });
   const columns = Object.create(null);
   Object.values(plan.columns).forEach(c => { columns[c.name] = { width: c.width > 1 ? 'D' : 1 }; });
+  // force_i += in the formula adds into the tile's force sums, as the push does
   const printed = printPairFormula(stage, {
-    D, printer, columns,
+    D, printer, columns, force: k => `pairForce${k}`,
     read(column, who, k) {
       if (column === 'pos') return who === 'me' ? `(${localOf('pos', k)} + s_origin_${k})` : `(X[j * ${u32(D)} + ${u32(k)}] + s_origin_${k})`;
       return who === 'me' ? localOf(column, k) : columnRef(plan, column, 'j', false)[k];
