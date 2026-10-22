@@ -354,7 +354,10 @@ bodies (`pos` is read only; `integrate` and host steps move them).
   (`springStore.define()`), and the columns of its ends as `mass_i` (from) and `mass_j` (to). It
   sets `pull`, which pulls the ends together (negative pushes them apart). The stock springs are
   `pull = coefficient * (r - length)`, and with `replace: 'springs'` that formula gives exactly the
-  stock numbers, random nudges of links of length 0 included.
+  stock numbers, random nudges of links of length 0 included, at the stock springs' speed. A link
+  formula can also set its link's own spring with `coefficient = ...` and `length = ...` (the
+  springs then use them; `coefficient <= 0` and `length < 0` still mean the settings). One that
+  sets no `pull` adds no force and costs only its arithmetic.
 * `addPairFormula(name, options)` runs for every pair closer than `radius` (a number, an
   expression of the params, or a function). It reads `r` and the columns of both bodies and sets
   `push`. With `symmetric: false` it runs for `(i, j)` and `(j, i)` and pushes only `i`. Bodies on
