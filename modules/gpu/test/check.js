@@ -95,6 +95,7 @@ test('what does not run yet is named', () => {
   sim.addLinkFormula('pullsAndMarks', { formula: 'coefficient = 1; pull = r' });
   sim.addLinkFormula('writesKind', { formula: 'kind = 2' });
   sim.addPairFormula('apart', { radius: 5, formula: 'push = 1' });
+  sim.addPairFormula('tabled', { radius: 5, formula: 'push = T(r)', tables: { T: { from: 0, to: 5, values: [1, 0] } } });
   sim.addSum('perGroup', { formula: 'mass', group: 'group' });
   sim.addSum('overLinks', { formula: 'r', over: 'links' });
   sim.addSum('largest', { formula: 'mass', reduce: 'max' });
@@ -111,7 +112,7 @@ test('what does not run yet is named', () => {
   assert.deepEqual(words, {
     pullsAndMarks: 'WebGPU does not run link formulas that both move bodies and write link columns yet',
     writesKind: 'WebGPU does not run formulas that write the i32 link column kind yet',
-    apart: 'WebGPU does not run pair formulas yet',
+    tabled: 'WebGPU does not run lookup tables in pair formulas yet',
     // a formula writes the group ids
     perGroup: 'WebGPU runs sums per group only with group ids set by the host',
     overLinks: 'WebGPU does not run sums over links yet',
@@ -225,7 +226,7 @@ test('plan() and the runner use the same lowering', () => {
   const backend = gpuCapabilities(WIDE);
   const lowering = backend.lower(layout.simulator.program(), layout.simulator);
   assert.ok(lowering.runs && lowering.plan.template === 'generic');
-  layout.simulator.addPairFormula('apart', { radius: 5, formula: 'push = 1' });
+  layout.simulator.addStage('js', () => {});
   const refused = backend.lower(layout.simulator.program(), layout.simulator);
   assert.equal(refused.plan, null);
   assert.equal(refused.runs, false);

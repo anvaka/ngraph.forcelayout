@@ -6,6 +6,7 @@ import { getPipeline } from '../device.js';
 import { kernelCode, bindingsOf } from './emit.js';
 import { THREADS, GROUP_RUN, LINK_CHUNK } from './plan.js';
 import { buildPyramid, pyramidStatus } from '../pyramid/build.js';
+import { buildPairs } from '../pairs/build.js';
 import { slotFiller } from './values.js';
 import { chooseOrigin, relativePositions as relative, writePositionsBack, rowsMoved } from '../buffers.js';
 import { createRowWriter, trackHostPositions } from '../rows.js';
@@ -108,7 +109,19 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   }
   // Structures with status words on the device (work caps passed, ...): {buffer, offset, size,
   // message(words), stages}
+  // The pair track's sorts and gathers, above N*
+  let pairs = null;
+  if (plan.pairs) {
+    try {
+      pairs = await buildPairs(device, plan.pairs, { buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes } });
+    } catch (e) {
+      owned.forEach(b => b.destroy());
+      if (tree) tree.destroy();
+      throw e;
+    }
+  }
   const statuses = [];
+  if (pairs) statuses.push({ buffer: pairs.status.buffer, offset: 0, size: pairs.status.bytes, message: words => pairs.statusMessage(words), stages: plan.pairs.stages.map(s => s.name) });
   if (tree && tree.status) {
     statuses.push(Object.assign({ message: pyramidStatus, stages: plan.pyramid.channels.map(c => c.stage) }, tree.status));
   }
@@ -263,6 +276,8 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
             // the pyramid's structure, from this step's positions; it also orders the threads of
             // its kernel, so it is built even on steps where its passes are gated off
             if (kernel.tree) tree.encode(cp, { stepOffset: offset[0], parity });
+            // the pair formulas' sort, chunks and gathers, from this step's positions and numbers
+            if (kernel.pairStages) pairs.encode(cp, { stepOffset: offset[0], parity, values });
             cp.setPipeline(pipeline);
             cp.setBindGroup(0, bind[parity], offset);
             cp.dispatchWorkgroups(g);
@@ -357,9 +372,13 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
       };
     },
 
+    // a pair formula's work cap is near: the first submits are short
+    pairs: !!pairs,
+
     destroy() {
       owned.forEach(b => b.destroy());
       if (tree) tree.destroy();
+      if (pairs) pairs.destroy();
     },
   };
 

@@ -1,10 +1,14 @@
-// WGSL of links and sums per group (design sections 6.3 and 6.5), for emit.js:
+// WGSL of links, pair formulas and sums per group (design sections 6.3 to 6.5), for emit.js:
 //  - the stock springs and link formulas that pull or add into body columns, as a gather in a node
 //    kernel: the thread goes through its row's links; both ends evaluate a link with its true
 //    roles (i is the from end), so they get the same pull, and each keeps its own end's share;
 //  - link formulas that only write link columns: a kernel with a thread per link;
+//  - pair formulas: up to N*, a node section that looks at every other body (the pair track's
+//    printer gives the formula with the CPU's roles); above it, the section that adds the totals
+//    of the pair track's gather;
 //  - GROUP_RUNS and GROUP_SUM for sums per group.
 import formula from '../../../lib/formula.js';
+import { printPairFormula, pairCandidate, accumulatorName } from '../pairs/formula.js';
 import { header, NUDGE, settingsLines, scopeOf, linkRef, locals, columnRef, u32, slotValue, L_OTHER, L_ROLE, L_FROM_ENTRY, L_FROM, L_TO, L_HEADER } from './common.js';
 import { LINK_CHUNK } from './plan.js';
 
@@ -146,6 +150,47 @@ function linkValues(plan, stage, stock, s, e) {
       if (out.indexOf(line) < 0) out.push(line);
     });
   }
+  return out;
+}
+
+/**
+ * A pair formula's node section: above N* the pair track's (it adds what its gather wrote), up to
+ * it every other body, the formula evaluated with the CPU's roles (`i` the lower row) and only this
+ * body's own share kept. `force` is the thread's force locals.
+ */
+export function pairCode(plan, section, printer) {
+  const D = plan.D;
+  const stage = section.stage;
+  const force = locals(plan, 'force');
+  const localOf = (column, k) => locals(plan, column)[k];
+  if (section.sort) return plan.pairs.section(stage.name).code({ force, local: localOf, row: 'row' });
+  const columns = Object.create(null);
+  Object.values(plan.columns).forEach(c => { columns[c.name] = { width: c.width > 1 ? 'D' : 1 }; });
+  const printed = printPairFormula(stage, {
+    D, printer, columns,
+    read(column, who, k) {
+      if (column === 'pos') return who === 'me' ? `(${localOf('pos', k)} + s_origin_${k})` : `(X[j * ${u32(D)} + ${u32(k)}] + s_origin_${k})`;
+      return who === 'me' ? localOf(column, k) : columnRef(plan, column, 'j', false)[k];
+    },
+    param: name => slotValue(section.params[name]),
+    builtIn: name => slotValue(section.builtIns[name]),
+    sumWidth: name => (plan.sums[name] && !plan.sums[name].grouped ? plan.sums[name].width : 0),
+    sum: (name, k) => `g_${name}_${k}`,
+  });
+  const out = [];
+  const axes = Array.from({ length: D }, (_, k) => k);
+  // a pass's own sums start at zero, even when the radius skips it, as on the CPU
+  printed.accumulators.forEach(a => { if (a.startAtZero) locals(plan, a.column).forEach(name => out.push(`${name} = 0.0;`)); });
+  out.push(`let pairRadius = ${slotValue(section.radius)};`);
+  out.push('if (live && pairRadius > 0.0) {');
+  printed.accumulators.forEach(a => { for (let k = 0; k < a.width; k++) out.push(`  var ${accumulatorName(a.column, k, a.width)} = 0.0;`); });
+  out.push('  for (var j = 0u; j < P.n; j++) {');
+  out.push('    ' + axes.map(k => `let d${k} = ${localOf('pos', k)} - X[j * ${u32(D)} + ${u32(k)}];`).join(' '));
+  out.push(`    let pairR2 = ${axes.map(k => `d${k} * d${k}`).join(' + ')};`);
+  pairCandidate(printed, { D, me: 'row', other: 'j', r2: 'pairR2', radius: 'pairRadius', force: k => force[k] }).forEach(line => out.push('    ' + line));
+  out.push('  }');
+  printed.accumulators.forEach(a => { for (let k = 0; k < a.width; k++) out.push(`  ${localOf(a.column, k)} += ${accumulatorName(a.column, k, a.width)};`); });
+  out.push('}');
   return out;
 }
 

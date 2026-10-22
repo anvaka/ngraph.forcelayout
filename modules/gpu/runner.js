@@ -27,6 +27,8 @@ const READBACK_BUFFERS = 3;
 const STATS_WINDOW = 30;
 // Steps per submit before a step has been timed (today's module always used 64)
 const DEFAULT_BATCH = 64;
+// The same with pair formulas above N*, whose steps can each come near the work cap
+const FIRST_PAIR_BATCH = 8;
 const MAX_BATCH = 1024;
 // A submit holds at most this much GPU work, far below the 2-second watchdog
 const MAX_SUBMIT_MS = 100;
@@ -310,7 +312,8 @@ function createRunner(layout, backend) {
   // own cost stays under 10% of the work
   function stepsPerSubmit() {
     const ms = gpuMsPerStep();
-    if (!(ms > 0)) return DEFAULT_BATCH;
+    // before a step is timed: pair formulas near their work cap could make 64 steps long
+    if (!(ms > 0)) return engine && engine.pairs ? FIRST_PAIR_BATCH : DEFAULT_BATCH;
     const most = Math.floor(MAX_SUBMIT_MS / ms);
     const least = Math.ceil(submitMs / (0.1 * ms));
     return Math.max(1, Math.min(MAX_BATCH, Math.max(most, least)));

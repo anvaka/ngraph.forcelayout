@@ -19,6 +19,11 @@
 // each, and the body's section adds its chunks in order. A link stage that only writes link
 // columns runs a thread per link, in a link kernel of its own.
 //
+// Pair formulas (section 6.4): up to N* (and in 5D and up, to 16,384 bodies) a node section goes
+// through every other body and evaluates the formula with the CPU's roles (../pairs/formula.js);
+// above it the pair track's cell sort, work list, chunks and gather (../pairs) run before the node
+// kernel that holds the stage's section, which adds the totals the gather wrote.
+//
 // Sums per group (section 6.5): a node section writes each row's value, then GROUP_RUNS adds up
 // runs of up to 256 rows of one group (in an order the host sorts by group) and GROUP_SUM adds
 // each group's runs in order.
@@ -42,6 +47,7 @@
 // offset that is a constant of the WGSL; `cap` leaves room for the graph to grow.
 import { physicsStages } from '../program.js';
 import { planPyramid } from '../pyramid/plan.js';
+import { planPairs, pairOutputs } from '../pairs/plan.js';
 
 export const THREADS = 256;
 // Up to this many bodies the whole step is one kernel and repulsion is exact over all pairs
@@ -126,6 +132,7 @@ export function genericPlan(program, laws, options = {}) {
       sections.push({ kind: pulls || adds ? 'gather' : 'linkset', stage, pulls });
     } else if (kind === 'node') sections.push({ kind: 'formula', stage });
     else if (kind === 'host') sections.push({ kind: 'host', stage });
+    else if (kind === 'pair') sections.push({ kind: 'pairformula', stage });
     else if (kind === 'sum') {
       const sum = sumInfo[stage.name];
       sections.push({ kind: sum.group ? 'groupsum' : 'sum', stage, sum });
@@ -134,10 +141,17 @@ export function genericPlan(program, laws, options = {}) {
   if (sections.filter(s => s.kind === 'euler' || s.kind === 'fire').length !== 1) {
     return { refusal: 'WebGPU needs exactly one integrate stage' };
   }
-  // tree passes and links read other bodies' positions from the start of the step
+  // tree passes, links and pairs read other bodies' positions from the start of the step
   const integrateAt = sections.findIndex(s => s.kind === 'euler' || s.kind === 'fire');
-  const late = sections.slice(integrateAt + 1).find(s => s.kind === 'pairs' || s.kind === 'gather' || s.kind === 'springs' || (s.kind === 'linkset' && readsPositions(s)));
-  if (late) return { refusal: `WebGPU runs tree passes and link stages that read positions before the integrate stage only (${late.stage.name} comes after it)` };
+  const late = sections.slice(integrateAt + 1).find(s => s.kind === 'pairs' || s.kind === 'gather' || s.kind === 'springs' || s.kind === 'pairformula' || (s.kind === 'linkset' && readsPositions(s)));
+  if (late) return { refusal: `WebGPU runs tree passes, pair formulas and link stages that read positions before the integrate stage only (${late.stage.name} comes after it)` };
+  // pair formulas above N* (in 2D to 4D) run through the cell sort; else every pair is looked at
+  const pairSort = n > smallGraph && D <= 4;
+  const pairSections = sections.filter(s => s.kind === 'pairformula');
+  pairSections.forEach(section => { section.sort = pairSort; });
+  if (pairSections.length && !pairSort && n > MAX_PAIRS) {
+    return { refusal: `pair formulas in ${D}D run as exact pairs, for up to ${MAX_PAIRS.toLocaleString('en-US')} bodies; this layout has ${n.toLocaleString('en-US')} (more needs a tree search)` };
+  }
   // A tree pass joins the walk before it when the stages between only add to the force and
   // don't read it (drag, springs, addRepulsion's default place before integrate): the order of
   // additions is all that changes
@@ -297,6 +311,16 @@ export function genericPlan(program, laws, options = {}) {
     // runs: at most one per 256 rows plus one per group
     sum.runs = sSize; sSize += (Math.ceil(n / GROUP_RUN) + sum.count + 1) * width;
   });
+  // what the pair track's gathers write per body (hidden columns), above N*
+  pairSections.forEach(section => {
+    if (!section.sort) return;
+    section.outputs = Object.create(null);
+    pairOutputs(section.stage, D, columnInfo).forEach(output => {
+      const offset = sSize;
+      sSize += cap * output.width;
+      section.outputs[output.name] = { buffer: 'S', width: output.width, at: (row, k) => `S[${offset}u + ${row} * ${output.width}u + ${k}u]` };
+    });
+  });
   const fire = sSize; sSize += 4;
   const firePartials = sSize; sSize += 4 * THREADS;
   const partials = sSize;
@@ -320,6 +344,7 @@ export function genericPlan(program, laws, options = {}) {
     // a host step's `when` and numbers are the host's
     if (section.kind === 'host') return;
     if (stage.when) section.gate = slot.add('gate', stage.name);
+    if (section.kind === 'pairformula') section.radius = slot.add('radius', stage.name);
     section.params = Object.create(null);
     stage.params.forEach(param => { section.params[param.name] = slot.add('param', stage.name, param.name); });
     // formulas read built in values as their stage gets them; built in stages read the settings
@@ -398,7 +423,14 @@ export function genericPlan(program, laws, options = {}) {
       current.sections.forEach(s => writesOf(s).forEach(column => kernelWrites.add(column)));
       if ([...others].some(column => kernelWrites.has(column)) || (section.kind === 'tree' && current.tree)) { close(); open(); }
     }
-    // the chunks of a gather run before its node kernel: they must not read what it writes
+    // the chunks of a gather and the pair sort run before their node kernel: they must not read
+    // what it writes
+    if (section.kind === 'pairformula' && section.sort) {
+      const kernelWrites = new Set();
+      current.sections.forEach(s => writesOf(s).forEach(column => kernelWrites.add(column)));
+      if ([...readsOf(section)].some(column => kernelWrites.has(column))) { close(); open(); }
+      current.pairStages = (current.pairStages || []).concat([section.stage.name]);
+    }
     if (section.chunks) {
       const kernelWrites = new Set();
       current.sections.forEach(s => writesOf(s).forEach(column => kernelWrites.add(column)));
@@ -439,6 +471,37 @@ export function genericPlan(program, laws, options = {}) {
     kernelStages[kernel.name] = names;
   });
   const done = slot.done();
+
+  // The pair track's plan of the pair formulas above N*: they read the plan's columns, sums and
+  // slot, and their gathers write the hidden columns above
+  let pairs = null;
+  if (pairSections.some(s => s.sort)) {
+    if (kernels.filter(k => k.pairStages).length > 1) {
+      return { refusal: 'WebGPU runs pair formulas above N* at one place in the step for now (these fall into kernels apart)' };
+    }
+    const columnRefs = Object.create(null);
+    program.columns.nodes.forEach(info => {
+      const column = columns[info.name];
+      const width = info.width === 'D' ? D : info.width;
+      const ref = column && column.buffer !== 'X' ? { buffer: column.buffer, at: (row, k) => `${column.buffer}[${column.offset}u + ${row}${width > 1 ? ` * ${width}u + ${k}u` : ''}]` } : null;
+      columnRefs[info.name] = { width: info.width, hidden: info.hidden, ref };
+    });
+    const sumRefs = Object.create(null);
+    Object.values(sums).forEach(sum => { if (!sum.grouped) sumRefs[sum.name] = { width: sum.width, at: k => `S[${sum.offset + k}u]` }; });
+    pairs = planPairs({
+      D, n, limits: options.limits, warn: options.warn,
+      stages: pairSections.filter(s => s.sort).map(section => ({
+        stage: section.stage, radius: section.radius, gate: section.gate,
+        params: section.params, builtIns: section.builtIns, outputs: section.outputs,
+      })),
+      columns: columnRefs, sums: sumRefs, sumBuffer: 'S',
+      slot: { decl: binding => `@group(0) @binding(${binding}) var<uniform> V: array<vec4f, ${done.floats / 4}>;`, at: slotValue },
+      pos: { buffer: 'X', at: (row, k) => `X[${row} * ${D}u + ${k}u]` },
+      origin: k => slot.add('setting', 'origin_' + k),
+    });
+    if (pairs.refusal) return { refusal: pairs.refusal };
+    Object.keys(pairs.kernelStages).forEach(name => { kernelStages[name] = pairs.kernelStages[name]; });
+  }
 
   // The pyramid reads positions and charges from this plan's buffers, and the law numbers and
   // gravity from the step's slot
@@ -484,6 +547,7 @@ export function genericPlan(program, laws, options = {}) {
     groupColumns,
     chunked,
     tables,
+    pairs,
     hostSteps: kernels.filter(k => k.kind === 'host').map(k => k.name),
     sums,
     sumWidth,

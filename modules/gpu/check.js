@@ -22,6 +22,7 @@ import formula from '../../lib/formula.js';
 import { createPrinter, emitLaw, lawValueProblem, lawValueWarnings, f32Problem, F32_MAX } from './wgsl/print.js';
 import { schedule } from './schedule.js';
 import { physicsStages, isGuard } from './program.js';
+import { printPairFormula } from './pairs/formula.js';
 
 // Limits the module asks a device for, and plans against
 export const LIMIT_NAMES = [
@@ -203,7 +204,7 @@ function checkStage(stage, program, simulator, printer, laws, facts) {
     case 'link':
       return columnProblem ? refuse(columnProblem) : checkLink(stage, facts, printer);
     case 'pair':
-      return refuse('WebGPU does not run pair formulas yet');
+      return columnProblem ? refuse(columnProblem) : checkPair(stage, facts, printer);
     case 'host':
       return runs(`on the host, on the steps where its \`when\` holds: the step stops there and reads back ${(stage.reads || []).map(r => r.column).join(', ') || 'nothing'}`);
     case 'js':
@@ -290,6 +291,26 @@ function checkLink(stage, facts, printer) {
   }
   try {
     printFormula(stage, facts, printer, true);
+  } catch (e) {
+    return refuse(e.message);
+  }
+  return runs('part of the step');
+}
+
+// A pair formula: its WGSL must print (the pair track's printer; tables are not taken yet)
+function checkPair(stage, facts, printer) {
+  if (typeof stage.args.radius === 'object' && stage.args.radius.kind === 'number') {
+    const problem = f32Problem(stage.args.radius.value);
+    if (problem) return refuse('the radius: ' + problem);
+  }
+  try {
+    printPairFormula(stage, {
+      D: facts.D, printer, columns: facts.columns,
+      read: (column, who, k) => `${who}_${column}_${k}`,
+      param: name => 'p_' + name, builtIn: name => 'b_' + name,
+      sumWidth: name => (facts.sums[name] && !facts.sums[name].group ? (facts.sums[name].width === 'D' ? facts.D : facts.sums[name].width) : 0),
+      sum: (name, k) => `g_${name}_${k}`,
+    });
   } catch (e) {
     return refuse(e.message);
   }
