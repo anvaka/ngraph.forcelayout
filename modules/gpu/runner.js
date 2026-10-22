@@ -31,6 +31,8 @@ const MAX_SUBMIT_MS = 100;
 const SETTINGS = ['gravity', 'springLength', 'springCoefficient', 'dragCoefficient', 'timeStep', 'maxVelocity', 'integrator'];
 // More rows written by the host than this go up whole (see uploadRows())
 const MAX_ROW_WRITES = 4096;
+// The stock step's repulsion stage, whose law the templates compile
+const REPULSION = 'repulsion';
 // Columns the stock templates read: a 'step' listener that changes one changes the physics
 const NODE_COLUMNS = ['pos', 'velocity', 'mass', 'pinned'];
 const LINK_COLUMNS = ['from', 'to', 'length', 'coefficient'];
@@ -351,13 +353,14 @@ function createRunner(layout, backend) {
   // The law's numbers when they cannot change within a batch: once per call, written when they
   // changed. False when a number does not fit f32 (the runner halts).
   function updateStaticLaw() {
-    law.update(simulator.stepContext(firstStep + queued));
-    if (!checkValues(firstStep + queued)) return false;
+    const at = firstStep + queued;
+    const values = lawValuesAt(at);
+    if (!checkValues(values, at)) return false;
     const fresh = new Float32Array(lawCount);
-    writeLawValues(law, fresh, 0);
+    writeLawValues(law, fresh, 0, values);
     if (!sameValues(fresh, lawValues)) {
       lawValues = fresh;
-      engine.setLawValues();
+      engine.setLawValues(lawValues);
     }
     return true;
   }
@@ -371,31 +374,37 @@ function createRunner(layout, backend) {
     let same = true;
     for (let s = 0; s < count; s++) {
       const at = firstStep + queued + s;
-      law.update(simulator.stepContext(at));
-      if (!checkValues(at)) {
+      const numbers = lawValuesAt(at);
+      if (!checkValues(numbers, at)) {
         if (s === 0) return false;
         return { values, count: s, same: false };
       }
-      writeLawValues(law, values, s * lawCount);
+      writeLawValues(law, values, s * lawCount, numbers);
       if (same && !sameValues(values.subarray(s * lawCount, (s + 1) * lawCount), lawValues)) same = false;
     }
     if (same) return { values, count, same };
     // the uniforms get the last step's numbers, so a batch that follows with the same numbers
     // runs the usual pipelines
     lawValues = values.slice((count - 1) * lawCount, count * lawCount);
-    engine.setLawValues();
+    engine.setLawValues(lawValues);
     return { values, count, same };
+  }
+
+  // The law's numbers of step `at` (a copy of their own), from the simulator
+  function lawValuesAt(at) {
+    const out = simulator.stageValues(REPULSION, simulator.stepContext(at));
+    return out.lawValues || Object.assign({}, out.law.values);
   }
 
   // The law's numbers of step `at` must fit f32: a bad one halts the runner, naming the number
   // and the step; one that underflows warns once
-  function checkValues(at) {
-    const problem = lawValueProblem(law);
+  function checkValues(values, at) {
+    const problem = lawValueProblem(law, values);
     if (problem) {
-      halt({ message: `the law's ${problem.name} is ${problem.problem} at step ${at}`, kernel: null, stages: ['repulsion'] });
+      halt({ message: `the law's ${problem.name} is ${problem.problem} at step ${at}`, kernel: null, stages: [REPULSION] });
       return false;
     }
-    lawValueWarnings(law).forEach(warnOnce);
+    lawValueWarnings(law, values).forEach(warnOnce);
     return true;
   }
 

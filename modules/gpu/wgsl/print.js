@@ -152,11 +152,11 @@ export function lawValueCount(law) {
 }
 
 /**
- * Writes the law's numbers for the coming step (after `law.update()`) into `out` from `offset`.
+ * Writes the law's numbers of a step into `out` from `offset`: `values` as the simulator's
+ * stageValues() returns them (`lawValues`), or the law's own after `law.update()`.
  */
-export function writeLawValues(law, out, offset) {
+export function writeLawValues(law, out, offset, values = law.values) {
   const names = lawValueNames(law);
-  const values = law.values;
   for (let i = 0; i < names.length; ++i) out[offset + i] = values[names[i]];
   // f32 has no room for a squared range past 1e19, and some GPUs mishandle infinity
   if (law.hasRange) out[offset + names.length] = Math.min(values.$range * values.$range, 3e38);
@@ -178,9 +178,9 @@ export function lawPrologue(law, read) {
  * beyond +-3.4028e38), as {name, value, problem}, or null. Names are as the user wrote them (`L`),
  * or `part $h<n>` for a part computed once per step. The range is clamped instead (writeLawValues).
  */
-export function lawValueProblem(law) {
+export function lawValueProblem(law, values = law.values) {
   for (const key of lawValueNames(law)) {
-    const value = law.values[key];
+    const value = values[key];
     if (!Number.isFinite(value) || Math.abs(value) > F32_MAX) {
       return { name: valueName(key), value, problem: `${value}, which does not fit a 32-bit float` };
     }
@@ -192,10 +192,10 @@ export function lawValueProblem(law) {
  * Warnings about the law's numbers for this step: nonzero values that are 0 in a 32-bit float, or
  * below 1.18e-38 (which a GPU may treat as 0).
  */
-export function lawValueWarnings(law) {
+export function lawValueWarnings(law, values = law.values) {
   const out = [];
   for (const key of lawValueNames(law)) {
-    const value = law.values[key];
+    const value = values[key];
     if (value !== 0 && Math.fround(value) === 0) out.push(`the law's ${valueName(key)} is ${value}, which is 0 in a 32-bit float`);
     else if (f32Tiny(value)) out.push(`the law's ${valueName(key)} is ${value}, below 1.18e-38: the GPU may treat it as 0`);
   }
