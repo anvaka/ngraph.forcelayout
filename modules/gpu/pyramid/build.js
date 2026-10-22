@@ -32,7 +32,9 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
 
   const jobs = Object.keys(kernels).map(name => {
     const options = { code: kernels[name], label: name };
-    if (name === 'TREE_LOCAL' && step) options.bindings = ['uniform', 'storage'].concat(localMeta ? ['read'] : [], [step.dynamic ? 'dynamic' : 'uniform']);
+    const stepBinding = step ? [step.dynamic ? 'dynamic' : 'uniform'] : [];
+    if (name === 'TREE_LOCAL' && step) options.bindings = ['uniform', 'storage'].concat(localMeta ? ['read'] : [], plan.heavyCells ? ['storage'] : [], stepBinding);
+    if (name === 'TREE_HEAVY' && step) options.bindings = ['uniform', 'read', 'read', 'storage', 'read'].concat(stepBinding);
     return getPipeline(device, options).then(pipeline => [name, pipeline]);
   });
   const pipes = Object.fromEntries(await Promise.all(jobs));
@@ -54,6 +56,7 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
   const treeMeta = buf(sizesOf.treeMeta, S | CS);
   const treeSp = buf(sizesOf.treeSp, S | CS);
   const treeCells = buf(sizesOf.treeCells, S | CD | CS);
+  const treeHeavy = plan.heavyCells ? buf(sizesOf.treeHeavy) : null;
   const paramBytes = (PARAM_WORDS + plan.lawWords) * 4;
   const TP = buf(Math.max(64, Math.ceil(paramBytes / 16) * 16), U | CD);
   const nbU = buf(16, U | CD);
@@ -82,9 +85,10 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
   const alternates = name => columns[name].some(column => Array.isArray(external[column]));
   // A kernel that reads alternating buffers gets a bind group per parity
   const both = (name, list) => (alternates(name) ? [0, 1].map(p => bind(name, list(p))) : bind(name, list(0)));
+  const stepEntry = step ? [{ buffer: step.buffer, size: step.size }] : [];
   const groups = {
     TREE_HIST: both('TREE_HIST', p => [TP].concat(cols('TREE_HIST', p), [treeBox])),
-    TREE_BOX: bind('TREE_BOX', [TP, treeBox]),
+    TREE_BOX: bind('TREE_BOX', [TP, treeBox].concat(plan.heavyCells ? [treeHeavy] : [])),
     TREE_BIN: both('TREE_BIN', p => [TP].concat(cols('TREE_BIN', p), [treeBox, treeCount, treeWork])),
     TREE_SCAN_BLOCKS: bind('TREE_SCAN_BLOCKS', [treeCount, treeMeta, treeBlocks]),
     TREE_SCAN_TOP: bind('TREE_SCAN_TOP', [treeBlocks, nbU]),
@@ -92,8 +96,9 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     TREE_PLACE: bind('TREE_PLACE', [TP, treeMeta, treeWork]),
     TREE_ORDER: both('TREE_ORDER', p => [TP].concat(cols('TREE_ORDER', p), [treeWork, treeMeta, treeSp])),
     TREE_AGG0: bind('TREE_AGG0', [TP, treeSp, treeMeta, treeCells]),
-    TREE_LOCAL: bind('TREE_LOCAL', [TP, treeCells].concat(localMeta ? [treeMeta] : [], step ? [{ buffer: step.buffer, size: step.size }] : [])),
+    TREE_LOCAL: bind('TREE_LOCAL', [TP, treeCells].concat(localMeta ? [treeMeta] : [], plan.heavyCells ? [treeHeavy] : [], stepEntry)),
   };
+  if (plan.heavyCells) groups.TREE_HEAVY = bind('TREE_HEAVY', [TP, treeSp, treeMeta, treeCells, treeHeavy].concat(stepEntry));
   const levels = [];
   for (let l = 0; l < sizes.levels; l++) {
     const count = (sizes.G >> (l + 1)) ** D;
@@ -163,10 +168,15 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
         const size = grid(count);
         pass.dispatchWorkgroups(size[0], size[1]);
       }
+      const offsets = step && step.dynamic ? [stepOffset || 0] : [];
       pass.setPipeline(pipes.TREE_LOCAL);
-      if (step && step.dynamic) pass.setBindGroup(0, groups.TREE_LOCAL, [stepOffset || 0]);
-      else pass.setBindGroup(0, groups.TREE_LOCAL);
+      pass.setBindGroup(0, groups.TREE_LOCAL, offsets);
       pass.dispatchWorkgroups(locals[0], locals[1]);
+      if (plan.heavyCells) {
+        pass.setPipeline(pipes.TREE_HEAVY);
+        pass.setBindGroup(0, groups.TREE_HEAVY, offsets);
+        pass.dispatchWorkgroups(plan.heavyGroups);
+      }
     },
     boxBuffer: treeBox,
     destroy() {
