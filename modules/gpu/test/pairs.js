@@ -155,6 +155,8 @@ test('the guard\'s message names the stage and the count', () => {
   assert.equal(statusMessage(p, new Uint32Array(5)), null);
   const message = statusMessage(p, Uint32Array.from([1, 0, 39100000, p.capChunks, 0]));
   assert.match(message, /^the pair formula crowd needed about 1\.0e10 pair tests in one step; the GPU stops at /);
+  assert.match(message, /start the stage later \(when: 'step > 40'\) or lower its radius$/);
+  assert.match(statusMessage(p, Uint32Array.from([2, 0, 1000, p.capChunks, 0])), /needed about 256,000 tests to order its crowded cells/);
   assert.match(statusMessage(p, Uint32Array.from([1, 0, 0xffffffff, p.capChunks, 0])), /needed more than /);
 });
 
