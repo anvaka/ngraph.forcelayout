@@ -20,7 +20,8 @@ import {FIELD, FIELD_MAX_U} from './diskField.js';
  *
  * Written as formulas, so the simulator runs the loops: two sums (the total charge and the
  * charge-weighted position, for the centre) and a formula for every body. Only the measurement
- * runs in JS, once. Returns {getRadius, dispose}.
+ * runs in JS, once, as a host step: it reads the positions at its place in the step, and the
+ * formula's parameters read what it found. Returns {getRadius, dispose}.
  */
 export default function addBackground(layout, options) {
   const simulator = layout.simulator;
@@ -31,16 +32,21 @@ export default function addBackground(layout, options) {
   const D = simulator.settings.dimensions;
   // The charges are the column the layout pushes with when the idea is attached
   const charge = simulator.repulsionCharge();
-  let sigma = 0, radius = 0, off = false, triedAt = -1;
+  let sigma = 0, radius = 0, off = false;
 
   simulator.addSum('jelliumCharge', { formula: charge });
   simulator.addSum('jelliumMoment', { formula: `${charge} * pos` });
+  // From the start step on, until the density is measured (or found to over- or underflow)
+  simulator.addHostStep('jelliumMeasure', {
+    when: context => sigma === 0 && !off && context.iteration() + stepsBefore >= startStep &&
+      context.store.n >= 8 && context.gravity() < 0,
+    reads: ['pos', charge],
+    run: measure
+  });
   simulator.addNodeFormula('neutral-background', {
-    // Parameter functions see the step context, which has no positions; the measurement reads
-    // them from the simulator itself
     params: {
-      sigma: () => measure(simulator),
-      radius: () => { measure(simulator); return radius; },
+      sigma: () => sigma,
+      radius: () => radius,
       start: startStep,
       before: stepsBefore,
       edge: FIELD[FIELD.length - 1],
@@ -63,22 +69,20 @@ export default function addBackground(layout, options) {
   return {
     getRadius: () => radius,
     dispose() {
-      ['jelliumCharge', 'jelliumMoment', 'neutral-background'].forEach(name => {
+      ['jelliumCharge', 'jelliumMoment', 'jelliumMeasure', 'neutral-background'].forEach(name => {
         if (simulator.getStage(name)) simulator.removeStage(name);
       });
     }
   };
 
   // The background's density: measured once, at the start step, as `density` times the typical
-  // local density of the nodes. This runs on the CPU and reads positions (a GPU engine has to
-  // hand them over at this step).
+  // local density of the nodes. This runs on the CPU and reads positions (an engine that keeps
+  // its own copy of them hands them over at this step). Without a typical density (the nodes
+  // have no neighbours to measure) it tries again on the next step.
   function measure(sim) {
-    if (sigma || off || sim.iteration() === triedAt) return sigma;
-    triedAt = sim.iteration();
     const n = sim.store.n;
-    if (sim.iteration() + stepsBefore < startStep || n < 8 || !(sim.gravity() < 0)) return 0;
     const nodesPerVolume = typicalDensity(sim, 6);
-    if (!(nodesPerVolume > 0)) return 0;
+    if (!(nodesPerVolume > 0)) return;
     const q = sim.store[charge];
     let total = 0;
     for (let i = 0; i < n; ++i) total += q[i];
@@ -89,7 +93,6 @@ export default function addBackground(layout, options) {
       off = true;
       sigma = 0;
     }
-    return sigma;
   }
 }
 

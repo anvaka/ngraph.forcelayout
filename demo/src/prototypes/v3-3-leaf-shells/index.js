@@ -39,16 +39,18 @@ export default {
     let length, stiffness, gravity;
     apply();
     // The panel can change spring length, stiffness or gravity without a restart: redo the rings.
-    layout.on('step', onStep);
+    // It changes them through the simulator's setters, which fire 'settings' (a direct write to
+    // simulator.settings fires nothing).
+    simulator.on('settings', onSettings);
 
     return {
       dispose() {
-        layout.off('step', onStep);
+        simulator.off('settings', onSettings);
         restore();
       }
     };
 
-    function onStep() {
+    function onSettings() {
       if (simulator.springLength() !== length || simulator.springCoefficient() !== stiffness ||
           simulator.gravity() !== gravity) apply();
     }
