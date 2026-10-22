@@ -8,13 +8,23 @@
 //   // then the caller's node kernel, with tree.buffers bound as plan.section.bindings says
 import { getPipeline } from '../device.js';
 import { writeLawValues } from '../wgsl/print.js';
-import { boxLayout, WG, CROWD_GROUPS, HUB_GROUPS, HIST_GROUPS } from './wgsl.js';
+import { boxLayout, WG, CROWD_GROUPS, HUB_GROUPS, HIST_GROUPS, chargeWeight } from './wgsl.js';
 import { NEAR_CAP, pyrLevels } from './plan.js';
 
 const PARAM_WORDS = 20;
-// Pair evaluations a step may spend on crowded cells (cells past the near cap) before the step
-// is refused: about 20 ms of this Mac's GPU
+// Pair evaluations (weighted by the charges, see chargeWeight) a step may spend on crowded cells
+// (cells past the near cap) before the step is refused: about 30 ms of an M4 Max
 export const WORK_CAP = 2e9;
+// The crowded work an M4 Max does a millisecond at the slowest measured (gpu-critic-2's pyrcap.js:
+// two blobs of 25k, 1.2e9 evaluations a step: an exp law at 17.7 ms, the stock law at 16.8, five
+// charges at 31.7 ms), in weighted evaluations. The device's rate is taken from the runner's
+// timings (observeTime()), never above this.
+const RATE_MAX = 6.5e7;
+// The rate is measured on steps whose crowded work is at least this much (about 3 ms here): then
+// it dominates the step, whose whole time counts as crowded work (the safe side)
+const MEASURE_WORK = 2e8;
+// A capped step takes about this long at the measured rate
+const CAPPED_MS = 30;
 
 /**
  * Buffers, pipelines and bind groups for `plan` (planPyramid()). `buffers` are the caller's, by
@@ -25,7 +35,7 @@ export const WORK_CAP = 2e9;
  * Resolves once the pipelines are compiled; rejects naming the kernel when one fails, or when the
  * buffers cannot be created.
  */
-export async function buildPyramid(device, plan, { buffers: external = {}, step = null, groupLimit = 0, workCap = WORK_CAP } = {}) {
+export async function buildPyramid(device, plan, { buffers: external = {}, step = null, groupLimit = 0, workCap = WORK_CAP, slowdown = 1 } = {}) {
   if (plan.refusal) throw new Error(plan.refusal);
   const { D, sizes, kernels, columns } = plan;
   const missing = [].concat(...Object.values(columns)).filter(name => !external[name]);
@@ -120,6 +130,19 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     throw new Error('could not create the tree buffers: ' + setupError.message);
   }
 
+  // The crowded-work cap: the caller's (a device slower than an M4 Max gets a smaller one), lowered
+  // when the measured rate is slow (observeTime()), though never below 1.5 times the work of a step
+  // that was just measured: the step's whole time counts as crowded work, and a pile's sort and
+  // sums (ORDER, AGG0) take time too, so a measurement can come out several times low
+  let cap = workCap, rate = RATE_MAX / Math.max(1, slowdown), lastWork = 0;
+  function updateCap() {
+    const next = Math.min(workCap, Math.max(rate * CAPPED_MS, 1.5 * lastWork));
+    if (next === cap) return;
+    cap = next;
+    pf[14] = cap;
+    device.queue.writeBuffer(TP, 14 * 4, new Float32Array([cap]));
+  }
+
   // (`groupLimit` lowers it, so tests can see 2D grids at small sizes)
   const limit = groupLimit || device.limits.maxComputeWorkgroupsPerDimension;
   // Workgroups for `threads`, as a 2D grid past the per-dimension limit (kernels read the linear id)
@@ -190,9 +213,28 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     // Copy these 16 bytes into a readback and give the 4 words to pyramidStatus(): non-null means
     // a step since the buffers were made had its crowded cells refused (the words keep the first
     // such step's numbers), and the runner should halt with that message
-    status: { buffer: treeLists, offset: 0, size: 16 },
+    status: { buffer: treeLists, offset: 0, size: 32 },
     // pyramidStatus() with this pyramid's cap
-    statusMessage: words => pyramidStatus(words, workCap),
+    statusMessage: words => pyramidStatus(words, cap, plan.K),
+    /**
+     * The status words of a readback (call it on every one): the last step's crowded work, for
+     * observeTime()
+     */
+    observe(words) {
+      lastWork = words[7] * 1e6;
+    },
+    /**
+     * The runner's measured GPU ms a step: when the last measured step's crowded work dominated it,
+     * the device's rate (never above RATE_MAX), and the cap follows, so that a capped step takes
+     * about CAPPED_MS. The whole step counts as crowded work, so the rate can only come out low.
+     */
+    observeTime(msPerStep) {
+      if (!(msPerStep > 0) || lastWork < MEASURE_WORK) return;
+      rate = Math.min(RATE_MAX, lastWork / msPerStep);
+      updateCap();
+    },
+    // GPU ms of a step at the cap, at the measured rate (before one: RATE_MAX / slowdown)
+    cappedMs: () => cap / rate,
     destroy() {
       for (const b of owned) b.destroy();
     },
@@ -211,15 +253,18 @@ function writeTables(device, treeCells, plan) {
 }
 
 /**
- * The message to halt with for the 4 status words of a step (tree.status), or null. Cells of more
- * than NEAR_CAP bodies are summed exactly in workgroups; past `workCap` pair evaluations a step
- * (a layout piled into a few cells; buildPyramid's), they are refused rather than sampled.
+ * The message to halt with for the status words of a step (tree.status), or null. Cells of more
+ * than NEAR_CAP bodies are summed exactly in workgroups; past `workCap` pair evaluations (weighted
+ * by the `charges`, see chargeWeight) a step (a layout piled into a few cells; tree.statusMessage()
+ * passes its own), they are refused rather than sampled.
  */
-export function pyramidStatus(words, workCap = WORK_CAP) {
+export function pyramidStatus(words, workCap = WORK_CAP, charges = 1) {
   const biggest = words[2];
   if (!biggest) return null;
-  const cap = workCap / 1e9;
+  const billions = x => (x >= 10 ? x.toFixed(0) : x >= 1 ? x.toFixed(1) : x.toFixed(2));
+  const work = words[3] / 1000, weight = chargeWeight(charges);
   return `the tree pass: a grid cell holds ${biggest.toLocaleString('en-US')} bodies, and the crowded cells need about ` +
-    `${(words[3] / 1000).toFixed(1)} billion pair evaluations a step, more than the GPU takes (${cap >= 1 ? cap.toFixed(0) : cap.toFixed(2)} billion); ` +
-    'the layout is piled too densely in one place for the grid';
+    `${billions(work)} billion pair evaluations a step` +
+    (charges > 1 ? ` with ${charges} charges (the work of ${billions(work * weight)} billion with one)` : '') +
+    `, more than the GPU takes (${billions(workCap / 1e9)} billion); the layout is piled too densely in one place for the grid`;
 }
