@@ -29,6 +29,9 @@ export async function createWebGPUBackend(options = {}) {
   const limits = {};
   for (const name of LIMIT_NAMES) limits[name] = device.limits[name];
   // For tests and measurements: `generic: true` runs the stock step with the generic engine too,
-  // `smallGraph` moves N* (one kernel and exact pairs up to it)
-  return Object.assign(createCapabilities(limits, { generic: !!options.generic, smallGraph: options.smallGraph, lost: () => !!state.lost }), { device });
+  // `smallGraph` moves N* (one kernel and exact pairs up to it), `pairEstimate` scales the pair
+  // formulas' expected work (below 1 their guard halts steps it did not plan for), `slowdown`
+  // stands for the speed probe's factor (device.js)
+  return Object.assign(createCapabilities(limits, { generic: !!options.generic, smallGraph: options.smallGraph, lost: () => !!state.lost }),
+    { device, pairEstimate: options.pairEstimate || 1, slowdown: options.slowdown || 0 });
 }

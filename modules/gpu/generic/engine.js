@@ -5,7 +5,7 @@
 import { getPipeline } from '../device.js';
 import { kernelCode, bindingsOf } from './emit.js';
 import { THREADS, GROUP_RUN, LINK_CHUNK } from './plan.js';
-import { buildPyramid, pyramidStatus } from '../pyramid/build.js';
+import { buildPyramid, pyramidStatus, WORK_CAP } from '../pyramid/build.js';
 import { buildPairs } from '../pairs/build.js';
 import { buildGrid } from '../grid/build.js';
 import { gridStatus, gridCappedMs } from '../grid/plan.js';
@@ -13,11 +13,11 @@ import { slotFiller } from './values.js';
 import { chooseOrigin, relativePositions as relative, writePositionsBack, rowsMoved } from '../buffers.js';
 import { createRowWriter, trackHostPositions } from '../rows.js';
 
-// GPU time of one step at a structure's work cap, measured on an M4 Max: a pair stage at the pair
-// cap (3.6-6.3 ms whatever the formula, gpu-critic-2's pairs review) and the pyramid's crowded cells
-// at theirs (about 20 ms); a grid field's, from its size and body count (gridCappedMs()). The runner
+// GPU time of a step of the pyramid's crowded cells at their work cap on the M4 Max the cap was
+// sized on (about 20 ms); on other devices the cap and this time scale with the device's
+// slowdown (device.js), so that a capped step takes about as long. A pair stage's comes from the
+// pairs' measured rate, a grid field's from its size and body count (gridCappedMs()). The runner
 // bounds steps per submit by them (see cappedMs).
-const PAIR_STAGE_CAPPED_MS = 6.5;
 const PYRAMID_CAPPED_MS = 20;
 
 // Integers above this are not exact in f32
@@ -29,7 +29,7 @@ const RING_SLOTS = 1024;
  * Builds a generic plan's buffers and pipelines from the store of `simulator`. Resolves to the
  * engine the runner drives (see runner.js), or rejects naming the kernel that failed.
  */
-export async function createGenericEngine(device, { simulator, plan, fireState, warn }) {
+export async function createGenericEngine(device, { simulator, plan, fireState, warn, slowdown = 1, pairEstimate = 1 }) {
   const store = simulator.store, springs = simulator.springStore;
   const D = plan.D, n = store.n, cap = plan.cap;
   const code = kernelCode(plan);
@@ -115,7 +115,9 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   let tree = null;
   if (plan.pyramid) {
     try {
-      tree = await buildPyramid(device, plan.pyramid, { buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes, dynamic: true } });
+      tree = await buildPyramid(device, plan.pyramid, {
+        buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes, dynamic: true }, workCap: WORK_CAP / slowdown,
+      });
     } catch (e) {
       owned.forEach(b => b.destroy());
       throw e;
@@ -129,13 +131,19 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   if (plan.pairs) {
     try {
       // the store's positions let it count the first step's work on the host (slices, see run())
-      pairs = await buildPairs(device, plan.pairs, { buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes }, positions: store.pos });
+      pairs = await buildPairs(device, plan.pairs, { buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes }, positions: store.pos, estimateScale: pairEstimate });
     } catch (e) {
       owned.forEach(b => b.destroy());
       if (tree) tree.destroy();
       throw e;
     }
+    // a slower device than the one the cap was sized on gets a smaller cap from the start; the
+    // pairs lower it further once they have timed a dense step
+    if (slowdown > 1) pairs.setCap(plan.pairs.cap / slowdown);
   }
+  // a capped pair pass's GPU ms before the pairs have timed one is the speed probe's guess
+  const pairsUnmeasured = pairs ? pairs.cappedMs() : 0;
+  const pairStageMs = () => (pairs.cappedMs() === pairsUnmeasured ? pairsUnmeasured * slowdown : pairs.cappedMs());
   const statuses = [];
   if (pairs) {
     statuses.push({
@@ -439,8 +447,10 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     // GPU time of a step whose structures all work at their caps: a step can get there within a
     // submit (a gate opens, a radius grows, the layout piles up), so the runner keeps submits
     // below the watchdog with it rather than with the steps it timed
-    cappedMs: (pairs ? plan.pairs.stages.length * PAIR_STAGE_CAPPED_MS : 0) + (tree ? PYRAMID_CAPPED_MS : 0) +
-      [...grids.keys()].reduce((total, kernel) => total + gridCappedMs(kernel.section.grid), 0),
+    get cappedMs() {
+      return (pairs ? plan.pairs.stages.length * pairStageMs() : 0) + (tree ? PYRAMID_CAPPED_MS * slowdown : 0) +
+        [...grids.keys()].reduce((total, kernel) => total + gridCappedMs(kernel.section.grid) * slowdown, 0);
+    },
     // slices each pair sort's last encoded step ran in (0: one submit), for tests
     pairSlices: () => (pairs ? pairs.slices() : []),
     // the runner's measured GPU ms a step: the pairs take the device's rate from it, for their cap

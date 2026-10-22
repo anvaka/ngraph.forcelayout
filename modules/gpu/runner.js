@@ -17,7 +17,7 @@
 // The runner drives an engine (the stock grid template, templates/stock.js, or a generic plan,
 // generic/engine.js) through one interface: prepare(hostOwns, steps) uploads, run(count,
 // firstStep, …) encodes steps, copyPositions()/readPositions() read back, readDevice() syncs.
-import { watchDevice, submitCost } from './device.js';
+import { watchDevice, submitCost, deviceSlowdown } from './device.js';
 import { GUARD } from './program.js';
 import { DEVICE_LOST } from './check.js';
 import { createStockEngine } from './templates/stock.js';
@@ -96,6 +96,7 @@ function createRunner(layout, backend) {
   let linkVersions = null; // link columns as built
   let fireState = null;    // FIRE's (alpha, steps downhill, ...) from the last sync
   let submitMs = 0;
+  let slowdown = 1;        // how much slower than the Mac the work caps were sized on (device.js)
   let marks = null;        // what a 'step' listener must not change
 
   // Readbacks: positions after a batch, and (with timestamp queries) its GPU time
@@ -160,6 +161,7 @@ function createRunner(layout, backend) {
     }
     try {
       submitMs = await submitCost(device);
+      slowdown = backend.slowdown || await deviceSlowdown(device);
       await build();
     } catch (e) {
       release();
@@ -183,7 +185,7 @@ function createRunner(layout, backend) {
     linkVersions = LINK_COLUMNS.map(name => springStore.versions[name]);
     marks = markList(plan);
     const create = plan.template === 'grid' ? createStockEngine : createGenericEngine;
-    const next = store.n > 0 ? await create(device, { simulator, plan, fireState, warn: warnOnce }) : null;
+    const next = store.n > 0 ? await create(device, { simulator, plan, fireState, warn: warnOnce, slowdown, pairEstimate: backend.pairEstimate }) : null;
     if (released) { if (next) next.destroy(); return; }
     engine = next;
     hostOwns = false;
@@ -320,9 +322,9 @@ function createRunner(layout, backend) {
   // caps within a submit (a gate opens, a radius grows), so no more than fit CAPPED_SUBMIT_MS then.
   function stepsPerSubmit() {
     const ms = gpuMsPerStep();
+    const capped = engine && engine.cappedMs ? Math.max(1, Math.floor(CAPPED_SUBMIT_MS / engine.cappedMs)) : MAX_BATCH;
     // before a step is timed: pair formulas near their work cap could make 64 steps long
-    if (!(ms > 0)) return engine && engine.pairs ? FIRST_PAIR_BATCH : DEFAULT_BATCH;
-    const capped = engine && engine.cappedMs ? Math.floor(CAPPED_SUBMIT_MS / engine.cappedMs) : MAX_BATCH;
+    if (!(ms > 0)) return Math.min(capped, engine && engine.pairs ? FIRST_PAIR_BATCH : DEFAULT_BATCH);
     const most = Math.floor(MAX_SUBMIT_MS / ms);
     const least = Math.ceil(submitMs / (0.1 * ms));
     return Math.max(1, Math.min(MAX_BATCH, capped, Math.max(most, least)));
@@ -589,8 +591,10 @@ function createRunner(layout, backend) {
   }
 
   /**
-   * {msPerStep, source, steps, engine, nodes, stepsPerSubmit, halted}: msPerStep is GPU time per
-   * step from timestamp queries when the device has them, else wall clock between readbacks.
+   * {msPerStep, source, steps, engine, nodes, stepsPerSubmit, slowdown, halted}: msPerStep is GPU
+   * time per step from timestamp queries when the device has them, else wall clock between
+   * readbacks; slowdown is how many times slower than the Mac the work caps were sized on the
+   * device measured.
    */
   function stats() {
     return {
@@ -600,6 +604,7 @@ function createRunner(layout, backend) {
       engine: engine ? engine.kind : 'none',
       nodes: engine ? engine.n : 0,
       stepsPerSubmit: stepsPerSubmit(),
+      slowdown,
       halted: halted ? halted.message : null,
     };
   }

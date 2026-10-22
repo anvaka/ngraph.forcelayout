@@ -62,6 +62,11 @@ if (plan.runs) {
   grid field's lattice) halts the runner with `e.status` set. Steps after it ran without that
   work, so the store keeps the last readback from before and `stop()` reads nothing more back:
   the layout loses at most a batch of good steps and never keeps bad ones.
+- Work caps (the pyramid's crowded cells, a pair formula's tests a slice) were sized on an M4 Max.
+  On a slower device a speed probe at `runOnGpu()` lowers them so that a capped step takes about
+  as long, and the pairs then follow the rate they measure on dense steps. A submit holds no
+  more steps than fit 1 s if every step reached its caps (`gpu.stats().slowdown` shows the
+  probe's factor).
 
 `gpuCapabilities(limits)` is a backend without a device, for `plan()` in tests or on a server:
 WebGPU's default limits, or yours on top of them.
@@ -75,7 +80,7 @@ compiles that description; it never reads the library's internals.
 | File | Part |
 |---|---|
 | `index.js` | Public API: `createWebGPUBackend`, `runOnGpu`, `gpuCapabilities`. |
-| `device.js` | The device: limits, `uncapturederror` and loss watching, pipelines compiled with `createComputePipelineAsync` and cached per device by their WGSL text and layout, the submit cost. |
+| `device.js` | The device: limits, `uncapturederror` and loss watching, pipelines compiled with `createComputePipelineAsync` and cached per device by their WGSL text and layout, the submit cost, and a speed probe (0.26 ms of pair work here) that says how much slower than the M4 Max the work caps were sized on a device is. |
 | `wgsl/print.js` | The WGSL printer of the formula language: prefixed user names, safe builtins (tanh clamped, constant whole powers multiplied), f32 literal rules; the law helpers (`emitLaw`, the law's numbers). |
 | `check.js` | The lowering table: what each stage needs to run here, checked against a capability profile (limits) with no device. `lower()` gives `plan()` its verdicts and the runner its plan, so they cannot disagree. Literal checks, storage bindings per kernel, buffer sizes. |
 | `schedule.js` | From an accepted step to a plan: the stock template for the exact stock step in 2D above 1,024 bodies, a generic plan for everything else. |
