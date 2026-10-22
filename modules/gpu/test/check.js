@@ -42,9 +42,16 @@ test('the stock step: one kernel up to N*, the grid template above it in 2D', ()
   assert.equal(planOf(big).template, 'grid');
   assert.match(verdict.stages.find(s => s.stage === 'repulsion').how, /grid pyramid/);
   assert.match(verdict.stages.find(s => s.stage === 'integrate').how, /FIRE/);
-  // a generic plan on request (tests compare the two), and for the stock step in 3D
-  assert.equal(lower(big.simulator.program(), big.simulator, SPEC_LIMITS, { generic: true }).plan.template, 'generic');
-  assert.equal(planOf(layoutOf(3000, { dimensions: 3 })).template, 'generic');
+  // a generic plan on request (tests compare the two), and for the stock step in 3D: the generic
+  // pyramid above N*
+  const generic = lower(big.simulator.program(), big.simulator, SPEC_LIMITS, { generic: true }).plan;
+  assert.equal(generic.template, 'generic');
+  assert.equal(generic.regime, 'pyramid');
+  const deep = planOf(layoutOf(3000, { dimensions: 3 }));
+  assert.equal(deep.regime, 'pyramid');
+  assert.ok(Object.keys(deep.kernels()).indexOf('TREE_LOCAL') >= 0);
+  assert.match(layoutOf(3000, { dimensions: 3 }).simulator.plan(gpuCapabilities()).stages.find(s => s.stage === 'repulsion').how, /grid pyramid/);
+  assert.equal(planOf(layoutOf(1000, { dimensions: 3 })).regime, 'pairs');
 });
 
 test('node formulas, sums, extra passes, charges, inertia and when run, in any dimension', () => {
@@ -169,15 +176,17 @@ test('budgets: storage buffers, buffer sizes, workgroup memory, bodies', () => {
   ]);
   assert.deepEqual(reasons(layout, { maxBufferSize: 65536 }).filter(r => /vel/.test(r)), ['the buffer vel needs 0.2 MiB; this device allows 0.1 MiB per buffer']);
   assert.match(reasons(layout, { maxComputeWorkgroupsPerDimension: 16 })[0], /up to 4,096 bodies/);
-  // many charges in 7D: the tile holds 7 + 10 numbers per body
+  // many charges in 7D: the passes walk with the stock repulsion (only drag and springs, which
+  // add to the force, are between), so the tile holds 7 + 11 numbers per body
   const many = layoutOf(100, { dimensions: 7 }).simulator;
   for (let c = 0; c < 10; c++) {
     many.store.define('q' + c, Float64Array, 1, 1);
     many.addRepulsion('pass' + c, { charge: 'q' + c });
   }
-  assert.match(reasons({ simulator: many })[0], /workgroup memory \(17 numbers per body\)/);
-  // exact pairs go up to 16,384 bodies; the stock step in 2D has the template beyond
-  assert.match(reasons(layoutOf(17000, { dimensions: 3 }))[0], /up to 16,384 bodies/);
+  assert.match(reasons({ simulator: many })[0], /workgroup memory \(18 numbers per body\)/);
+  // exact pairs go up to 16,384 bodies in 4D and up; 2D and 3D have the pyramid beyond
+  assert.match(reasons(layoutOf(17000, { dimensions: 4 }))[0], /in 4D as exact pairs, for up to 16,384 bodies/);
+  assert.deepEqual(reasons(layoutOf(17000, { dimensions: 3 })), []);
   assert.deepEqual(reasons(layoutOf(17000)), []);
 });
 

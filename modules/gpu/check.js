@@ -9,8 +9,9 @@
 // "runs" verdict is the plan the runner compiles. It runs, in any number of dimensions:
 //  - node formulas and sums over bodies (global), in CPU stage order;
 //  - the stock repulsion and extra passes (addRepulsion), with any law the printer accepts and
-//    any charge and sensitivity columns, as exact pairs up to 16,384 bodies; the stock step in 2D
-//    on any number of bodies (the grid template);
+//    any charge and sensitivity columns: exact pairs up to 1,024 bodies, the generic grid pyramid
+//    above in 2D and 3D (exact pairs up to 16,384 bodies in 4 or more dimensions); the exact
+//    stock step in 2D above 1,024 bodies keeps today's grid kernels (the stock template);
 //  - drag, the stock springs (one length and stiffness), Euler or FIRE with any inertia column;
 //  - `when` on any of these.
 // Everything else gets a refusal that says what does not run.
@@ -99,7 +100,8 @@ export function createCapabilities(limits, options = {}) {
  */
 export function lower(program, simulator, limits, options = {}) {
   const reasons = [], warnings = [], stages = {};
-  const printer = createPrinter(message => { if (warnings.indexOf(message) < 0) warnings.push(message); });
+  const warn = message => { if (warnings.indexOf(message) < 0) warnings.push(message); };
+  const printer = createPrinter(warn);
   const laws = Object.create(null);
   const facts = programFacts(program);
   program.stages.forEach(stage => {
@@ -116,7 +118,7 @@ export function lower(program, simulator, limits, options = {}) {
   const stagesRun = Object.keys(stages).every(name => stages[name].runs);
   let plan = null;
   if (stagesRun && reasons.length === 0) {
-    plan = schedule(program, laws, limits, options);
+    plan = schedule(program, laws, limits, Object.assign({}, options, { warn }));
     if (plan.refusal) {
       reasons.push(plan.refusal);
       plan = null;

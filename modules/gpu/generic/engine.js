@@ -1,16 +1,19 @@
 // The device side of a generic plan (plan.js, emit.js): buffers from the store, the pipelines, a
-// ring of per-step slots, and the encoding of steps. Rows keep the store's order; positions are
-// f32 relative to an f64 origin near the middle of the drawing, and swap between X and Y every
-// step.
+// ring of per-step slots, the pyramid when the plan has one, and the encoding of steps. Rows keep
+// the store's order; positions are f32 relative to an f64 origin near the middle of the drawing,
+// and swap between X and Y every step.
 import { getPipeline } from '../device.js';
-import { kernelCode, BINDINGS } from './emit.js';
+import { kernelCode, bindingsOf } from './emit.js';
 import { THREADS } from './plan.js';
+import { buildPyramid } from '../pyramid/build.js';
 import { slotFiller } from './values.js';
 import { chooseOrigin, relativePositions as relative, writePositionsBack, rowsMoved } from '../buffers.js';
 import { createRowWriter, trackHostPositions } from '../rows.js';
 
 // Integers above this are not exact in f32
 const F32_INTEGER = 16777216;
+// Slots of the ring when numbers change from step to step: a submit holds at most this many steps
+const RING_SLOTS = 1024;
 
 /**
  * Builds a generic plan's buffers and pipelines from the store of `simulator`. Resolves to the
@@ -20,11 +23,10 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   const store = simulator.store, springs = simulator.springStore;
   const D = plan.D, n = store.n, cap = plan.cap;
   const code = kernelCode(plan);
-  const names = Object.keys(code);
-  const [writeRows, ...pipelines] = await Promise.all([createRowWriter(device)]
-    .concat(names.map(name => getPipeline(device, { code: code[name], label: name, bindings: BINDINGS }))));
   const pipelineOf = {};
-  names.forEach((name, k) => { pipelineOf[name] = pipelines[k]; });
+  const [writeRows] = await Promise.all([createRowWriter(device)].concat(plan.kernelList.map(kernel =>
+    getPipeline(device, { code: code[kernel.name], label: kernel.name, bindings: bindingsOf(kernel) })
+      .then(pipeline => { pipelineOf[kernel.name] = pipeline; }))));
 
   // --- data from the store ------------------------------------------------------------------------
   const origin = chooseOrigin(store.pos, n, D);
@@ -74,28 +76,32 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
 
   // The ring of per-step slots, read at a dynamic offset
   const slots = slotFiller(simulator, plan, warn, origin);
-  let ring = null, ringSlots = 0;
-  const groupsFor = [null, null];
-  function growRing(count) {
-    if (ring) ring.destroy();
-    ringSlots = Math.max(64, count);
-    ring = device.createBuffer({ size: ringSlots * plan.slot.bytes, usage: GPUBufferUsage.UNIFORM | CD, label: 'V' });
-    for (let p = 0; p < 2; p++) {
-      groupsFor[p] = device.createBindGroup({
-        layout: pipelines[0].getBindGroupLayout(0),
-        entries: [params, { buffer: ring, size: plan.slot.bytes }, S, H, L, positions[p], positions[1 - p]]
-          .map((resource, binding) => ({ binding, resource: resource.buffer ? resource : { buffer: resource } })),
-      });
-    }
-  }
-  growRing(64);
+  const ringSlots = slots.perStep ? RING_SLOTS : 1;
+  const ring = buffer(ringSlots * plan.slot.bytes, GPUBufferUsage.UNIFORM | CD, 'V');
   const errors = await Promise.all([device.popErrorScope(), device.popErrorScope()]);
   const setupError = errors.find(Boolean);
   if (setupError) {
     owned.forEach(b => b.destroy());
-    if (ring) ring.destroy();
     throw new Error('could not create the GPU buffers: ' + setupError.message);
   }
+  // The pyramid reads positions (X or Y, by the step's parity), charge columns and the slot
+  let tree = null;
+  if (plan.pyramid) {
+    try {
+      tree = await buildPyramid(device, plan.pyramid, { buffers: { X: positions, S, H }, step: { buffer: ring, size: plan.slot.bytes, dynamic: true } });
+    } catch (e) {
+      owned.forEach(b => b.destroy());
+      throw e;
+    }
+    tree.setValues({ gravity: 0 }, null);
+  }
+  // Bind groups per layout and parity
+  const bindGroups = kernel => [0, 1].map(p => device.createBindGroup({
+    layout: pipelineOf[kernel.name].getBindGroupLayout(0),
+    entries: [params, { buffer: ring, size: plan.slot.bytes }, S, H, L, positions[p], positions[1 - p]]
+      .concat(kernel.tree ? [tree.buffers.TP, tree.buffers.treeSp, tree.buffers.treeMeta, tree.buffers.treeCells] : [])
+      .map((resource, binding) => ({ binding, resource: resource.buffer ? resource : { buffer: resource } })),
+  }));
 
   let parity = 0;   // positions of the next step are read from positions[parity]
   // What the module last put on the device or into the store, to find rows the host wrote
@@ -103,7 +109,9 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   let deviceVelocities = Float64Array.from(store.velocity.subarray(0, n * D));
   let uploaded = versions();
   const bodies = simulator.bodies.slice();
-  const kernels = plan.kernelList.map(kernel => ({ kernel, pipeline: pipelineOf[kernel.name], groups: workgroups(kernel), gates: kernelGates(kernel) }));
+  const kernels = plan.kernelList.map(kernel => ({
+    kernel, pipeline: pipelineOf[kernel.name], bind: bindGroups(kernel), groups: workgroups(kernel), gates: kernelGates(kernel),
+  }));
   let lastSlot = null;
 
   // The gates of a kernel whose every part is gated (it is left out on steps where none holds),
@@ -113,7 +121,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     if (kernel.kind !== 'node') return null;
     const gates = [];
     for (const section of kernel.sections) {
-      if (section.kind === 'pairs') {
+      if (section.kind === 'pairs' || section.kind === 'tree') {
         if (section.channels.some(c => c.gate === undefined)) return null;
         section.channels.forEach(c => gates.push(c.gate));
       } else if (section.gate === undefined) return null;
@@ -170,7 +178,6 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
       const ran = filled.count;
       if (ran === 0) return { ran, halt: filled.halt };
       const floats = plan.slot.floats;
-      if (filled.perStep && ran > ringSlots) growRing(ran);
       // without numbers that change within the call, one slot serves every step, written only
       // when it changed
       const same = !filled.perStep && sameSlot(filled.data, lastSlot, floats);
@@ -180,7 +187,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
       }
       if (filled.perStep) lastSlot = null;
       for (let done = 0; done < ran;) {
-        const c = Math.min(perSubmit, ran - done);
+        const c = Math.min(perSubmit, ran - done, filled.perStep ? ringSlots : Infinity);
         if (filled.perStep) device.queue.writeBuffer(ring, 0, filled.data, done * floats, c * floats);
         const enc = device.createCommandEncoder();
         const first = done === 0, last = done + c === ran;
@@ -195,11 +202,14 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
           const slot = filled.perStep ? s : 0;
           const offset = [slot * plan.slot.bytes];
           const values = filled.data.subarray((filled.perStep ? done + s : 0) * floats);
-          for (const { pipeline, groups: g, gates } of kernels) {
+          for (const { kernel, pipeline, bind, groups: g, gates } of kernels) {
             // a kernel of gated stages only, none of which runs this step
             if (gates && gates.every(index => values[index] === 0)) continue;
+            // the pyramid's structure, from this step's positions; it also orders the threads of
+            // its kernel, so it is built even on steps where its passes are gated off
+            if (kernel.tree) tree.encode(cp, { stepOffset: offset[0], parity });
             cp.setPipeline(pipeline);
-            cp.setBindGroup(0, groupsFor[parity], offset);
+            cp.setBindGroup(0, bind[parity], offset);
             cp.dispatchWorkgroups(g);
           }
           parity ^= 1;
@@ -284,7 +294,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
 
     destroy() {
       owned.forEach(b => b.destroy());
-      if (ring) ring.destroy();
+      if (tree) tree.destroy();
     },
   };
 
