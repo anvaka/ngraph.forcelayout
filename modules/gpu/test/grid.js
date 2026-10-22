@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 import addGridField from '../../gridfield/index.js';
 import { planGrid, checkGrid, gridSlotValues, gridIsDynamic, gridStatus, gridNumberProblem, gridRelaxedMs } from '../grid/plan.js';
 import { gridChunkWords, CROWD } from '../grid/wgsl.js';
+import { GRID_CHECK_PENDING } from '../grid/canary.js';
 import { SPEC_LIMITS } from '../check.js';
 
 const require = createRequire(import.meta.url);
@@ -146,6 +147,16 @@ test('a device whose compiler sees through the barriers refuses what needs exact
   }
   assert.equal(runs({ anchor: 'box', cell: 2, smooth: { diffuse: 64 } }, exact).runs, true);
   assert.equal(runs({ anchor: 'box', cell: 2, smooth: { diffuse: 64 } }, SPEC_LIMITS).runs, true, 'no device checked: no refusal');
+});
+
+test('while the device check is pending, a grid stage runs and says so', () => {
+  const pending = Object.assign({}, SPEC_LIMITS, { gridArithmetic: GRID_CHECK_PENDING });
+  const verdict = checkGrid(gridStage(2, { anchor: 'box', cell: 2, smooth: { diffuse: 64 } }).stage, 2, 1000, pending);
+  assert.equal(verdict.runs, true);
+  assert.match(verdict.how, /14 dispatches; pending a one-time check of this GPU's arithmetic \(runOnGpu waits for it, and refuses the stage if the GPU fails it\)/);
+  const warnings = [];
+  planGrid(Object.assign({ stage: gridStage(2, { cell: 1 }).stage, D: 2, n: 10, limits: pending, warn: w => warnings.push(w) }, refs(2)));
+  assert.deepEqual(warnings, ['gas runs, pending a one-time check of this GPU\'s arithmetic (runOnGpu waits for it, and refuses the stage if the GPU fails it)']);
 });
 
 test('grid numbers of a step that do not fit f32 are named', () => {

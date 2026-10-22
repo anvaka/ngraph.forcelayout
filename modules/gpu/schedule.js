@@ -8,6 +8,7 @@
 //    N* the whole step is one kernel with exact pairs; above it, in 2D and 3D, tree passes walk
 //    the generic grid pyramid (pyramid/).
 import { gridBuffers, shaderCode as gridCode, KERNEL_STAGES as GRID_STAGES, LAW_VALUES } from './templates/grid.js';
+import { GRID_PENDING as PENDING } from './grid/plan.js';
 import { genericPlan, SMALL_GRAPH } from './generic/plan.js';
 import { kernelCode } from './generic/emit.js';
 import { GUARD, STOCK_STAGES, isGuard, physicsStages } from './program.js';
@@ -117,7 +118,8 @@ function genericHow(plan) {
     if (kernel.kind === 'grid') {
       const grid = kernel.section.grid, args = kernel.section.stage.args;
       how[kernel.section.stage.name] = `a ${args.anchor} grid of up to ${args.maxCells.toLocaleString('en-US')} cells per axis, ${args.weights} weights` +
-        `${grid.smooth ? ', smoothed' : ''}: ${grid.dispatches} dispatches (${kernel.name})${kernel.hoisted ? ', at the start of the step' : ''}`;
+        `${grid.smooth ? ', smoothed' : ''}: ${grid.dispatches} dispatches (${kernel.name})${kernel.hoisted ? ', at the start of the step' : ''}` +
+        `${grid.pending ? `; ${PENDING}` : ''}`;
     }
     if (kernel.kind !== 'node') return;
     const where = nodeKernels === 1 && plan.kernelList.length === 1 ? 'the step kernel (one dispatch)' : kernel.name;
