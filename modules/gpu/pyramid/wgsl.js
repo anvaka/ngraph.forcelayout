@@ -543,7 +543,10 @@ fn main(${LINEAR}) {
   })();
 
   // Finest cells: count, each channel's sum and centre (channel 0's centre falls back to the
-  // mean of the bodies where its charges sum to 0)
+  // mean of the bodies where its charges sum to 0). Bodies clamped into a border cell are left
+  // out: at their real positions they would drag the cell's centres (and the expansions taken
+  // there) far from its bodies. They still push their neighbours as exact pairs, and the rest
+  // of the layout, far by definition, does without their push.
   const own = [];
   spec.channels.forEach((ch, c) => { if (c === 0 || ch.own) own.push(c); });
   const recordWords = (S, C, count) => {
@@ -555,7 +558,7 @@ fn main(${LINEAR}) {
     if (L.CNT >= 0) words[L.CNT] = `f32(${count})`;
     return words;
   };
-  const AGG0 = paramsStruct(spec.lawWords) + /* wgsl */`
+  const AGG0 = paramsStruct(spec.lawWords) + mortonFns(D, L.bits) + /* wgsl */`
 ${tp}
 @group(0) @binding(1) var<storage, read> treeSp: array<vec4f>;
 @group(0) @binding(2) var<storage, read_write> treeMeta: array<u32>;
@@ -569,13 +572,17 @@ fn main(${LINEAR}) {
   ${each(K, q => `var m${q} = 0.0;`)}
   ${own.map(q => each(D, k => `var s${q}_${k} = 0.0;`)).join(' ')}
   ${each(D, k => `var u${k} = 0.0;`)}
+  // only a border cell can hold clamped bodies
+  let border = ${each(D, k => `compact(c >> ${k}u) == 0u || compact(c >> ${k}u) == TP.G - 1u`, ' || ')};
+  var cnt = 0u;
   for (var t = s; t < e; t++) {
+    if (border && treeMeta[TP.metaTag + 2u * t + 1u] >= 0x80000000u) { continue; }
+    cnt++;
     ${loadVec4s('b', 'treeSp', `t * ${L.SP4}u`, L.SP4)}
     ${each(K, q => `m${q} += ${word('b', D + q)};`)}
     ${own.map(q => each(D, k => `s${q}_${k} += ${word('b', D + q)} * ${word('b', k)};`)).join(' ')}
     ${each(D, k => `u${k} += ${word('b', k)};`)}
   }
-  let cnt = e - s;
   let mean = select(0.0, 1.0 / f32(cnt), cnt > 0u);
   ${own.map(q => `let i${q} = select(0.0, 1.0 / m${q}, m${q} != 0.0);`).join(' ')}
   ${each(D, k => `let c0_${k} = select(u${k} * mean, s0_${k} * i0, m0 != 0.0);`)}

@@ -22,7 +22,7 @@ const PARAM_WORDS = 12;
  * Resolves once the pipelines are compiled; rejects naming the kernel when one fails, or when the
  * buffers cannot be created.
  */
-export async function buildPyramid(device, plan, { buffers: external = {}, step = null, nearCap = NEAR_CAP } = {}) {
+export async function buildPyramid(device, plan, { buffers: external = {}, step = null, nearCap = NEAR_CAP, groupLimit = 0 } = {}) {
   if (plan.refusal) throw new Error(plan.refusal);
   const { D, sizes, kernels, columns } = plan;
   // LOCAL reads treeMeta for counts (when cells have no room for them) or bodies' cells (heads)
@@ -108,7 +108,8 @@ export async function buildPyramid(device, plan, { buffers: external = {}, step 
     throw new Error('could not create the tree buffers: ' + setupError.message);
   }
 
-  const limit = device.limits.maxComputeWorkgroupsPerDimension;
+  // (`groupLimit` lowers it, so tests can see 2D grids at small sizes)
+  const limit = groupLimit || device.limits.maxComputeWorkgroupsPerDimension;
   // Workgroups for `threads`, as a 2D grid past the per-dimension limit (kernels read the linear id)
   function grid(threads) {
     const w = Math.max(1, Math.ceil(threads / WG));
