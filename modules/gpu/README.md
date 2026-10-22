@@ -135,8 +135,9 @@ that falls furthest behind the M4 Max says how many times slower the device is
   step takes about 30 ms on any device; the pyramid then follows the rate it measures on crowded
   steps;
 - the pair formulas start from a matching cap, then follow the rate they measure on dense steps;
-- a grid field's worst step is its estimate for the M4 Max times a factor that starts at the
-  probe's and only grows, with the steps the grid times itself;
+- a grid field's worst step is its estimate for the M4 Max times the largest of the probe's
+  factor and its last 4 timed readbacks' (steps that ran pair slices are left out), so a slow
+  step ages out;
 - a submit holds no more steps than fit 1 s if every step reached its caps, far below the
   2-second GPU watchdog; and as many as fit 100 ms of the time steps actually take.
 
