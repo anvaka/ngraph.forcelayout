@@ -12,14 +12,22 @@
 // `pos` and `column(name)` give colRefs, {buffer, at(row, axis)}: the positions at the start of
 // the step, the columns the deposit value reads, and the two columns the field writes (into.value,
 // into.gradient). `values`, when given, is the caller's step slot: {decl(binding), at(name)};
-// without it the grid has a uniform of its own (build.js setValues()).
+// without it the grid has a uniform of its own (build.js setValues()). `limits.gridArithmetic`,
+// when the device was checked (canary.js), says which exact arithmetic it keeps: what needs the
+// rest is refused.
 import formula from '../../../lib/formula.js';
-import { createPrinter, f32Problem } from '../wgsl/print.js';
-import { gridKernels, gridCapacity, gridChunkWords, tableSize, META, WG } from './wgsl.js';
+import { createPrinter, f32Problem, F32_MAX } from '../wgsl/print.js';
+import { gridKernels, gridCapacity, gridChunkWords, tableSize, META, WG, REFINE_GAMMA } from './wgsl.js';
 
 const AX = 'xyzw';
 // Numbers of the stage that the host works out per step (simulator.stageValues())
 const NUMBERS = ['cell', 'cellLow', 'margin', 'marginLow', 'diffuse', 'value'];
+// The widest box grid, per D, that keeps within half the tolerance when a device's compiler sees
+// through grid_opq (canary.js). Measured on Metal with the barriers left out: a box's cell and
+// corner then lose their low words, and 2D boxes were off by 1.9e-6 at 16 cells and 6.9e-6 at 32;
+// 3D by 1.3e-6 at 8 and 9.8e-6 at 16. Lattices, whose cell comes from the host, held 4e-6 up to
+// 2,048 cells (grid-work/plaincells-seen*.json).
+const PLAIN_BOX_CELLS = { 2: 16, 3: 8 };
 
 /**
  * The grid's own numbers per step, by slot name (gridSlotValues() gives them); the stage's params
@@ -44,6 +52,21 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
     if (number && number.kind === 'number') {
       const problem = f32Problem(number.value);
       if (problem) return refuse(`the grid's ${key}: ${problem}`);
+    }
+  }
+
+  // What the device's compiler does not keep exact (canary.js); unknown (no device) passes
+  const exact = limits.gridArithmetic;
+  if (exact && !exact.sums && args.anchor === 'box' && maxCells > PLAIN_BOX_CELLS[D]) {
+    return refuse(`${exact.reason}. Without exact arithmetic a ${D}D box grid wider than ${PLAIN_BOX_CELLS[D]} cells per axis is off by more than half the ` +
+      `tolerance, and this one may reach ${maxCells}. Set maxCells to ${PLAIN_BOX_CELLS[D]}, use the 'lattice' anchor, or run on the CPU`);
+  }
+  if (exact && !(exact.sums && exact.residual) && args.diffuse) {
+    // smoothing over diffuse / cell^2 >= REFINE_GAMMA needs the refinement step, which needs both
+    const gamma = gammaBound(args);
+    if (!(gamma < REFINE_GAMMA)) {
+      return refuse(`${exact.reason}. Without exact arithmetic smoothing with diffuse / cell^2 of ${REFINE_GAMMA} or more is off by more than half the ` +
+        `tolerance, and this grid's ${Number.isFinite(gamma) ? `is ${+gamma.toPrecision(4)}` : 'comes from expressions, known only as it runs'}. Run it on the CPU`);
     }
   }
 
@@ -120,6 +143,28 @@ export function planGrid({ stage, D, n, limits, pos, column, values = null, labe
   };
 }
 
+// diffuse / cell^2 at most, when both are numbers in the description (a box's cell only grows);
+// else Infinity
+function gammaBound(args) {
+  const number = x => (x && x.kind === 'number' ? x.value : NaN);
+  const gamma = number(args.diffuse) / (number(args.cell) * number(args.cell));
+  return gamma >= 0 ? gamma : Infinity;
+}
+
+/**
+ * The first of a grid's numbers for a step (simulator.stageValues()) that does not fit f32, as
+ * {name, value}, or null. The device would turn them into NaN or no grid without a word.
+ */
+export function gridNumberProblem(numbers) {
+  const names = { cell: 'grid cell', margin: 'grid margin', diffuse: 'smoothing\'s diffuse', value: 'deposit value' };
+  for (const name of Object.keys(names)) {
+    const value = numbers[name];
+    if (value === null || value === undefined) continue;
+    if (!Number.isFinite(value) || Math.abs(value) > F32_MAX) return { name: names[name], value };
+  }
+  return null;
+}
+
 /**
  * What plan() says about a grid stage on a device with `limits` (for n bodies in D dimensions):
  * {runs: true, how} or {runs: false, reason}.
@@ -182,6 +227,16 @@ export function gridIsDynamic(stage) {
  */
 export function gridCappedMs(plan) {
   return 0.1 + 1.2 * plan.n / 1e6 + 0.3 * plan.capacity / 1e6;
+}
+
+/**
+ * GPU ms of a relaxed step of the grid on an M4 Max, at most: n bodies and `points` grid points
+ * this step. A lower envelope of the measured steps (100k and 1M bodies, 2D and 3D, both grids of
+ * timegrid.js), so a step timed on a device, divided by it, gives that device's factor or more
+ * (build.js observeTime()).
+ */
+export function gridRelaxedMs(plan, points) {
+  return 0.02 + 0.25 * plan.n / 1e6 + (plan.smooth ? 0.15 : 0.03) * points / 1e6;
 }
 
 /**

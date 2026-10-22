@@ -76,18 +76,21 @@ export const META = {
   TAB_DONE: 32,  // entries they hold, or CONVERGED: entries past the last equal it
   ZERO: 33,      // always 0: grid_hold() in kernels without GU
   REFINE: 34,    // 1 when this step's smoothing takes the refinement step (see residual())
-  STATUS: 36,    // sticky: [1 too wide | 3 over capacity, cells across (f32), cell (f32), axis]
-  IND: 40,       // indirect dispatch arguments, 3 words each: scan blocks, deposit, smooth per axis, the
+  STATUS: 36,    // sticky: [1 too wide | 3 over capacity, cells across (f32), cell (f32), axis]; then
+                 //   this step's grid points (for the cost estimate, see build.js) and 3 spare words
+  IND: 44,       // indirect dispatch arguments, 3 words each: scan blocks, deposit, smooth per axis, the
                  // residual, smooth per axis again (0 workgroups when the step does not refine)
   TABLE: 80,     // coefficient tables (see params()): 1 / pivot, then mu; tableSize entries each
 };
 export const IND_SCAN = META.IND, IND_DEPOSIT = META.IND + 3, IND_SMOOTH = META.IND + 6;
 export const IND_RESIDUAL = META.IND + 15, IND_SMOOTH_LOW = META.IND + 18;
+// Words of the status (META.STATUS) the runner reads back
+export const STATUS_WORDS = 8;
 // Smoothing from this gamma (diffuse / cell^2) on takes the refinement step: below it the plain
 // f32 field's values and slopes are within half the tolerance of the CPU's. Measured over every
 // option in 2D and 3D, on small and full-size grids, and ru-4 on its graphs: at most 4.97e-6 of
 // the RMS below gamma 2; 6.8e-6 at 2.5 (a 127^3 lattice), 6.3e-6 at 3 (977^2), 9.6e-6 at 16.
-const REFINE_GAMMA = 2;
+export const REFINE_GAMMA = 2;
 const CONVERGED = 0xffffffff;
 
 function each(n, fn, sep = ' ') {
@@ -206,9 +209,12 @@ function declare(spec, bindings) {
 // grid_opq(x) is x, in a way the compiler cannot see through (GU.zero is 0). Metal compiles with
 // fast math, which reassociates sums: without it, the exact arithmetic below folds away.
 const OPAQUE = 'fn grid_opq(x: f32) -> f32 { return bitcast<f32>(bitcast<u32>(x) ^ GU.zero); }\n';
+// spec.opaque === false (tests of the canary only): the barriers are plain, as a compiler that sees
+// through them would make them
+const SEEN_THROUGH = 'fn grid_opq(x: f32) -> f32 { return x; }\n';
 
 function kernel(spec, bindings, body) {
-  const opaque = bindings.some(b => b.name === 'GU') ? OPAQUE : '';
+  const opaque = bindings.some(b => b.name === 'GU') ? (spec.opaque === false ? SEEN_THROUGH : OPAQUE) : '';
   return { code: common(spec) + declare(spec, bindings) + '\n' + opaque + body, bindings: bindings.map(b => ({ name: b.name, kind: b.kind })) };
 }
 
@@ -310,6 +316,31 @@ function depositBindings(spec, bindings) {
   spec.deposit.buffers.forEach(name => { if (!bindings.some(b => b.name === name)) bindings.push({ name, kind: 'read', type: 'array<f32>' }); });
 }
 
+// Numbers held as hi + lo (PARAMS, and the canary)
+const DOUBLE = `// a + b = s + e exactly (two-sum)
+fn grid_sum(a: f32, b: f32) -> vec2f {
+  let s = grid_opq(a + b);
+  let bb = grid_opq(s - a);
+  return vec2f(s, grid_opq(a - grid_opq(s - bb)) + grid_opq(b - bb));
+}
+fn grid_add(x: vec2f, y: vec2f) -> vec2f {
+  let s = grid_sum(x.x, y.x);
+  return grid_sum(s.x, s.y + x.y + y.y);
+}
+// x / k for a whole number k
+fn grid_over(x: vec2f, k: f32) -> vec2f {
+  let q = x.x / k;
+  return grid_sum(q, (grid_opq(fma(-q, k, x.x)) + x.y) / k);
+}
+// floor((v - A) / cell) and the fraction left, with A = ma cell + ra (as bodyLets computes them)
+fn grid_index(v: vec2f, ma: f32, ra: f32, cell: vec2f) -> vec2f {
+  let m = floor(v.x / cell.x);
+  let t = grid_opq(fma(-m, cell.x, v.x)) + v.y - ra - m * cell.y;
+  let q = floor(t / cell.x);
+  return vec2f(m - ma + q, t / cell.x - q);
+}
+`;
+
 // The grid of this step, as modules/gridfield places it:
 //  - box: corner = smallest - margin, cell = max(cell, widest span / maxCells), and per axis
 //    min(ceil(span / cell), maxCells) + 2 + 2 * pad points (the min: f32 can land an ulp over
@@ -384,6 +415,7 @@ function params(spec) {
   lines.push('    flag = 3u; total = 0u;');
   lines.push('  }');
   for (let k = 0; k < D; k++) lines.push(`  gridMeta[${META.SIZE + k}u] = sz${k};`);
+  lines.push(`  gridMeta[${META.STATUS + 4}u] = total;`);
   lines.push(`  gridMeta[${META.CELL}u] = bitcast<u32>(cell.x); gridMeta[${META.CELL_LOW}u] = bitcast<u32>(cell.y);`);
   lines.push(`  gridMeta[${META.TOTAL}u] = total; gridMeta[${META.FLAG}u] = flag;`);
   // deposits are densities: per unit area (or volume) of a cell
@@ -446,29 +478,7 @@ function params(spec) {
     lines.push('  }');
   }
   return kernel(spec, [U, STEP, metaWrite, chunks('storage', 'array<u32>')], `fn grid_split(w: u32, at: u32) { gridMeta[at] = min(w, 65535u); gridMeta[at + 1u] = (w + 65534u) / 65535u; gridMeta[at + 2u] = 1u; }
-// Numbers held as hi + lo. a + b = s + e exactly (two-sum)
-fn grid_sum(a: f32, b: f32) -> vec2f {
-  let s = grid_opq(a + b);
-  let bb = grid_opq(s - a);
-  return vec2f(s, grid_opq(a - grid_opq(s - bb)) + grid_opq(b - bb));
-}
-fn grid_add(x: vec2f, y: vec2f) -> vec2f {
-  let s = grid_sum(x.x, y.x);
-  return grid_sum(s.x, s.y + x.y + y.y);
-}
-// x / k for a whole number k
-fn grid_over(x: vec2f, k: f32) -> vec2f {
-  let q = x.x / k;
-  return grid_sum(q, (grid_opq(fma(-q, k, x.x)) + x.y) / k);
-}
-// floor((v - A) / cell) and the fraction left, with A = ma cell + ra (as bodyLets computes them)
-fn grid_index(v: vec2f, ma: f32, ra: f32, cell: vec2f) -> vec2f {
-  let m = floor(v.x / cell.x);
-  let t = grid_opq(fma(-m, cell.x, v.x)) + v.y - ra - m * cell.y;
-  let q = floor(t / cell.x);
-  return vec2f(m - ma + q, t / cell.x - q);
-}
-@compute @workgroup_size(1)
+${DOUBLE}@compute @workgroup_size(1)
 fn main() {
 ${lines.join('\n')}
 }`);
@@ -781,7 +791,8 @@ function residual(spec) {
   const sum = bySize.map((list, i) => `grid_hold(${gammas[i]} * grid_hold(${list.join(' + ')}))`).join(' + ');
   // fast math would otherwise fold the differences back into (1 + 4 gamma + ...) X - ..., whose
   // cancellation is what the refinement is there to avoid
-  return kernel(spec, [metaRead, field('read'), low('storage')], `fn grid_hold(x: f32) -> f32 { return bitcast<f32>(bitcast<u32>(x) ^ gridMeta[${META.ZERO}u]); }
+  const hold = spec.opaque === false ? 'x' : `bitcast<f32>(bitcast<u32>(x) ^ gridMeta[${META.ZERO}u])`;
+  return kernel(spec, [metaRead, field('read'), low('storage')], `fn grid_hold(x: f32) -> f32 { return ${hold}; }
 @compute @workgroup_size(${WG})
 fn main(@builtin(global_invocation_id) gid: vec3u, @builtin(num_workgroups) nwg: vec3u) {
   let t = gid.x + gid.y * nwg.x * ${WG}u;
@@ -1012,4 +1023,35 @@ function selfLines(spec) {
   lines.push(`  v -= u * ${each(D, k => `read${k}`, ' * ')};`);
   for (let k = 0; k < D; k++) lines.push(`  gr${k} -= u * ${each(D, m => (m === k ? `tilt${m}` : `read${m}`), ' * ')};`);
   return lines.join('\n') + '\n';
+}
+
+/**
+ * Kernels that check, on a device, the exact arithmetic the grid relies on (canary.js): its
+ * two-sums and grid coordinates (grid_opq), and the refinement's residual (grid_hold). They are
+ * printed by the code that prints the grid's own kernels, so a compiler that sees through a
+ * barrier there sees through it here too. `opaque: false` leaves the barriers out (for tests:
+ * the canary must then fail).
+ *   SUMS: C[2], C[3] = grid_sum(C[0], C[1]); C[7], C[8] = grid_over((C[4], C[5]), C[6]); body i's
+ *     base point and offset per axis (2D box, gridMeta's grid) at C[16 + 4 i ...]
+ *   RESIDUAL2, RESIDUAL3: residual() on gridMeta's grid
+ */
+export function gridCanaryKernels({ opaque = true } = {}) {
+  const base = { anchor: 'box', weights: 'linear', label: 'GRID_CANARY', opaque };
+  const sums = Object.assign({ D: 2, pos: { buffer: 'X', at: (row, k) => `X[${row} * 2u + ${k}u]` } }, base);
+  return {
+    SUMS: kernel(sums, [U, metaRead, { name: 'X', kind: 'read', type: 'array<f32>' }, { name: 'C', kind: 'storage', type: 'array<f32>' }], `${DOUBLE}@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i == 0u) {
+    let e = grid_sum(C[0], C[1]);
+    C[2] = e.x; C[3] = e.y;
+    let q = grid_over(vec2f(C[4], C[5]), C[6]);
+    C[7] = q.x; C[8] = q.y;
+  }
+  if (i >= GU.n) { return; }
+${gridLets(sums)}${bodyLets(sums)}  C[16u + 4u * i] = b0; C[17u + 4u * i] = f0; C[18u + 4u * i] = b1; C[19u + 4u * i] = f1;
+}`),
+    RESIDUAL2: residual(Object.assign({ D: 2 }, base)),
+    RESIDUAL3: residual(Object.assign({ D: 3 }, base)),
+  };
 }
