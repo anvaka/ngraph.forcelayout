@@ -64,10 +64,10 @@ export async function buildPairs(device, plan, { buffers: external, step }) {
       BIN: [0, 1].map(p => bind(k.BIN, [b.params, stepEntry, X(p), b.count, b.body])),
       SCAN_BLOCKS: bind(k.SCAN_BLOCKS, [b.params, b.count, b.start]),
       SCAN_TOP: bind(k.SCAN_TOP, [b.params, b.start]),
-      SCAN_ADD: bind(k.SCAN_ADD, [b.params, b.start]),
       PLACE: bind(k.PLACE, [b.params, b.start, b.body, b.list, b.args]),
-      ARGS: bind(k.ARGS, [b.params, b.args, status]),
+      ARGS_RANK: bind(k.ARGS_RANK, [b.params, b.args, status]),
       RANK: bind(k.RANK, [b.params, b.args, b.start, b.body, b.list]),
+      ARGS: bind(k.ARGS, [b.params, b.args, status]),
       ORDER: [0, 1].map(p => bind(k.ORDER, [b.params, b.args, b.start, b.body, b.list, b.snap, X(p)].concat(columnsOf(b.sort.columns, p)))),
     };
   });
@@ -87,7 +87,7 @@ export async function buildPairs(device, plan, { buffers: external, step }) {
     const w = Math.max(1, Math.ceil(threads / WG));
     return w <= limit ? [w, 1] : [limit, Math.ceil(w / limit)];
   };
-  const bodies = grid(plan.n), buckets = grid(plan.size);
+  const bodies = grid(plan.n);
   const dispatch = (pass, name, group, size, offsets) => {
     pass.setPipeline(pipes[name]);
     pass.setBindGroup(0, group, offsets);
@@ -118,11 +118,11 @@ export async function buildPairs(device, plan, { buffers: external, step }) {
         dispatch(pass, k.BIN, g.BIN[parity], bodies, offsets);
         dispatch(pass, k.SCAN_BLOCKS, g.SCAN_BLOCKS, [plan.blocks, 1]);
         dispatch(pass, k.SCAN_TOP, g.SCAN_TOP, [1, 1]);
-        dispatch(pass, k.SCAN_ADD, g.SCAN_ADD, buckets);
         dispatch(pass, k.PLACE, g.PLACE, bodies);
-        dispatch(pass, k.ARGS, g.ARGS, [1, 1]);
+        dispatch(pass, k.ARGS_RANK, g.ARGS_RANK, [1, 1]);
         indirect(pass, k.RANK, g.RANK, b.args, ARGS.RANK_X);
         dispatch(pass, k.ORDER, g.ORDER[parity], bodies);
+        dispatch(pass, k.ARGS, g.ARGS, [1, 1]);
         for (const s of active) {
           indirect(pass, s.stage.kernels.EVAL, s.EVAL, b.args, ARGS.EVAL_X, offsets);
           dispatch(pass, s.stage.kernels.GATHER, s.GATHER, bodies);

@@ -89,7 +89,7 @@ export function planPairs({ D, n, limits, stages, columns, sums = {}, sumBuffer 
     Math.floor(cap / CHUNK),
     n * Math.ceil(n / CHUNK),
     Math.floor(largest / (4 * partialWords)),
-    Math.floor((largest / 4 - n * (1 + 4 + 3)) / 2),
+    Math.floor((largest / 4 - n * (1 + 1 + 4 + 3)) / 2),
   ));
 
   const maxGroups = limits.maxComputeWorkgroupsPerDimension;
@@ -111,7 +111,7 @@ export function planPairs({ D, n, limits, stages, columns, sums = {}, sumBuffer 
     });
     const s = sort.index;
     buffers['pairCount' + s] = sizeOf(size * 4);
-    buffers['pairStart' + s] = sizeOf((size + 1 + size / 1024) * 4);
+    buffers['pairStart' + s] = sizeOf((size + 2 + size / 1024) * 4);
     buffers['pairBody' + s] = sizeOf(n * sort.layout.body * 4);
     // [bodies by atomic slot | rank chunk owners | chunk owners | home records by bucket slot]
     buffers['pairList' + s] = sizeOf((n + 2 * capChunks + n * sort.layout.home) * 4);
@@ -158,7 +158,7 @@ export function planPairs({ D, n, limits, stages, columns, sums = {}, sumBuffer 
     refusal: null, D, n, size, blocks: size / 1024, capChunks, cap: capChunks * CHUNK,
     sorts, stages: planned, kernels, bindings, kernelStages, buffers,
     reads: Array.from(reads),
-    // per sort: bin, 3 scans, place, args, rank, order; per stage: chunks and gather
+    // per sort: bin, 2 scans, place, rank args, rank, order, args; per stage: chunks and gather
     dispatches: 8 * sorts.length + 2 * stages.length,
     section: name => section(planned.find(s => s.name === name), D, slot),
   };

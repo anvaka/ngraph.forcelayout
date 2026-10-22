@@ -3,21 +3,23 @@
 //
 //   BIN        per body: its cell (side = the radius, a hair larger), the cell's bucket in a
 //              hashed table of 2n or more buckets (the CPU's hash), a slot by u32 atomics
-//   SCAN_*     exclusive scan of the bucket counts (blocks of 1,024, their sums, the offsets back)
-//   PLACE      per body: into its bucket at its slot (run-dependent order); counts the candidates
-//              in the distinct buckets of its 3^D cells (two cells may share a bucket: a mask
-//              marks the repeats) and adds ceil(count / 256) chunks to the step's work; a body of
-//              a bucket of more than 1,024 claims chunks to rank itself
-//   ARGS       one thread: the total work against the cap. Over it: no work at all this step,
-//              and the status word for the runner (it halts at the next readback with the stage
-//              and the count). Else the indirect dispatch sizes, as 2D grids
+//   SCAN_*     exclusive scan of the bucket counts in blocks of 1,024, then the blocks' offsets;
+//              readers add the two (pair_start)
+//   PLACE      per body: into its bucket at its slot (run-dependent order); a body of a bucket of
+//              more than 1,024 claims chunks of work to rank itself
+//   ARGS_RANK  one thread: the rank work against the cap, the indirect dispatch size of RANK
 //   RANK       per rank chunk (crowded buckets only): how many of 256 bodies of its bucket have a
 //              lower index, added up with atomics (integers, so the order does not matter)
 //   ORDER      per bucket slot: the body's rank in its bucket, by index (counted directly up to
-//              1,024 bodies), so each bucket lists its bodies the same way in every run; writes
-//              the body's snapshot there (position, columns the formulas read, index) and its home
-//              record (first chunk, cell, mask), and hands out its chunks in bucket order, so
-//              threads next to each other read the same cells
+//              1,024 bodies), so each bucket lists its bodies the same way in every run. Writes
+//              the body's snapshot there (position, columns the formulas read, index); counts its
+//              candidates in the distinct buckets of its 3^D cells (two cells may share a bucket:
+//              a mask marks the repeats) and claims ceil(count / 256) chunks, in bucket order, so
+//              threads next to each other read the same cells; writes its home record (first
+//              chunk, cell, mask)
+//   ARGS       one thread: the pair work against the cap. Over it: no pair work this step, and the
+//              status for the runner (it halts at the next readback with the stage and the count).
+//              Else the indirect dispatch size of EVAL, as a 2D grid
 //   EVAL       per chunk: up to 256 candidates, filtered by r < radius, the formula with the
 //              CPU's roles; one partial (push and accumulators) per chunk
 //   GATHER     per body: its chunks added up in order, into the plan's output columns
@@ -42,13 +44,13 @@ const CELL_LIMIT = 1073741823;
 // Words of pairArgs
 export const ARGS = {
   RANK_X: 0, RANK_Y: 1, RANK_Z: 2, EVAL_X: 3, EVAL_Y: 4, EVAL_Z: 5,
-  EVAL_TOTAL: 6, RANK_TOTAL: 7, FLAGS: 8, ALLOC: 9, OK: 10, EVAL_COUNT: 11, RANK_COUNT: 12,
+  RANK_TOTAL: 6, FLAGS: 7, ALLOC: 8, OK: 9, EVAL_COUNT: 10, RANK_COUNT: 11,
   WORDS: 16,
 };
 const OVER = 1, CROWDED = 2;
-// Words per body in pairBody: bucket, slot, rank, candidates, first chunk, chunks, first rank
-// chunk, then the cell and the mask of neighbour cells whose bucket an earlier one already has
-export const BODY = { BUCKET: 0, SLOT: 1, RANK: 2, CAND: 3, FIRST: 4, COUNT: 5, RANK_FIRST: 6, CELL: 7 };
+// Words per body in pairBody: bucket, slot, rank, first chunk, chunks, first rank chunk, then the
+// cell
+export const BODY = { BUCKET: 0, SLOT: 1, RANK: 2, FIRST: 3, COUNT: 4, RANK_FIRST: 5, CELL: 6 };
 
 const AX = 'xyzw';
 
@@ -68,6 +70,11 @@ const linearId = wg => `gid.x + gid.y * nwg.x * ${u32(wg)}`;
 const PARAMS = `struct PairParams { n: u32, mask: u32, size: u32, blocks: u32, cap: u32, sort: u32, owners: u32, home: u32 };
 @group(0) @binding(0) var<uniform> PP: PairParams;`;
 
+// Where bucket b starts: its offset in its block of 1,024, plus the block's (bucket `size` is n)
+const START_FN = `fn pair_start(b: u32) -> u32 {
+  return pairStart[b] + pairStart[PP.size + 1u + (b >> 10u)];
+}`;
+
 /**
  * Words per body record, per home record (first chunk, cell, mask) and per snapshot entry for `D`
  * and the snapshot's columns ([{width}]).
@@ -75,7 +82,7 @@ const PARAMS = `struct PairParams { n: u32, mask: u32, size: u32, blocks: u32, c
 export function pairLayout(D, columns) {
   const words = D + columns.reduce((total, c) => total + c.width, 0) + 1;
   const maskWords = Math.ceil(3 ** D / 32);
-  return { body: BODY.CELL + D + maskWords, home: 1 + D + maskWords, maskWords, snap4: Math.ceil(words / 4), index: words - 1 };
+  return { body: BODY.CELL + D, home: 1 + D + maskWords, maskWords, snap4: Math.ceil(words / 4), index: words - 1 };
 }
 
 // The bucket of a cell: the CPU's hash (lib/createNeighborGrid.js), masked by the table's size
@@ -104,7 +111,7 @@ function countNeighbours(D, indent) {
       lines.push(`let pb${o} = ${neighbourHash(D, u32(o))};`);
       const repeats = [];
       for (let q = 0; q < o; q++) repeats.push(`pb${o} == pb${q}`);
-      const add = `candidates += pairStart[pb${o} + 1u] - pairStart[pb${o}];`;
+      const add = `candidates += pair_start(pb${o} + 1u) - pair_start(pb${o});`;
       lines.push(o ? `if (${repeats.join(' || ')}) { mask${o >> 5} |= ${u32(2 ** (o & 31))}; } else { ${add} }` : add);
     }
   } else {
@@ -116,7 +123,7 @@ function countNeighbours(D, indent) {
       '  for (var q = 0u; q < o; q++) { repeat = repeat || seen[q] == pb; }',
       '  seen[o] = pb;',
       `  if (repeat) { ${each(words, w => `if ((o >> 5u) == ${u32(w)}) { mask${w} |= 1u << (o & 31u); }`)} continue; }`,
-      '  candidates += pairStart[pb + 1u] - pairStart[pb];',
+      '  candidates += pair_start(pb + 1u) - pair_start(pb);',
       '}');
   }
   return lines.map(line => indent + line).join('\n');
@@ -126,7 +133,7 @@ function countNeighbours(D, indent) {
 // mask marks: `body` runs for each, with `pb` its bucket
 function forNeighbourBuckets(D, body, indent) {
   const cells = 3 ** D, words = Math.ceil(cells / 32);
-  const word = words === 1 ? 'mask0' : `select(select(mask0, mask1, o >= 32u), mask2, o >= 64u)`;
+  const word = words === 1 ? 'mask0' : 'select(select(mask0, mask1, o >= 32u), mask2, o >= 64u)';
   const lines = [
     `for (var o = 0u; o < ${u32(cells)}; o++) {`,
     `  if (((${word} >> (o & 31u)) & 1u) != 0u) { continue; }`,
@@ -135,7 +142,13 @@ function forNeighbourBuckets(D, body, indent) {
   return lines.map(line => indent + line).join('\n');
 }
 
-const cellsOf = (D, record) => each(D, k => `let c${k} = bitcast<i32>(pairBody[${record} + ${u32(BODY.CELL + k)}]);`, ' ');
+// Writes the indirect dispatch size for `count` threads of `wg` into pairArgs from `at`
+function gridArgs(name, count, wg, at, maxGroups) {
+  return [
+    `let ${name}W = (${count} + ${u32(wg - 1)}) / ${u32(wg)};`,
+    `pairArgs[${at}] = min(${name}W, ${u32(maxGroups)}); pairArgs[${at + 1}] = (${name}W + ${u32(maxGroups - 1)}) / ${u32(maxGroups)}; pairArgs[${at + 2}] = 1u;`,
+  ].join(' ');
+}
 
 /**
  * The structure kernels of one sort: {name: {code, bindings}}. `spec`: {D, layout, snapshot:
@@ -173,7 +186,8 @@ fn main(${LINEAR}) {
   };
 
   // Exclusive scan of the counts in blocks of 1,024 (the table holds a multiple of 1,024); zeroes
-  // the counts for the next step. pairStart: [start per bucket | n | block sums]
+  // the counts for the next step. pairStart: [start in its block per bucket | 0 | block offsets,
+  // then n]
   out.SCAN_BLOCKS = {
     bindings: ['uniform', 'storage', 'storage'],
     code: `${PARAMS}
@@ -202,7 +216,8 @@ fn main(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: ve
 `,
   };
 
-  // One workgroup: the block sums become block offsets, 1,024 at a time with a carry
+  // One workgroup: the block sums become block offsets, 1,024 at a time with a carry; the offset
+  // past the last block is n, so pair_start(size) is n
   out.SCAN_TOP = {
     bindings: ['uniform', 'storage'],
     code: `${PARAMS}
@@ -234,25 +249,11 @@ fn main(@builtin(local_invocation_index) li: u32) {
     if (li == 255u) { carry += tmp[255]; }
     workgroupBarrier();
   }
-  if (li == 0u) { pairStart[PP.size] = carry; }
+  if (li == 0u) { pairStart[sums + PP.blocks] = carry; }
 }
 `,
   };
 
-  out.SCAN_ADD = {
-    bindings: ['uniform', 'storage'],
-    code: `${PARAMS}
-@group(0) @binding(1) var<storage, read_write> pairStart: array<u32>;
-@compute @workgroup_size(${WG})
-fn main(${LINEAR}) {
-  let e = ${linearId(WG)};
-  if (e >= PP.size) { return; }
-  pairStart[e] += pairStart[PP.size + 1u + (e >> 10u)];
-}
-`,
-  };
-
-  // The step's work adds up per workgroup first: one global atomic per 256 bodies
   out.PLACE = {
     bindings: ['uniform', 'read', 'storage', 'storage', 'storage'],
     code: `${PARAMS}
@@ -260,86 +261,59 @@ fn main(${LINEAR}) {
 @group(0) @binding(2) var<storage, read_write> pairBody: array<u32>;
 @group(0) @binding(3) var<storage, read_write> pairList: array<u32>;
 @group(0) @binding(4) var<storage, read_write> pairArgs: array<atomic<u32>>;
-var<workgroup> work: atomic<u32>;
-${hash}
+${START_FN}
 @compute @workgroup_size(${WG})
-fn main(${LINEAR}, @builtin(local_invocation_index) li: u32) {
+fn main(${LINEAR}) {
   let i = ${linearId(WG)};
-  if (i < PP.n) {
-    let record = i * ${u32(B)};
-    let h = pairBody[record + ${u32(BODY.BUCKET)}];
-    let s = pairStart[h];
-    let k = pairStart[h + 1u] - s;
-    pairList[s + pairBody[record + ${u32(BODY.SLOT)}]] = i;
-    ${cellsOf(D, 'record')}
-${countNeighbours(D, '    ')}
-    pairBody[record + ${u32(BODY.CAND)}] = candidates;
-    ${each(layout.maskWords, w => `pairBody[record + ${u32(BODY.CELL + D + w)}] = mask${w};`)}
-    // the body's own bucket is among them, so every body has a chunk
-    atomicAdd(&work, (candidates + ${u32(CHUNK - 1)}) / ${u32(CHUNK)});
-    if (k > ${u32(RANK_DIRECT)}) {
-      atomicOr(&pairArgs[${ARGS.FLAGS}], ${u32(CROWDED)});
-      let ranks = (k + ${u32(CHUNK - 1)}) / ${u32(CHUNK)};
-      let first = atomicAdd(&pairArgs[${ARGS.RANK_TOTAL}], ranks);
-      pairBody[record + ${u32(BODY.RANK_FIRST)}] = first;
-      // rank work is at most the pair work, so the cap covers both; past it nothing is written
-      if (first + ranks <= PP.cap) {
-        for (var c = 0u; c < ranks; c++) { pairList[PP.n + first + c] = i; }
-      }
+  if (i >= PP.n) { return; }
+  let record = i * ${u32(B)};
+  let h = pairBody[record + ${u32(BODY.BUCKET)}];
+  let s = pair_start(h);
+  let k = pair_start(h + 1u) - s;
+  pairList[s + pairBody[record + ${u32(BODY.SLOT)}]] = i;
+  if (k > ${u32(RANK_DIRECT)}) {
+    atomicOr(&pairArgs[${ARGS.FLAGS}], ${u32(CROWDED)});
+    let ranks = (k + ${u32(CHUNK - 1)}) / ${u32(CHUNK)};
+    let first = atomicAdd(&pairArgs[${ARGS.RANK_TOTAL}], ranks);
+    pairBody[record + ${u32(BODY.RANK_FIRST)}] = first;
+    // past the cap nothing is written, and ARGS_RANK stops the step
+    if (first <= PP.cap && first + ranks <= PP.cap) {
+      for (var c = 0u; c < ranks; c++) { pairList[PP.n + first + c] = i; }
     }
-  }
-  workgroupBarrier();
-  if (li == 0u) {
-    let chunks = atomicLoad(&work);
-    let before = atomicAdd(&pairArgs[${ARGS.EVAL_TOTAL}], chunks);
-    // the workgroup that passes the cap says so (a total past 2^32 has passed it before)
-    if (before <= PP.cap && before + chunks > PP.cap) { atomicOr(&pairArgs[${ARGS.FLAGS}], ${u32(OVER)}); }
   }
 }
 `,
   };
 
-  // One thread. Over the cap the step runs no pair work, and the status keeps the first stage and
-  // count that went over until the runner reads it
-  const grid = (name, count, wg) => [
-    `let ${name}W = (${count} + ${u32(wg - 1)}) / ${u32(wg)};`,
-    `let ${name}X = min(${name}W, ${u32(spec.maxGroups)});`,
-    `let ${name}Y = (${name}W + ${u32(spec.maxGroups - 1)}) / ${u32(spec.maxGroups)};`,
-  ].join(' ');
-  out.ARGS = {
+  // One thread: rank work over the cap stops the step's pair work, and the status keeps the first
+  // stage and count that went over until the runner reads it
+  const stop = (count, code) => `pairArgs[${ARGS.OK}] = 0u;
+    if (pairStatus[0] == 0u) {
+      pairStatus[0] = ${u32(code)};
+      pairStatus[1] = PP.sort;
+      // a total at or under the cap has wrapped past 2^32
+      pairStatus[2] = select(0xffffffffu, ${count}, ${count} > PP.cap);
+      pairStatus[3] = PP.cap;
+    }`;
+  out.ARGS_RANK = {
     bindings: ['uniform', 'storage', 'storage'],
     code: `${PARAMS}
 @group(0) @binding(1) var<storage, read_write> pairArgs: array<u32>;
 @group(0) @binding(2) var<storage, read_write> pairStatus: array<u32>;
 @compute @workgroup_size(1)
 fn main() {
-  let total = pairArgs[${ARGS.EVAL_TOTAL}];
   let ranks = pairArgs[${ARGS.RANK_TOTAL}];
-  let flags = pairArgs[${ARGS.FLAGS}];
-  let over = (flags & ${u32(OVER)}) != 0u || total > PP.cap;
-  pairStatus[4u + PP.sort] = total;
-  if (over) {
-    pairArgs[${ARGS.OK}] = 0u;
-    pairArgs[${ARGS.EVAL_X}] = 0u; pairArgs[${ARGS.EVAL_Y}] = 1u; pairArgs[${ARGS.EVAL_Z}] = 1u;
-    pairArgs[${ARGS.RANK_X}] = 0u; pairArgs[${ARGS.RANK_Y}] = 1u; pairArgs[${ARGS.RANK_Z}] = 1u;
-    pairArgs[${ARGS.EVAL_COUNT}] = 0u; pairArgs[${ARGS.RANK_COUNT}] = 0u;
-    if (pairStatus[0] == 0u) {
-      pairStatus[0] = 1u;
-      pairStatus[1] = PP.sort;
-      // a total at or under the cap has wrapped past 2^32
-      pairStatus[2] = select(0xffffffffu, total, total > PP.cap);
-      pairStatus[3] = PP.cap;
-    }
-  } else {
-    pairArgs[${ARGS.OK}] = 1u;
-    ${grid('eval', 'total', EVAL_WG)}
-    pairArgs[${ARGS.EVAL_X}] = evalX; pairArgs[${ARGS.EVAL_Y}] = evalY; pairArgs[${ARGS.EVAL_Z}] = 1u;
-    let crowded = (flags & ${u32(CROWDED)}) != 0u;
-    ${grid('rank', 'ranks', RANK_WG)}
-    pairArgs[${ARGS.RANK_X}] = select(0u, rankX, crowded); pairArgs[${ARGS.RANK_Y}] = rankY; pairArgs[${ARGS.RANK_Z}] = 1u;
-    pairArgs[${ARGS.EVAL_COUNT}] = total; pairArgs[${ARGS.RANK_COUNT}] = select(0u, ranks, crowded);
+  let crowded = (pairArgs[${ARGS.FLAGS}] & ${u32(CROWDED)}) != 0u;
+  pairArgs[${ARGS.OK}] = 1u;
+  pairArgs[${ARGS.RANK_X}] = 0u; pairArgs[${ARGS.RANK_Y}] = 1u; pairArgs[${ARGS.RANK_Z}] = 1u;
+  pairArgs[${ARGS.RANK_COUNT}] = 0u;
+  if (crowded && ranks > PP.cap) {
+    ${stop('ranks', 2)}
+  } else if (crowded) {
+    ${gridArgs('rank', 'ranks', RANK_WG, ARGS.RANK_X, spec.maxGroups)}
+    pairArgs[${ARGS.RANK_COUNT}] = ranks;
   }
-  pairArgs[${ARGS.EVAL_TOTAL}] = 0u; pairArgs[${ARGS.RANK_TOTAL}] = 0u; pairArgs[${ARGS.FLAGS}] = 0u; pairArgs[${ARGS.ALLOC}] = 0u;
+  pairArgs[${ARGS.RANK_TOTAL}] = 0u;
 }
 `,
   };
@@ -352,6 +326,7 @@ fn main() {
 @group(0) @binding(2) var<storage, read> pairStart: array<u32>;
 @group(0) @binding(3) var<storage, read_write> pairBody: array<atomic<u32>>;
 @group(0) @binding(4) var<storage, read> pairList: array<u32>;
+${START_FN}
 @compute @workgroup_size(${RANK_WG})
 fn main(${LINEAR}) {
   let t = ${linearId(RANK_WG)};
@@ -360,8 +335,8 @@ fn main(${LINEAR}) {
   let record = i * ${u32(B)};
   let c = t - atomicLoad(&pairBody[record + ${u32(BODY.RANK_FIRST)}]);
   let h = atomicLoad(&pairBody[record + ${u32(BODY.BUCKET)}]);
-  let lo = pairStart[h] + c * ${u32(CHUNK)};
-  let hi = min(pairStart[h + 1u], lo + ${u32(CHUNK)});
+  let lo = pair_start(h) + c * ${u32(CHUNK)};
+  let hi = min(pair_start(h + 1u), lo + ${u32(CHUNK)});
   var lower = 0u;
   for (var at = lo; at < hi; at++) { lower += select(0u, 1u, pairList[at] < i); }
   if (lower > 0u) { atomicAdd(&pairBody[record + ${u32(BODY.RANK)}], lower); }
@@ -392,17 +367,22 @@ fn main(${LINEAR}) {
 ${columnBuffers.map((name, k) => `@group(0) @binding(${7 + k}) var<storage, read> ${name}: array<f32>;`).join('\n')}
 var<workgroup> claimed: atomic<u32>;
 var<workgroup> base: u32;
+var<workgroup> fits: u32;
+${hash}
+${START_FN}
 @compute @workgroup_size(${WG})
 fn main(${LINEAR}, @builtin(local_invocation_index) li: u32) {
   let q = ${linearId(WG)};
   let live = q < PP.n && atomicLoad(&pairArgs[${ARGS.OK}]) != 0u;
   var i = 0u; var p = 0u; var chunks = 0u; var mine = 0u;
+  ${each(D, k => `var c${k} = 0;`)}
+  ${each(layout.maskWords, w => `var home${w} = 0u;`)}
   if (live) {
     i = pairList[q];
     let record = i * ${u32(B)};
     let h = pairBody[record + ${u32(BODY.BUCKET)}];
-    let s = pairStart[h];
-    let e = pairStart[h + 1u];
+    let s = pair_start(h);
+    let e = pair_start(h + 1u);
     var rank = pairBody[record + ${u32(BODY.RANK)}];
     if (e - s <= ${u32(RANK_DIRECT)}) {
       rank = 0u;
@@ -410,23 +390,56 @@ fn main(${LINEAR}, @builtin(local_invocation_index) li: u32) {
     }
     p = s + rank;
     ${each(layout.snap4, w => `pairSnap[p * ${u32(layout.snap4)} + ${u32(w)}] = vec4u(${words.slice(4 * w, 4 * w + 4).join(', ')});`, '\n    ')}
-    chunks = (pairBody[record + ${u32(BODY.CAND)}] + ${u32(CHUNK - 1)}) / ${u32(CHUNK)};
+    ${each(D, k => `c${k} = bitcast<i32>(pairBody[record + ${u32(BODY.CELL + k)}]);`)}
+${countNeighbours(D, '    ')}
+    ${each(layout.maskWords, w => `home${w} = mask${w};`)}
+    // the body's own bucket is among them, so every body has a chunk
+    chunks = (candidates + ${u32(CHUNK - 1)}) / ${u32(CHUNK)};
     mine = atomicAdd(&claimed, chunks);
   }
-  // chunks are handed out per workgroup, in bucket order
+  // chunks are handed out per workgroup, in bucket order; past the cap nothing is written, and
+  // ARGS stops the step
   workgroupBarrier();
-  if (li == 0u) { base = atomicAdd(&pairArgs[${ARGS.ALLOC}], atomicLoad(&claimed)); }
+  if (li == 0u) {
+    let total = atomicLoad(&claimed);
+    base = atomicAdd(&pairArgs[${ARGS.ALLOC}], total);
+    fits = select(0u, 1u, base <= PP.cap && base + total <= PP.cap);
+    if (fits == 0u) { atomicOr(&pairArgs[${ARGS.FLAGS}], ${u32(OVER)}); }
+  }
   workgroupBarrier();
-  if (live) {
+  if (live && fits != 0u) {
     let first = base + mine;
     let record = i * ${u32(B)};
     pairBody[record + ${u32(BODY.FIRST)}] = first;
     pairBody[record + ${u32(BODY.COUNT)}] = chunks;
     let home = PP.home + p * ${u32(layout.home)};
     pairList[home] = first;
-    ${each(D + layout.maskWords, w => `pairList[home + ${u32(1 + w)}] = pairBody[record + ${u32(BODY.CELL + w)}];`)}
+    ${each(D, k => `pairList[home + ${u32(1 + k)}] = bitcast<u32>(c${k});`)}
+    ${each(layout.maskWords, w => `pairList[home + ${u32(1 + D + w)}] = home${w};`)}
     for (var c = 0u; c < chunks; c++) { pairList[PP.owners + first + c] = p; }
   }
+}
+`,
+  };
+
+  out.ARGS = {
+    bindings: ['uniform', 'storage', 'storage'],
+    code: `${PARAMS}
+@group(0) @binding(1) var<storage, read_write> pairArgs: array<u32>;
+@group(0) @binding(2) var<storage, read_write> pairStatus: array<u32>;
+@compute @workgroup_size(1)
+fn main() {
+  let total = pairArgs[${ARGS.ALLOC}];
+  pairStatus[4u + PP.sort] = total;
+  pairArgs[${ARGS.EVAL_X}] = 0u; pairArgs[${ARGS.EVAL_Y}] = 1u; pairArgs[${ARGS.EVAL_Z}] = 1u;
+  pairArgs[${ARGS.EVAL_COUNT}] = 0u;
+  if ((pairArgs[${ARGS.FLAGS}] & ${u32(OVER)}) != 0u || total > PP.cap) {
+    ${stop('total', 1)}
+  } else if (pairArgs[${ARGS.OK}] != 0u) {
+    ${gridArgs('eval', 'total', EVAL_WG, ARGS.EVAL_X, spec.maxGroups)}
+    pairArgs[${ARGS.EVAL_COUNT}] = total;
+  }
+  pairArgs[${ARGS.FLAGS}] = 0u; pairArgs[${ARGS.ALLOC}] = 0u;
 }
 `,
   };
@@ -480,6 +493,7 @@ ${slot.decl(1)}
 @group(0) @binding(6) var<storage, read_write> pairPartial: array<f32>;
 ${sumsRead ? `@group(0) @binding(7) var<storage, read> ${spec.sums.buffer}: array<f32>;` : ''}
 ${hashFn(D)}
+${START_FN}
 @compute @workgroup_size(${EVAL_WG})
 fn main(${LINEAR}) {
   let t = ${linearId(EVAL_WG)};
@@ -498,8 +512,8 @@ fn main(${LINEAR}) {
   var skip = (t - pairList[home]) * ${u32(CHUNK)};
   var left = ${u32(CHUNK)};
 ${forNeighbourBuckets(D, [
-    'let s = pairStart[pb];',
-    'let k = pairStart[pb + 1u] - s;',
+    'let s = pair_start(pb);',
+    'let k = pair_start(pb + 1u) - s;',
     'if (skip >= k) { skip -= k; continue; }',
     'let lo = s + skip;',
     'skip = 0u;',
@@ -547,7 +561,7 @@ fn main(${LINEAR}) {
   let i = ${linearId(WG)};
   if (i >= PP.n) { return; }
   ${outputs.map((_, w) => `var total${w} = 0.0;`).join(' ')}
-  if (pairArgs[${ARGS.OK}] != 0u) {
+  if (pairArgs[${ARGS.EVAL_COUNT}] != 0u) {
     let record = i * ${u32(B)};
     let first = pairBody[record + ${u32(BODY.FIRST)}];
     let count = pairBody[record + ${u32(BODY.COUNT)}];
