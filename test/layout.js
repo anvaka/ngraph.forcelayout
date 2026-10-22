@@ -437,7 +437,7 @@ test('a default layout loads only what its steps use', function (t) {
     "var layout = createLayout(g); for (var s = 0; s < 3; ++s) layout.step();" +
     "console.log(Object.keys(require.cache).filter(function (f) { return f.indexOf('lib') >= 0; }).join(' '));";
   var loaded = require('child_process').execFileSync(process.execPath, ['-e', script], { cwd: require('path').join(__dirname, '..'), encoding: 'utf8' });
-  ['formula.js', 'formulaStages.js', 'generateDualTree.js', 'generateFireIntegrator.js', 'createNeighborGrid.js'].forEach(function (file) {
+  ['formula.js', 'formulaStages.js', 'parsedLaw.js', 'describeProgram.js', 'generateDualTree.js', 'generateFireIntegrator.js', 'createNeighborGrid.js'].forEach(function (file) {
     t.notOk(loaded.indexOf(file) >= 0, file + ' is not loaded');
   });
   t.ok(loaded.indexOf('generateQuadTree.js') >= 0, 'the quad tree is');
