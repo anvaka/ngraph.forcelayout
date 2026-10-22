@@ -15,6 +15,9 @@ import { gridCappedMs, gridRelaxedMs } from './plan.js';
 const MINMAX_GROUPS = 1024;
 // The most times slower than an M4 Max a device is taken to be (the speed probe's bound too)
 const MOST_SLOWDOWN = 100;
+// Timed readbacks the factor remembers: it is the largest of these (and the probe's), so one slow
+// step (another stage's crowded start, a pause) ages out, and a device that stays slow keeps it
+const TIMED_WINDOW = 4;
 
 /**
  * Buffers, pipelines and bind groups for `plan` (planGrid()). `buffers` are the caller's, by the
@@ -94,7 +97,8 @@ export async function buildGrid(device, plan, { buffers: external = {}, step = n
   });
   const byName = Object.fromEntries(kernels.map(k => [k.name, k]));
   // the device's speed for this work (see observeTime()), and the last step's grid points
-  let factor = Math.max(1, slowdown), points = 0;
+  const probe = Math.max(1, slowdown), timed = [];
+  let factor = probe, points = 0;
   const nodes = Math.ceil(plan.n / WG);
   const L = plan.label;
   // [kernel, workgroups or the word of its indirect arguments in gridMeta]
@@ -141,12 +145,16 @@ export async function buildGrid(device, plan, { buffers: external = {}, step = n
      * The runner's GPU ms a step (a timed readback's average). The speed probe times arithmetic in
      * cache; the grid's work is atomics and memory, which a device may do relatively slower, or a
      * device may slow down as it heats. So the step, divided by what it takes an M4 Max at most
-     * (gridRelaxedMs()), gives a factor that cappedMs() takes when it is larger. The whole step
-     * counts, other stages too, so the factor can only come out high (the safe side).
+     * (gridRelaxedMs()), gives a factor, and cappedMs() takes the largest of the last
+     * TIMED_WINDOW of them and the probe's. The whole step counts, other stages too, so a factor
+     * can only come out high (the safe side); steps whose pair stages ran in slices (`sliced`)
+     * are mostly pair work and are left out.
      */
-    observeTime(msPerStep) {
-      if (!(msPerStep > 0) || !(points > 0)) return;
-      factor = Math.min(MOST_SLOWDOWN, Math.max(factor, msPerStep / gridRelaxedMs(plan, points)));
+    observeTime(msPerStep, { sliced = false } = {}) {
+      if (!(msPerStep > 0) || !(points > 0) || sliced) return;
+      timed.push(msPerStep / gridRelaxedMs(plan, points));
+      if (timed.length > TIMED_WINDOW) timed.shift();
+      factor = Math.min(MOST_SLOWDOWN, Math.max(probe, ...timed));
     },
 
     /** GPU ms of the grid's step at its worst (gridCappedMs()) on this device, as measured */

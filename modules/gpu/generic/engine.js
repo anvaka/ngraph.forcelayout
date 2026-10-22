@@ -506,7 +506,9 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
     observeTiming(msPerStep) {
       if (pairs) pairs.observeTime(msPerStep);
       if (tree) tree.observeTime(msPerStep);
-      grids.forEach(grid => { if (grid.observeTime) grid.observeTime(msPerStep); });
+      // a step whose pair stages ran in slices is mostly pair work: the grids leave it out
+      const sliced = !!pairs && pairs.slices().some(slices => slices > 0);
+      grids.forEach(grid => { if (grid.observeTime) grid.observeTime(msPerStep, { sliced }); });
     },
 
     destroy() {
