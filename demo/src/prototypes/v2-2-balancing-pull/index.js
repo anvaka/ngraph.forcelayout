@@ -117,8 +117,9 @@ function addBalancingPull(simulator, strength) {
       kappa = strength * flatG * balancingCharge / radius2;
       // Spring length 0 (the panel passes through it while you type "0.5") and other extreme
       // settings make kappa 0, negative, infinite or NaN: then there is no pull, rather than NaN
-      // positions. A body whose pull would overflow (only at absurd strengths) is left alone.
-      force -= select(n >= 2 && kappa > 0 && kappa < 1e300 && pinned == 0 && kappa * mass * length(d) < 1e300,
+      // positions. A body whose pull would be huge (only at absurd strengths) is left alone; 1e30
+      // is a limit that 32-bit floats (a GPU) hold too.
+      force -= select(n >= 2 && kappa > 0 && kappa < 1e30 && pinned == 0 && kappa * mass * length(d) < 1e30,
         kappa * mass * d, 0 * pos)`
   });
   return ['balancingCharge', 'balancingMoment', 'v2-2-balancing-pull'];
