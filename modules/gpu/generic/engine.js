@@ -24,7 +24,8 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   const D = plan.D, n = store.n, cap = plan.cap;
   const code = kernelCode(plan);
   const pipelineOf = {};
-  const [writeRows] = await Promise.all([createRowWriter(device)].concat(plan.kernelList.map(kernel =>
+  const dispatched = plan.kernelList.filter(kernel => kernel.kind !== 'host');
+  const [writeRows] = await Promise.all([createRowWriter(device)].concat(dispatched.map(kernel =>
     getPipeline(device, { code: code[kernel.name], label: kernel.name, bindings: bindingsOf(kernel) })
       .then(pipeline => { pipelineOf[kernel.name] = pipeline; }))));
 
@@ -119,9 +120,15 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
   let deviceVelocities = Float64Array.from(store.velocity.subarray(0, n * D));
   let uploaded = versions();
   const bodies = simulator.bodies.slice();
-  const kernels = plan.kernelList.map(kernel => ({
+  const kernels = dispatched.map(kernel => ({
     kernel, pipeline: pipelineOf[kernel.name], bind: bindGroups(kernel), groups: workgroups(kernel), gates: kernelGates(kernel),
   }));
+  // the kernels between host steps: a step where a host step runs is encoded a part at a time
+  const segments = [[]];
+  plan.kernelList.forEach(kernel => {
+    if (kernel.kind === 'host') segments.push([]);
+    else segments[segments.length - 1].push(kernels.find(k => k.kernel === kernel));
+  });
   let lastSlot = null;
 
   // The gates of a kernel whose every part is gated (it is left out on steps where none holds),
@@ -187,11 +194,18 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
       return integerProblem ? { halt: integerProblem } : 'ok';
     },
 
+    // parts of a step between host steps (see run()'s `segment`)
+    segments: segments.length,
+
     /**
      * Encodes `count` steps from simulator step `firstStep`. Returns {ran, halt?}: fewer steps
-     * run when a step's numbers do not fit f32 (that step halts the runner).
+     * run when a step's numbers do not fit f32 (that step halts the runner). With `segment`, one
+     * step's kernels between two host steps only (the numbers are read for it at this moment):
+     * the step ends with its last part.
      */
-    run(count, firstStep, { timestampWrites = null, beforeFinish = null, perSubmit = 64 } = {}) {
+    run(count, firstStep, { timestampWrites = null, beforeFinish = null, perSubmit = 64, segment } = {}) {
+      const list = segment === undefined ? kernels : segments[segment];
+      const ends = segment === undefined || segment === segments.length - 1;
       const filled = slots.fill(count, firstStep);
       const ran = filled.count;
       if (ran === 0) return { ran, halt: filled.halt };
@@ -220,7 +234,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
           const slot = filled.perStep ? s : 0;
           const offset = [slot * plan.slot.bytes];
           const values = filled.data.subarray((filled.perStep ? done + s : 0) * floats);
-          for (const { kernel, pipeline, bind, groups: g, gates } of kernels) {
+          for (const { kernel, pipeline, bind, groups: g, gates } of list) {
             // a kernel of gated stages only, none of which runs this step
             if (gates && gates.every(index => values[index] === 0)) continue;
             // the pyramid's structure, from this step's positions; it also orders the threads of
@@ -230,7 +244,7 @@ export async function createGenericEngine(device, { simulator, plan, fireState, 
             cp.setBindGroup(0, bind[parity], offset);
             cp.dispatchWorkgroups(g);
           }
-          parity ^= 1;
+          if (ends) parity ^= 1;
         }
         cp.end();
         if (last && beforeFinish) beforeFinish(enc);

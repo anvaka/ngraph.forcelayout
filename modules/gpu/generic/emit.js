@@ -29,6 +29,7 @@ export function kernelCode(plan, printer = WGSL) {
     else if (kernel.kind === 'reduce') out[kernel.name] = reduceKernel(plan, kernel);
     else if (kernel.kind === 'fireReduce') out[kernel.name] = fireReduceKernel(plan);
     else if (kernel.kind === 'fireState') out[kernel.name] = fireStateKernel(plan);
+    // a host step is no kernel
   });
   return out;
 }

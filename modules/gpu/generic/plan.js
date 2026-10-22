@@ -123,6 +123,7 @@ export function genericPlan(program, laws, options = {}) {
       const adds = stage.writes.some(write => write.space === 'nodes' && write.end);
       sections.push({ kind: pulls || adds ? 'gather' : 'linkset', stage, pulls });
     } else if (kind === 'node') sections.push({ kind: 'formula', stage });
+    else if (kind === 'host') sections.push({ kind: 'host', stage });
     else if (kind === 'sum') {
       const sum = sumInfo[stage.name];
       sections.push({ kind: sum.group ? 'groupsum' : 'sum', stage, sum });
@@ -313,6 +314,8 @@ export function genericPlan(program, laws, options = {}) {
       return;
     }
     const stage = section.stage;
+    // a host step's `when` and numbers are the host's
+    if (section.kind === 'host') return;
     if (stage.when) section.gate = slot.add('gate', stage.name);
     section.params = Object.create(null);
     stage.params.forEach(param => { section.params[param.name] = slot.add('param', stage.name, param.name); });
@@ -366,6 +369,12 @@ export function genericPlan(program, laws, options = {}) {
       afterIntegrate = true;
       continue;
     }
+    if (section.kind === 'host') {
+      // the step stops here on the steps where the host step runs (see runner.js)
+      close();
+      kernels.push({ kind: 'host', name: section.stage.name, section });
+      continue;
+    }
     if (section.kind === 'linkset') {
       // a thread per link: a kernel of its own, shared with the link stages right after it
       const previous = kernels[kernels.length - 1];
@@ -408,7 +417,7 @@ export function genericPlan(program, laws, options = {}) {
   close();
   // names in step order
   kernels.forEach((kernel, index) => {
-    if (kernel.name) return;
+    if (kernel.name || kernel.kind === 'host') return;
     const prefix = { node: 'STEP', reduce: 'REDUCE', link: 'LINKS', groupRuns: 'GROUP_RUNS', groupSum: 'GROUP_SUM', chunks: 'LINK_CHUNKS' }[kernel.kind];
     kernel.name = prefix + index;
   });
@@ -472,6 +481,7 @@ export function genericPlan(program, laws, options = {}) {
     groupColumns,
     chunked,
     tables,
+    hostSteps: kernels.filter(k => k.kind === 'host').map(k => k.name),
     sums,
     sumWidth,
     S: { size: sSize, fire, firePartials, partials },

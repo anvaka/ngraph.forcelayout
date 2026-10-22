@@ -205,7 +205,7 @@ function checkStage(stage, program, simulator, printer, laws, facts) {
     case 'pair':
       return refuse('WebGPU does not run pair formulas yet');
     case 'host':
-      return refuse('WebGPU does not run host steps yet');
+      return runs(`on the host, on the steps where its \`when\` holds: the step stops there and reads back ${(stage.reads || []).map(r => r.column).join(', ') || 'nothing'}`);
     case 'js':
       return refuse('JavaScript stages run on the CPU only (formula stages and host steps run on other engines too)');
     case 'pair rules':

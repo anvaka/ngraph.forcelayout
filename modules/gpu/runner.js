@@ -230,9 +230,60 @@ function createRunner(layout, backend) {
     return true;
   }
 
-  // Encodes `count` steps in as few submits as the batching allows, and reads positions back
+  // Encodes `count` steps in as few submits as the batching allows, and reads positions back. A
+  // host step splits the batch at the steps where its `when` holds (asked one step at a time, so
+  // the steps after it see what it did): the steps before it run, then that step stops at the
+  // host step, which runs on the host while later steps wait (as at a sync point).
   function run(count) {
     if (!engine) { queued += count; return; }
+    const hostSteps = (lowering.plan && lowering.plan.hostSteps) || [];
+    for (let s = 0; hostSteps.length && s < count; s++) {
+      const at = firstStep + queued + s;
+      const holding = hostSteps.filter(name => simulator.stageValues(name, simulator.stepContext(at)).when);
+      if (!holding.length) continue;
+      if (s > 0) runSteps(s);
+      if (halted) return;
+      pending += count - s - 1;
+      busy = hostStep(firstStep + queued, holding).then(() => {
+        busy = null;
+        if (pending && !halted && !stopped) {
+          const rest = pending;
+          pending = 0;
+          step(rest);
+        }
+      }, error => {
+        busy = null;
+        halt({ message: error.message, kernel: null, stages: [] });
+      });
+      return;
+    }
+    runSteps(count);
+  }
+
+  // One step at a host step: its kernels up to each host step that holds, the device's numbers
+  // back into the store, the host step on the host, what it wrote back up, then the rest of the
+  // step (whose numbers are read after the host step ran)
+  async function hostStep(at, holding) {
+    const names = lowering.plan.hostSteps;
+    const from = engine;
+    for (let part = 0; part < engine.segments; part++) {
+      engine.run(1, at, { segment: part });
+      if (part === names.length || holding.indexOf(names[part]) < 0) continue;
+      await readDevice();
+      if (released || halted || from !== engine) return;
+      simulator.iteration(at);
+      try {
+        simulator.getStage(names[part])(simulator.store, simulator);
+      } catch (e) {
+        throw new Error(`the host step ${names[part]} failed: ${e.message}`);
+      }
+      const prepared = engine.prepare(false, queued);
+      if (prepared && prepared.halt) throw new Error(prepared.halt);
+    }
+    queued += 1;
+  }
+
+  function runSteps(count) {
     const rb = free.pop();
     const withTs = !!rb && timestamps;
     const at = timestampsAt(engine.positionBytes);

@@ -106,6 +106,8 @@ test('what does not run yet is named', () => {
   sim.addPairRule('rule', { radius: 1, rule: () => 0 });
   const plan = sim.plan(gpuCapabilities());
   const words = Object.fromEntries(plan.stages.filter(s => !s.runs).map(s => [s.stage, s.reason]));
+  // host steps run on the host, splitting the batch
+  assert.match(plan.stages.find(s => s.stage === 'look').how, /on the host/);
   assert.deepEqual(words, {
     pullsAndMarks: 'WebGPU does not run link formulas that both move bodies and write link columns yet',
     writesKind: 'WebGPU does not run formulas that write the i32 link column kind yet',
@@ -115,7 +117,6 @@ test('what does not run yet is named', () => {
     overLinks: 'WebGPU does not run sums over links yet',
     largest: 'WebGPU does not run max over bodies yet',
     writesGroup: 'WebGPU does not run formulas that write the i32 column group yet',
-    look: 'WebGPU does not run host steps yet',
     js: 'JavaScript stages run on the CPU only (formula stages and host steps run on other engines too)',
     pairRules: 'pair rules are JavaScript and run on the CPU only (pair formulas do the same on every engine)',
   });
