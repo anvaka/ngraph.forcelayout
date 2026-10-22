@@ -93,15 +93,21 @@ export function pyramidLayout(D, channels, tableWords = 0) {
   const CSW = w;
   // bodies per cell: in the record's padding when it has some, else in treeMeta
   const CNT = CSW % 4 ? CSW : -1;
-  // local expansion: the cell's middle, then per channel the field and the Jacobian
-  const F = [], J = [];
+  // local expansion: its centre, then per channel the field, the Jacobian and, for a channel at
+  // second order (`second`), the field's second derivatives (T[c] is -1 for the others)
+  const TN = D * (D + 1) * (D + 2) / 6;
+  const F = [], J = [], T = [];
   w = D;
-  for (let c = 0; c < K; c++) { F.push(w); J.push(w + D); w += D + JN; }
+  channels.forEach(channel => {
+    F.push(w); J.push(w + D); w += D + JN;
+    if (channel.second) { T.push(w); w += TN; } else T.push(-1);
+  });
   const LSW = w;
-  const pairs = [];
+  const pairs = [], triples = [];
   for (let a = 0; a < D; a++) for (let b = a; b < D; b++) pairs.push([a, b]);
+  for (let a = 0; a < D; a++) for (let b = a; b < D; b++) for (let c = b; c < D; c++) triples.push([a, b, c]);
   return {
-    D, K, JN, pairs,
+    D, K, JN, pairs, TN, triples, T,
     SPW: D + K, SP4: Math.ceil((D + K) / 4),
     S, C, CSW, CS4: Math.ceil(CSW / 4), CNT,
     F, J, LSW, LS4: Math.ceil(LSW / 4),
@@ -226,7 +232,8 @@ function lawFunctions(spec) {
     if (group.isDefault) {
       return `
 fn tree_k1_${g}(r: f32, r2: f32) -> f32 { return 1.0 / (r2 * r); }
-fn tree_k12_${g}(r: f32, r2: f32) -> vec2f { let k1 = 1.0 / (r2 * r); return vec2f(k1, 3.0 * k1 / r2); }`;
+fn tree_k12_${g}(r: f32, r2: f32) -> vec2f { let k1 = 1.0 / (r2 * r); return vec2f(k1, 3.0 * k1 / r2); }${group.second ? `
+fn tree_k123_${g}(r: f32, r2: f32) -> vec3f { let k1 = 1.0 / (r2 * r); let k2 = 3.0 * k1 / r2; return vec3f(k1, k2, 5.0 * k2 / r2); }` : ''}`;
     }
     const law = group.law;
     const prologue = lawPrologue(law, i => group.value(i));
@@ -234,7 +241,14 @@ fn tree_k12_${g}(r: f32, r2: f32) -> vec2f { let k1 = 1.0 / (r2 * r); return vec
     const body = (k2) => withTables(g, law.emit(printer, L.D, 'r', 'k1', k2 ? 'k2' : undefined));
     return `${tables}
 fn tree_k1_${g}(r: f32, r2: f32) -> f32 { ${prologue} ${body(false)} return k1; }
-fn tree_k12_${g}(r: f32, r2: f32) -> vec2f { ${prologue} ${body(true)} return vec2f(k1, k2); }${law.hasRange ? `
+fn tree_k12_${g}(r: f32, r2: f32) -> vec2f { ${prologue} ${body(true)} return vec2f(k1, k2); }${group.second ? `
+// k3 = -k2'(r) / r, from k2 at r (1 +- 1/64)
+fn tree_k123_${g}(r: f32, r2: f32) -> vec3f {
+  let k = tree_k12_${g}(r, r2);
+  let rp = r * 1.015625; let rm = r * 0.984375;
+  let kp = tree_k12_${g}(rp, rp * rp).y; let km = tree_k12_${g}(rm, rm * rm).y;
+  return vec3f(k.x, k.y, (km - kp) * 32.0 / r2);
+}` : ''}${law.hasRange ? `
 fn tree_in_${g}(r2: f32) -> bool { ${prologue} return r2 <= lawRange2; }` : ''}`;
   }).join('\n');
 }
@@ -649,6 +663,25 @@ fn main(${LINEAR}) {
     else centres.push({ word: L.C[c], channels: [c] });
   });
 
+  // A source of charge `S` at d = source - point, added to channel c's field F, Jacobian J
+  // (d/dp of S k1(r) d = S (k2 d d^T - k1 I)) and, at second order, T (the next derivative:
+  // S (k3 d_a d_b d_c - k2 (delta_ab d_c + delta_ac d_b + delta_bc d_a))), from k = (k1, k2[, k3])
+  const expansionTerms = (c, S) => {
+    const lines = [`let g${c} = ${S} * k.x; let h${c} = ${S} * k.y;`];
+    lines.push(each(D, k => `F${c}_${k} += g${c} * d${k};`));
+    lines.push(L.pairs.map(([p, q], e) => `J${c}_${e} += h${c} * d${p} * d${q}${p === q ? ` - g${c}` : ''};`).join(' '));
+    if (L.T[c] >= 0) {
+      lines.push(`let u${c} = ${S} * k.z;`);
+      lines.push(L.triples.map(([a, b, q], e) => {
+        const deltas = [];
+        if (a === b) deltas.push(`d${q}`);
+        if (a === q) deltas.push(`d${b}`);
+        if (b === q) deltas.push(`d${a}`);
+        return `T${c}_${e} += u${c} * d${a} * d${b} * d${q}${deltas.length ? ` - h${c} * (${deltas.join(' + ')})` : ''};`;
+      }).join(' '));
+    }
+    return lines.join('\n');
+  };
   // The far field of one source cell record `a` (loaded) at the point (x<k>), for every channel:
   // field and Jacobian into F<c>_<k>, J<c>_<e> (jacobian), or field only (monopole) into acc<c>_<k>
   const sourceCell = (at, jacobian) => centres.map(centre => {
@@ -673,13 +706,8 @@ fn main(${LINEAR}) {
       const open = conds.length ? `if (${conds.join(' && ')}) {` : '{';
       lines.push(open);
       if (jacobian) {
-        lines.push(`let k = tree_k12_${g}(r, r2);`);
-        channels.forEach(c => {
-          lines.push(`let g${c} = ${word('a', L.S[c])} * k.x; let h${c} = ${word('a', L.S[c])} * k.y;`);
-          lines.push(each(D, k => `F${c}_${k} += g${c} * d${k};`));
-          // d/dp of S k1(r) (q - p) = S (k2 d d^T - k1 I)
-          lines.push(L.pairs.map(([p, q], e) => `J${c}_${e} += h${c} * d${p} * d${q}${p === q ? ` - g${c}` : ''};`).join(' '));
-        });
+        lines.push(lawGroups[g].second ? `let k = tree_k123_${g}(r, r2);` : `let k = tree_k12_${g}(r, r2);`);
+        channels.forEach(c => lines.push(expansionTerms(c, word('a', L.S[c]))));
       } else {
         lines.push(`let k1 = tree_k1_${g}(r, r2);`);
         channels.forEach(c => {
@@ -881,7 +909,7 @@ fn main(${LINEAR}, @builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_
   // the expansion centre: the cell's centre of channel 0's charge (of its bodies when that is
   // 0), where its bodies are, rather than its middle: half the error or less on hub graphs
   ${each(D, k => `let ce${k} = ${word('m', L.C[0] + k)};`)}
-  ${each(K, c => each(D, k => `var F${c}_${k} = 0.0;`) + ' ' + L.pairs.map((_, e) => `var J${c}_${e} = 0.0;`).join(' '), '\n  ')}
+  ${each(K, c => each(D, k => `var F${c}_${k} = 0.0;`) + ' ' + L.pairs.map((_, e) => `var J${c}_${e} = 0.0;`).join(' ') + ' ' + (L.T[c] >= 0 ? L.triples.map((_, e) => `var T${c}_${e} = 0.0;`).join(' ') : ''), '\n  ')}
 ${interactionList(sourceCell(k => `ce${k}`, true), '  ')}
   let o = TP.locOff + (off + c) * ${L.LS4}u;
   ${storeVec4s('treeCells', 'o', (() => {
@@ -890,6 +918,7 @@ ${interactionList(sourceCell(k => `ce${k}`, true), '  ')}
     for (let c = 0; c < K; c++) {
       for (let k = 0; k < D; k++) words[L.F[c] + k] = `F${c}_${k}`;
       L.pairs.forEach((_, e) => { words[L.J[c] + e] = `J${c}_${e}`; });
+      if (L.T[c] >= 0) L.triples.forEach((_, e) => { words[L.T[c] + e] = `T${c}_${e}`; });
     }
     return words;
   })())}
@@ -901,7 +930,7 @@ ${interactionList(sourceCell(k => `ce${k}`, true), '  ')}
   // were 1.5 to 2.7 times further from exact than the CPU tree's). A workgroup takes a cell and
   // its threads split the list; partial sums add up in a fixed tree, so runs repeat exactly.
   // A fixed number of workgroups walk the list, which holds the few hubs' cells.
-  const NC = K * (D + L.JN);
+  const NC = K * (D + L.JN) + L.T.filter(t => t >= 0).length * L.TN;
   let HT = HEAVY_THREADS;
   while (HT > 8 && HT * NC * 4 > 16384) HT >>= 1;
   const NQ = 3 ** D << D;
@@ -916,12 +945,8 @@ ${interactionList(sourceCell(k => `ce${k}`, true), '  ')}
       const conds = [`(${nonzero(group.channels, c => word('b', D + c))})`];
       if (group.law && group.law.hasRange) conds.push(`tree_in_${g}(r2)`);
       lines.push(`if (${conds.join(' && ')}) {`);
-      lines.push(`let k = tree_k12_${g}(r, r2);`);
-      group.channels.forEach(c => {
-        lines.push(`let g${c} = ${word('b', D + c)} * k.x; let h${c} = ${word('b', D + c)} * k.y;`);
-        lines.push(each(D, k => `F${c}_${k} += g${c} * d${k};`));
-        lines.push(L.pairs.map(([p, q], e) => `J${c}_${e} += h${c} * d${p} * d${q}${p === q ? ` - g${c}` : ''};`).join(' '));
-      });
+      lines.push(group.second ? `let k = tree_k123_${g}(r, r2);` : `let k = tree_k12_${g}(r, r2);`);
+      group.channels.forEach(c => lines.push(expansionTerms(c, word('b', D + c))));
       lines.push(`}`);
     });
     lines.push(`}`);
@@ -931,6 +956,7 @@ ${interactionList(sourceCell(k => `ce${k}`, true), '  ')}
   for (let c = 0; c < K; c++) {
     for (let k = 0; k < D; k++) accNames.push(`F${c}_${k}`);
     L.pairs.forEach((_, e) => accNames.push(`J${c}_${e}`));
+    if (L.T[c] >= 0) L.triples.forEach((_, e) => accNames.push(`T${c}_${e}`));
   }
   const HEAVY_KERNEL = common + lawCode + /* wgsl */`
 ${tp}
@@ -991,6 +1017,7 @@ ${sourceCell(k => `ce${k}`, true)}
     for (let c = 0; c < K; c++) {
       for (let k = 0; k < D; k++) words[L.F[c] + k] = `parts[${j++}]`;
       L.pairs.forEach((_, e) => { words[L.J[c] + e] = `parts[${j++}]`; });
+      if (L.T[c] >= 0) L.triples.forEach((_, e) => { words[L.T[c] + e] = `parts[${j++}]`; });
     }
     return words;
   })())}
@@ -1049,7 +1076,11 @@ for (var t = s0; t < e0; t++) {
       ${each(K, c => each(D, q => `b${q} += s[${c}] * (${word('e', L.F[c] + q)} + ${each(D, r => {
     const e = L.pairs.findIndex(([x, y]) => (x === q && y === r) || (x === r && y === q));
     return `${word('e', L.J[c] + e)} * h${r}`;
-  }, ' + ')});`), '\n      ')}
+  }, ' + ')}${L.T[c] >= 0 ? ' + 0.5 * (' + each(D, r => each(D, t => {
+    const key = [q, r, t].sort().join();
+    const e = L.triples.findIndex(x => x.join() === key);
+    return `${word('e', L.T[c] + e)} * h${r} * h${t}`;
+  }, ' + '), ' + ') + ')' : ''});`), '\n      ')}
       off += ${each(D, () => 'Gl', ' * ')}; Gl >>= 1u; cc >>= ${D}u;
     }`;
 

@@ -43,7 +43,7 @@ export function chooseGrid(n, D) {
  * numbers per step instead of the pyramid's uniform: {decl(binding), law(c, k), gravity}.
  * `grid` forces the cells per axis (for measurements).
  */
-export function planPyramid({ D, n, limits, channels, pos, values = null, grid = 0, heads, heavyCells, warn }) {
+export function planPyramid({ D, n, limits, channels, pos, values = null, grid = 0, heads, heavyCells, secondOrder, warn }) {
   const refuse = (reason, buffers = {}) => ({ refusal: reason, buffers, kernels: {}, section: null, dispatches: 0 });
   if (D !== 2 && D !== 3) return refuse(`the grid pyramid is 2D and 3D; this layout is ${D}D`);
   if (!channels.length) return refuse('a tree pass needs at least one charge');
@@ -77,7 +77,17 @@ export function planPyramid({ D, n, limits, channels, pos, values = null, grid =
     lawWords += Math.ceil(lawValueCount(group.law) / 4) * 4;
     group.value = values ? k => values.law(group.first, k) : k => `TP.law[${(group.base + k) >> 2}].${AX[(group.base + k) & 3]}`;
   });
-  const own = channels.map((channel, c) => ({ own: c === 0 || channel.centroid !== 'shared', group: groups.findIndex(g => g.channels.indexOf(c) >= 0) }));
+  // A law whose push falls slower than 1/r^2 gets second-order expansions in 2D, where its far
+  // field is the sum of many levels' small errors (a/r was 1.3 to 2.5 times the CPU tree's error
+  // at first order, 0.6 to 1.1 at second). Not for tables: their slope is piecewise constant.
+  groups.forEach(group => {
+    group.second = secondOrder !== undefined ? !!secondOrder && !(group.tables || []).length :
+      D === 2 && !!group.law && !(group.tables || []).length && slowLaw(group.law, D);
+  });
+  const own = channels.map((channel, c) => {
+    const group = groups.findIndex(g => g.channels.indexOf(c) >= 0);
+    return { own: c === 0 || channel.centroid !== 'shared', group, second: groups[group].second };
+  });
   const L = pyramidLayout(D, own, tableWords);
 
   const G = grid || chooseGrid(n, D);
@@ -149,6 +159,20 @@ function layoutSizes(D, n, G, L, K, heavy) {
       treeLists: size((LIST_HEAD + (heavy ? nCells : 0) + crowdMax) * 4),
     },
   };
+}
+
+// True when the law's push falls slower than 1/r^2 somewhere: its k1 = F(r)/r, probed with its
+// numbers of this step over r = 2^-8 .. 2^24, has a local slope above -2.5 (1/r^2 has -3)
+function slowLaw(law, D) {
+  const body = law.prologue('values') + ' var k1; ' + law.emit(D, 'r', 'k1') + ' return k1;';
+  const k1 = new Function('r', 'values', 'lawFunctions', body);
+  let last = null;
+  for (let e = -8; e <= 24; e++) {
+    const value = Math.abs(k1(2 ** e, law.values, law.functions));
+    if (last !== null && last > 0 && value > 0 && Math.log2(value / last) > -2.5) return true;
+    last = value;
+  }
+  return false;
 }
 
 // Why the GPU cannot print `law`, or null
