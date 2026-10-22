@@ -210,13 +210,18 @@ function createRunner(layout, backend) {
       return false;
     }
     if (springStore.versions.length !== linkVersions[2] || springStore.versions.coefficient !== linkVersions[3]) {
-      // a change mark re-plans: links may now have their own lengths
+      // a change mark re-plans: links may now have their own lengths (no more stock template,
+      // the springs read the columns), or all have the defaults again
       const verdict = backend.lower(simulator.program(), simulator);
       if (!verdict.runs) {
         halt({ message: refusal(reasonsOf(verdict)).message, kernel: null, stages: ['springs'] });
         return false;
       }
       linkVersions = LINK_COLUMNS.map(name => springStore.versions[name]);
+      if (verdict.plan.dataKey !== lowering.plan.dataKey) {
+        syncPoint();
+        return false;
+      }
     }
     const prepared = engine.prepare(hostOwns, queued);
     hostOwns = false;
@@ -485,7 +490,8 @@ function createRunner(layout, backend) {
   function markList(plan) {
     const columns = plan.reads || ['pos', 'velocity', 'mass', 'pinned'];
     const out = columns.map(name => ({ name: 'the column ' + name, read: () => store.versions[name] }));
-    LINK_COLUMNS.forEach(name => out.push({ name: 'the link column ' + name, read: () => springStore.versions[name] }));
+    const links = LINK_COLUMNS.concat(Object.keys(plan.linkColumns || {}).filter(name => LINK_COLUMNS.indexOf(name) < 0));
+    links.forEach(name => out.push({ name: 'the link column ' + name, read: () => springStore.versions[name] }));
     PHYSICS_SETTINGS.forEach(key => out.push({ name: 'the setting ' + key, read: () => simulator.settings[key] }));
     out.push({ name: 'the repulsion law', read: () => simulator.repulsionLaw() });
     out.push({ name: 'the inertia', read: () => simulator.settings.inertia });
