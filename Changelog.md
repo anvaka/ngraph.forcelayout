@@ -31,7 +31,9 @@ the README):
   stages in order with their shape, formula, reads, writes and options), for other engines,
   inspectors and tests; `simulator.stageValues(name, context)` gives a stage's numbers for a step.
   A formula compiles to other languages through a printer: `formula.compile(text, scope,
-  printer)`, `law.emit(printer, ...)`.
+  printer)`, `law.emit(printer, ...)`. The library prints JS only; the WebGPU module has its own
+  WGSL printer (`law.emitWGSL()`, `law.wgslPrologue()`, `law.writeValues()` and
+  `law.valueCount` are gone).
 * `when` - any stage can run on some steps only, e.g. `'step - floor(step / 25) * 25 == 0'`.
   A gated sum keeps its last result.
 * `simulator.addHostStep(name, {when, reads, writes, run})` - JavaScript that needs data in the
