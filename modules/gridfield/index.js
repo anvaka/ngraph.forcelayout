@@ -15,17 +15,19 @@
  * The grid is dense and covers the bodies plus a margin:
  *  - 'box': its corner is the bodies' smallest corner minus the margin, and the cell grows when
  *    an axis would need more than `maxCells` cells;
- *  - 'lattice': grid points sit at multiples of `cell`, which never changes (the CPU has no cap
- *    on the number of cells; the GPU stops with a message above `maxCells`). When the bodies
- *    spread so far that most cells would be empty, the CPU keeps only the cells that bodies
- *    touch, in a hash map; the numbers are the same.
+ *  - 'lattice': grid points sit at multiples of `cell`, which never changes. Without smoothing
+ *    the CPU has no cap on the number of cells: past a memory budget it keeps only the cells that
+ *    bodies touch, in small bricks found through a hash map, with the same numbers. A smoothed
+ *    lattice wider than `maxCells` stops with a message, as on the GPU.
  *
  * Other engines read the stage's description (shape 'grid') and run their own version of it.
  */
 import formula from '../../lib/formula.js';
 
-// Cells per axis, at most (see the GPU lowering: 1M cells in 2D, 2.1M in 3D)
-const MAX_CELLS = { 2: 1024, 3: 128 };
+// Cells per axis, at most. For a box they set the cost (the cell grows to fit); for a lattice only
+// where the GPU stops, so the 2D lattice gets more room: measured at 1M bodies on the GPU, a
+// 2,000 x 2,000 lattice took 0.73 ms per step against 0.41 at 1,000 x 1,000.
+const MAX_CELLS = { box: { 2: 1024, 3: 128 }, lattice: { 2: 2048, 3: 128 } };
 const ANCHORS = ['box', 'lattice'];
 const WEIGHTS = ['linear', 'quadratic'];
 const SELF = ['include', 'exclude'];
@@ -39,17 +41,19 @@ const kernelCache = new Map();
  *  - cell: the cell size in layout units (an expression, a number or a function of the step
  *    context). For 'box' it is the smallest cell;
  *  - margin: room around the bodies, in layout units (default 0);
- *  - maxCells: cells per axis, at most (1024 in 2D, 128 in 3D);
+ *  - maxCells: cells per axis, at most (box: 1024 in 2D; lattice: 2048 in 2D; 128 in 3D);
  *  - deposit: {value, weights}. `value` is what each body spreads (default '1'; an expression
  *    that may read body columns); weights 'linear' (default) or 'quadratic';
  *  - smooth: {diffuse}: one implicit heat step that spreads the field over about
  *    sqrt(diffuse) layout units. Leave it out for no smoothing;
- *  - self: 'include' (default), or 'exclude' to leave each body's own share out of what it reads;
+ *  - self: 'include' (default), or 'exclude' to leave each body's own share out of what it reads
+ *    (with smoothing, its own smoothed share);
  *  - into: {value, gradient}, names of the two body columns it writes (defined when missing);
  *  - params: numbers, or functions of the step context (see simulator.stepContext()), that the
  *    expressions read; functions are called once per step;
+ *  - when: run the stage only on the steps where this holds (as for any stage);
  *  - denseLimit: a 'lattice' grid without smoothing that would have more cells than this keeps
- *    only the cells bodies touch (default: 64 per body, at least 65,536).
+ *    only the cells bodies touch (default: 64 per body, at least 4M: 32 MB).
  *
  * Returns {name, dispose()}; dispose() removes the stage and the columns this call defined.
  */
@@ -67,7 +71,7 @@ export default function addGridField(simulator, name, options) {
     throw new Error(`Grid field ${name} needs two column names: into: {value, gradient}`);
   }
   if (options.cell === undefined) throw new Error(`Grid field ${name} needs a cell size`);
-  const maxCells = options.maxCells === undefined ? MAX_CELLS[D] : options.maxCells;
+  const maxCells = options.maxCells === undefined ? MAX_CELLS[anchor][D] : options.maxCells;
   if (!(maxCells >= 1) || Math.floor(maxCells) !== maxCells) throw new Error(`Grid field ${name}: maxCells should be a positive whole number`);
   const smooth = options.smooth || null;
   if (smooth && smooth.diffuse === undefined) throw new Error(`Grid field ${name}: smooth needs diffuse`);
@@ -82,22 +86,25 @@ export default function addGridField(simulator, name, options) {
   defineColumn(into.value, 1);
   defineColumn(into.gradient, D);
 
-  const kernel = getKernel(D, weights, anchor, self, value.code);
+  const kernel = getKernel(D, weights, anchor, self, !!smooth, value.code);
   const pad = weights === 'quadratic' ? 1 : 0;
   const touched = Math.pow(weights === 'quadratic' ? 3 : 2, D); // grid points per body
   const grid = {
     field: new Float64Array(0), cells: 0, cell: 0, unit: 0,
-    origin: new Float64Array(D), size: new Int32Array(D), lo: new Float64Array(D), hi: new Float64Array(D),
+    origin: new Float64Array(D), size: new Float64Array(D), lo: new Float64Array(D), hi: new Float64Array(D),
     columns: value.columns.map(() => null), now: Object.create(null),
-    // the sparse lattice: a hash map of touched cells, and each body's slots in it
-    hash: null, slots: new Int32Array(0)
+    // the sparse lattice: bricks of cells found through a hash map, and each body's cells in them
+    bricks: null, slots: new Int32Array(0),
+    // per axis, the inverse of the smoothing's line solve near its diagonal (for self: 'exclude')
+    inverse: []
   };
+  for (let k = 0; k < D; ++k) grid.inverse.push({ c: new Float64Array(0), d: new Float64Array(0) });
   let sweepC = new Float64Array(0), sweepM = new Float64Array(0);
   // what params and built in values read on the CPU's steps
   const context = simulator.stepContext();
 
   simulator.addStage(name, run, {
-    before: options.before, after: options.after, replace: options.replace,
+    before: options.before, after: options.after, replace: options.replace, when: options.when,
     describe, values: stepValues
   });
 
@@ -123,7 +130,7 @@ export default function addGridField(simulator, name, options) {
       return;
     }
     if (anchor === 'box') placeBox(h, room);
-    else placeLattice(h, room);
+    else placeLattice(h, room, !!diffuse);
     // Deposits are densities: per unit area (or volume) of a cell
     const area = grid.cell * grid.cell * (D === 3 ? grid.cell : 1);
     grid.unit = value.scalar ? value.read(now) / area : 1 / area;
@@ -131,8 +138,10 @@ export default function addGridField(simulator, name, options) {
       grid.columns[c] = bodies[value.columns[c]];
       if (!grid.columns[c]) throw new Error(`Grid field ${name} reads the body column ${value.columns[c]}, which is gone`);
     }
-    const limit = options.denseLimit === undefined ? Math.max(65536, 64 * n) : options.denseLimit;
-    if (anchor === 'lattice' && !diffuse && grid.cells > limit) {
+    // Lattice cells are whole numbers up to 2^30 per axis on the dense grid; the bricks skip bodies
+    // past 1e9 cells, so one body thrown far away does not break everyone's field
+    const limit = options.denseLimit === undefined ? Math.max(4194304, 64 * n) : options.denseLimit;
+    if (anchor === 'lattice' && !diffuse && (grid.cells > limit || !(grid.span < 1073741824))) {
       runSparse(bodies, out, slope);
       return;
     }
@@ -142,20 +151,21 @@ export default function addGridField(simulator, name, options) {
     kernel.deposit(bodies, grid);
     if (diffuse) {
       const amount = diffuse.read(now);
-      if (amount > 0) smoothField(amount / (grid.cell * grid.cell));
+      smoothField(amount > 0 ? amount / (grid.cell * grid.cell) : 0);
     }
     kernel.gather(bodies, grid, out, slope);
   }
 
-  // The same deposit and gather over a hash map of the cells that bodies touch
+  // The same deposit and gather over bricks of 4^D cells, found through a hash map of the
+  // bricks that bodies touch (one or two per axis, against 2 or 3 cells per axis to look up)
   function runSparse(bodies, out, slope) {
     const n = bodies.n;
-    if (!grid.hash) grid.hash = createHash(D);
+    if (!grid.bricks) grid.bricks = createBricks(D);
     if (grid.slots.length < touched * n) grid.slots = new Int32Array(touched * n);
-    grid.hash.reset(4 * n);
+    grid.bricks.reset(2 * n);
     while (!kernel.depositSparse(bodies, grid)) {
-      // keep the load factor under 1/2
-      grid.hash.grow();
+      // keep the hash map at most half full
+      grid.bricks.grow();
     }
     kernel.gatherSparse(bodies, grid, out, slope);
   }
@@ -176,17 +186,24 @@ export default function addGridField(simulator, name, options) {
     grid.cells = cells;
   }
 
-  // Grid points at multiples of h. `origin` holds the index of the first one per axis.
-  function placeLattice(h, room) {
-    let cells = 1;
+  // Grid points at multiples of h. `origin` holds the index of the first one per axis. Sizes are
+  // whole numbers in f64: a body far away gives a huge `span`, not a wrapped one.
+  function placeLattice(h, room, smoothed) {
+    let cells = 1, span = 0;
     for (let k = 0; k < D; ++k) {
       const first = Math.floor((grid.lo[k] - room) / h);
+      const across = Math.floor((grid.hi[k] + room) / h) - first;
+      if (smoothed && !(across <= maxCells)) {
+        throw new Error(`Grid field ${name}: the layout spans ${across} cells at cell ${h}; maxCells is ${maxCells}`);
+      }
       grid.origin[k] = first - pad;
-      grid.size[k] = Math.floor((grid.hi[k] + room) / h) - first + 2 + 2 * pad;
+      grid.size[k] = across + 2 + 2 * pad;
       cells *= grid.size[k];
+      span = Math.max(span, across);
     }
     grid.cell = h;
     grid.cells = cells;
+    grid.span = span;
   }
 
   // One implicit heat step, split into a tridiagonal solve along each axis (zero outside the
@@ -206,6 +223,8 @@ export default function addGridField(simulator, name, options) {
         m[i] = b - a * c[i - 1];
         c[i] = a / m[i];
       }
+      if (self === 'exclude') inverseNearDiagonal(grid.inverse[k], length, a, b, c, m);
+      if (g === 0) { stride *= length; continue; }
       const block = stride * length; // values between two lines along this axis, plus the line
       if (stride === 1) {
         for (let base = 0; base < cells; base += length) {
@@ -230,6 +249,20 @@ export default function addGridField(simulator, name, options) {
     }
   }
 
+  // What a body reads back of its own smoothed deposit needs the inverse of each axis's line
+  // solve A (b on the diagonal, a next to it), but only next to the diagonal: its diagonal
+  // d_i = 1 / (m_i + n_i - b), from the forward pivots m (Thomas) and the backward pivots n, and
+  // (A^-1)_{i,j} = -c_i (A^-1)_{i+1,j} for i < j, with Thomas's c_i = a / m_i.
+  function inverseNearDiagonal(table, length, a, b, c, m) {
+    if (table.d.length < length) { table.c = new Float64Array(2 * length); table.d = new Float64Array(2 * length); }
+    let next = b; // backward pivot n_i, from the end of the line
+    for (let i = length - 1; i >= 0; --i) {
+      if (i < length - 1) next = b - a * a / next;
+      table.d[i] = 1 / (m[i] + next - b);
+      table.c[i] = c[i];
+    }
+  }
+
   // The stage as plain data (see simulator.program()): the grid's options in `args`, its numbers
   // as {kind: 'number' | 'expression' | 'host'}
   function describe() {
@@ -237,8 +270,8 @@ export default function addGridField(simulator, name, options) {
       shape: 'grid',
       space: 'grid',
       how: `generated loops: a ${anchor} grid, ${weights} weights${diffuse ? ', smoothed' : ''}`,
-      reads: [{ space: 'nodes', column: 'pos', rows: 'other' }]
-        .concat(value.columns.map(column => ({ space: 'nodes', column, rows: 'other' }))),
+      reads: ['pos'].concat(value.columns).reduce((list, column) => list.concat(
+        { space: 'nodes', column, rows: 'own' }, { space: 'nodes', column, rows: 'other' }), []),
       writes: [
         { space: 'nodes', column: into.value, mode: 'set' },
         { space: 'nodes', column: into.gradient, mode: 'set' }
@@ -373,22 +406,24 @@ function describeValue(spec) {
 
 /**
  * Generated loops for one kind of grid: bounds(store, grid), deposit(store, grid) and
- * gather(store, grid, value, gradient), plus depositSparse and gatherSparse over a hash map of
- * the touched cells (lattice only). The 2D linear code is written as ru-4's gridPressure.js and
- * the quadratic code as v1-6's gasPressure.js, so they give the same numbers.
+ * gather(store, grid, value, gradient), plus depositSparse and gatherSparse over bricks of cells
+ * (lattice only). The 2D linear code is written as ru-4's gridPressure.js and the quadratic code
+ * as v1-6's gasPressure.js, so they give the same numbers.
  */
-function getKernel(D, weights, anchor, self, valueCode) {
-  const key = [D, weights, anchor, self, valueCode].join('|');
+function getKernel(D, weights, anchor, self, smooth, valueCode) {
+  const key = [D, weights, anchor, self, smooth, valueCode].join('|');
   let kernel = kernelCache.get(key);
   if (!kernel) {
+    // with smoothing, a body's own share is read back through the line solves
+    const exclude = self === 'exclude' ? (smooth ? 'smoothed' : 'plain') : null;
     kernel = {
       bounds: new Function('$store', '$grid', boundsCode(D)),
       deposit: new Function('$store', '$grid', depositCode(D, weights, anchor, valueCode, false)),
-      gather: new Function('$store', '$grid', '$value', '$gradient', gatherCode(D, weights, anchor, self, valueCode, false))
+      gather: new Function('$store', '$grid', '$value', '$gradient', gatherCode(D, weights, anchor, exclude, valueCode, false))
     };
     if (anchor === 'lattice') {
       kernel.depositSparse = new Function('$store', '$grid', depositCode(D, weights, anchor, valueCode, true));
-      kernel.gatherSparse = new Function('$store', '$grid', '$value', '$gradient', gatherCode(D, weights, anchor, self, valueCode, true));
+      kernel.gatherSparse = new Function('$store', '$grid', '$value', '$gradient', gatherCode(D, weights, anchor, exclude && 'plain', valueCode, true));
     }
     kernelCache.set(key, kernel);
   }
@@ -436,9 +471,10 @@ function stencil(D, weights) {
   return points;
 }
 
-// Per body: its grid coordinates, its first grid point (`o`, dense grids) and weights along
-// each axis. A sparse grid keys cells by whole numbers, so its deposit skips bodies too far out
-// (`skip` marks them).
+// Per body: its grid coordinates, the first grid point of its stencil along each axis (`t`: the
+// position on a dense grid's line; on a sparse lattice, the global cell number), the dense grid's
+// index of that point (`o`), and the weights. Bricks key cells by whole numbers, so their deposit
+// skips bodies too far out (`skip` marks them).
 function bodyCode(D, weights, anchor, dense, skip) {
   const axes = range(D);
   const lines = [];
@@ -452,13 +488,10 @@ function bodyCode(D, weights, anchor, dense, skip) {
     axes.forEach(k => lines.push(`var i${k} = Math.round(g${k});`));
     axes.forEach(k => lines.push(`var d${k} = g${k} - i${k};`));
   }
-  if (dense) {
-    // Index of the first grid point of the stencil (box: `origin` is the grid's corner;
-    // lattice: the index of its first point)
-    const shift = k => anchor === 'box' ? (weights === 'linear' ? '' : ' - 1') : (weights === 'linear' ? ` - o${k}` : ` - 1 - o${k}`);
-    const terms = axes.map(k => k === 0 ? `(i0${shift(0)})` : `(i${k}${shift(k)}) * W${k === 1 ? '0' : '01'}`);
-    lines.push(`var o = ${terms.reverse().join(' + ')};`);
-  }
+  // box: `origin` is the grid's corner; lattice: the index of its first point
+  const shift = k => (weights === 'linear' ? '' : ' - 1') + (anchor === 'lattice' && dense ? ` - o${k}` : '');
+  axes.forEach(k => lines.push(`var t${k} = i${k}${shift(k)};`));
+  if (dense) lines.push(`var o = ${axes.map(k => k === 0 ? 't0' : `t${k} * W${k === 1 ? '0' : '01'}`).reverse().join(' + ')};`);
   if (weights === 'quadratic') {
     axes.forEach(k => lines.push(`var w${k}_0 = 0.5 * (0.5 - d${k}) * (0.5 - d${k}), w${k}_1 = 0.75 - d${k} * d${k}, w${k}_2 = 0.5 * (0.5 + d${k}) * (0.5 + d${k});`));
   }
@@ -468,7 +501,7 @@ function bodyCode(D, weights, anchor, dense, skip) {
 function prologue(D, valueCode, sparse) {
   const lines = ['var pos = $store.pos, n = $store.n, cell = $grid.cell, $u = $grid.unit;'];
   if (sparse) {
-    lines.push('var $hash = $grid.hash, F = $hash.value, slots = $grid.slots;');
+    lines.push('var $bricks = $grid.bricks, F = $bricks.value, slots = $grid.slots, $K = $bricks.found;');
   } else {
     lines.push('var F = $grid.field, W0 = $grid.size[0]' + (D === 3 ? ', W01 = $grid.size[0] * $grid.size[1];' : ';'));
     lines.push(range(D).map(k => `var o${k} = $grid.origin[${k}];`).join(' '));
@@ -483,7 +516,7 @@ function prologue(D, valueCode, sparse) {
 }
 
 // Where stencil point `p` (at offsets `at`) is in the field: an index into the dense grid, or the
-// slot the deposit found in the hash map
+// slot the sparse deposit found for it
 function cellOf(at, p, sparse) {
   if (sparse) return `$s${p}`;
   const parts = [];
@@ -498,6 +531,15 @@ function weightOf(weights, at) {
   return at.map((offset, k) => `w${k}_${offset}`).join(' * ');
 }
 
+// The weight and the slope of point `j` of the stencil along axis `k`
+function axisWeight(weights, k, j) {
+  return weights === 'linear' ? (j ? `f${k}` : `(1 - f${k})`) : `w${k}_${j}`;
+}
+
+function axisSlope(weights, k, j) {
+  return weights === 'linear' ? (j ? '1' : '-1') : `s${k}_${j}`;
+}
+
 function depositCode(D, weights, anchor, valueCode, sparse) {
   const points = stencil(D, weights);
   const lines = [
@@ -506,21 +548,43 @@ function depositCode(D, weights, anchor, valueCode, sparse) {
     bodyCode(D, weights, anchor, !sparse, sparse ? `slots[${points.length} * $i] = -1;` : null)
   ];
   if (valueCode) lines.push(`  $u = (${valueCode}) * $area;`);
-  points.forEach((at, p) => {
-    if (sparse) {
-      const keys = at.map((offset, k) => `i${k} + ${weights === 'linear' ? offset : offset - 1}`);
-      lines.push(`  var $s${p} = $hash.slot(${keys.join(', ')});`);
-      lines.push(`  slots[${points.length} * $i + ${p}] = $s${p};`);
-    }
-    lines.push(`  F[${cellOf(at, p, sparse)}] += ${weightOf(weights, at)} * $u;`);
-  });
-  if (sparse) lines.push(`  if ($hash.full(${points.length})) return false;`);
+  if (sparse) lines.push(sparseCells(D, weights, points));
+  points.forEach((at, p) => lines.push(`  F[${cellOf(at, p, sparse)}] += ${weightOf(weights, at)} * $u;`));
+  if (sparse) lines.push(`  if ($bricks.full(${1 << D})) return false;`);
   lines.push('}');
   if (sparse) lines.push('return true;');
   return lines.join('\n');
 }
 
-function gatherCode(D, weights, anchor, self, valueCode, sparse) {
+// A body's stencil lies in at most 2 bricks per axis (it spans 2 or 3 cells, a brick 4). Look up
+// each brick it touches once ($K, by which axes take the next brick), then every stencil cell is a
+// brick plus its place in it.
+function sparseCells(D, weights, points) {
+  const axes = range(D);
+  const span = weights === 'linear' ? 1 : 2;
+  const lines = [];
+  axes.forEach(k => lines.push(`var b${k} = t${k} >> 2, z${k} = ((t${k} + ${span}) >> 2) !== b${k} ? ${1 << k} : 0;`));
+  lines.push(`var $cross = ${axes.map(k => `z${k}`).join(' | ')};`);
+  for (let mask = 0; mask < 1 << D; ++mask) {
+    const look = `$bricks.brick(${axes.map(k => mask & (1 << k) ? `b${k} + 1` : `b${k}`).join(', ')})`;
+    lines.push(mask === 0 ? `$K[0] = ${look};` : `$K[${mask}] = ($cross & ${mask}) === ${mask} ? ${look} : $K[$cross & ${mask}];`);
+  }
+  // per axis and offset: which brick (bit k set: the next one) and the place in it
+  axes.forEach(k => {
+    for (let a = 0; a <= span; ++a) {
+      lines.push(`var e${k}_${a} = ((t${k} + ${a}) >> 2) !== b${k} ? ${1 << k} : 0, l${k}_${a} = ((t${k} + ${a}) & 3)${k ? ` << ${2 * k}` : ''};`);
+    }
+  });
+  points.forEach((at, p) => {
+    lines.push(`var $s${p} = $K[${axes.map(k => `e${k}_${at[k]}`).join(' | ')}] + ${axes.map(k => `l${k}_${at[k]}`).join(' + ')};`);
+    lines.push(`slots[${points.length} * $i + ${p}] = $s${p};`);
+  });
+  return lines.map(line => '  ' + line).join('\n');
+}
+
+// `exclude`: null (the body's own share stays in), 'plain' (subtract its deposit at each point)
+// or 'smoothed' (subtract what it reads back of its own smoothed deposit; see selfCode)
+function gatherCode(D, weights, anchor, exclude, valueCode, sparse) {
   const axes = range(D);
   const points = stencil(D, weights);
   const lines = [prologue(D, valueCode, sparse), 'for (var $i = 0; $i < n; ++$i) {'];
@@ -530,12 +594,16 @@ function gatherCode(D, weights, anchor, self, valueCode, sparse) {
   }
   lines.push(bodyCode(D, weights, anchor, !sparse, null));
   if (valueCode) lines.push(`  $u = (${valueCode}) * $area;`);
-  const exclude = self === 'exclude';
+  const plain = exclude === 'plain';
+  if (weights === 'quadratic') {
+    axes.forEach(k => lines.push(`  var s${k}_0 = -(0.5 - d${k}), s${k}_1 = -2 * d${k}, s${k}_2 = 0.5 + d${k};`));
+  }
+  const value = '$value[$i]', slope = k => `$gradient[${D} * $i + ${k}]`;
   if (weights === 'linear') {
     // Corner values, then the interpolated value and its slope along each axis
     const nameOf = at => 'p' + at.join('');
-    points.forEach((at, p) => lines.push(`  var ${nameOf(at)} = F[${cellOf(at, p, sparse)}]${exclude ? ` - ${weightOf(weights, at)} * $u` : ''};`));
-    lines.push(`  $value[$i] = ${points.map(at => `${nameOf(at)} * ${weightOf(weights, at)}`).join(' + ')};`);
+    points.forEach((at, p) => lines.push(`  var ${nameOf(at)} = F[${cellOf(at, p, sparse)}]${plain ? ` - ${weightOf(weights, at)} * $u` : ''};`));
+    lines.push(`  var $v = ${points.map(at => `${nameOf(at)} * ${weightOf(weights, at)}`).join(' + ')};`);
     axes.forEach(k => {
       const terms = points.filter(at => at[k] === 0).map(at => {
         const up = at.slice();
@@ -543,41 +611,71 @@ function gatherCode(D, weights, anchor, self, valueCode, sparse) {
         const others = at.map((bit, m) => m === k ? null : (bit ? `f${m}` : `(1 - f${m})`)).filter(Boolean).join(' * ');
         return `(${nameOf(up)} - ${nameOf(at)}) * ${others}`;
       });
-      lines.push(`  $gradient[${D} * $i + ${k}] = (${terms.join(' + ')}) / cell;`);
+      lines.push(`  var $g${k} = (${terms.join(' + ')}) / cell;`);
     });
   } else {
-    axes.forEach(k => lines.push(`  var s${k}_0 = -(0.5 - d${k}), s${k}_1 = -2 * d${k}, s${k}_2 = 0.5 + d${k};`));
     lines.push(`  var $v = 0, ${axes.map(k => `$g${k} = 0`).join(', ')};`);
     points.forEach((at, p) => {
       lines.push(`  var $w = ${weightOf(weights, at)};`);
-      lines.push(`  var $q = F[${cellOf(at, p, sparse)}]${exclude ? ' - $w * $u' : ''};`);
+      lines.push(`  var $q = F[${cellOf(at, p, sparse)}]${plain ? ' - $w * $u' : ''};`);
       lines.push('  $v += $w * $q;');
       axes.forEach(k => {
-        const slope = at.map((offset, m) => m === k ? `s${m}_${offset}` : `w${m}_${offset}`).join(' * ');
-        lines.push(`  $g${k} += ${slope} * $q;`);
+        const product = at.map((offset, m) => m === k ? `s${m}_${offset}` : `w${m}_${offset}`).join(' * ');
+        lines.push(`  $g${k} += ${product} * $q;`);
       });
     });
-    lines.push('  $value[$i] = $v;');
-    axes.forEach(k => lines.push(`  $gradient[${D} * $i + ${k}] = $g${k} / cell;`));
+    axes.forEach(k => lines.push(`  $g${k} /= cell;`));
   }
+  if (exclude === 'smoothed') lines.push(selfCode(D, weights));
+  lines.push(`  ${value} = $v;`);
+  axes.forEach(k => lines.push(`  ${slope(k)} = $g${k};`));
   lines.push('}');
   return lines.join('\n');
 }
 
+// What a body reads back of its own smoothed deposit. The smoothing is a line solve A_k per axis,
+// so that is u * prod_k (w_k' A_k^-1 w_k), and its slope along axis k replaces factor k with
+// s_k' A_k^-1 w_k / cell (w_k: the body's weights on its 2 or 3 points of axis k; s_k: their
+// slopes). Only the 2 x 2 or 3 x 3 block of A_k^-1 at those points is needed (see
+// inverseNearDiagonal: diagonal d, and (A^-1)_{i,i+1} = -c_i d_{i+1}).
+function selfCode(D, weights) {
+  const per = weights === 'linear' ? 2 : 3;
+  const lines = [];
+  range(D).forEach(k => {
+    lines.push(`var $c${k} = $grid.inverse[${k}].c, $d${k} = $grid.inverse[${k}].d;`);
+    const entry = (i, j) => `$G${k}_${Math.min(i, j)}${Math.max(i, j)}`;
+    for (let i = 0; i < per; ++i) lines.push(`var ${entry(i, i)} = $d${k}[t${k} + ${i}];`);
+    for (let i = 0; i + 1 < per; ++i) lines.push(`var ${entry(i, i + 1)} = -$c${k}[t${k} + ${i}] * ${entry(i + 1, i + 1)};`);
+    if (per === 3) lines.push(`var ${entry(0, 2)} = -$c${k}[t${k}] * ${entry(1, 2)};`);
+    const row = (vector, i) => range(per).map(j => `${entry(i, j)} * ${axisWeight(weights, k, j)}`).join(' + ');
+    lines.push(`var $read${k} = ${range(per).map(i => `${axisWeight(weights, k, i)} * (${row('w', i)})`).join(' + ')};`);
+    lines.push(`var $tilt${k} = ${range(per).map(i => `${axisSlope(weights, k, i)} * (${row('w', i)})`).join(' + ')};`);
+  });
+  lines.push(`$v -= $u * ${range(D).map(k => `$read${k}`).join(' * ')};`);
+  range(D).forEach(k => {
+    lines.push(`$g${k} -= $u * ${range(D).map(m => m === k ? `$tilt${m}` : `$read${m}`).join(' * ')} / cell;`);
+  });
+  return lines.map(line => '  ' + line).join('\n');
+}
+
 /**
- * Open addressing over whole-number cell keys, cleared lazily with a stamp (as v1-6's grid was).
- * slot(x, y[, z]) returns the cell's slot, adding the cell with value 0 when it is new.
+ * Bricks of 4^D cells for a sparse lattice: a hash map (open addressing, cleared lazily with a
+ * stamp) from a brick's whole-number coordinates to its place in `value`. brick(x, y[, z]) returns
+ * the index of the brick's first cell, adding it with zeros when it is new. `found` is scratch for
+ * the generated deposit.
  */
-function createHash(D) {
+function createBricks(D) {
+  const size = 1 << (2 * D);
   let capacity = 0, mask = 0, used = 0, now = 0;
-  let keys = null, stamp = null;
-  const hash = {
+  let keys = null, stamp = null, start = null, value = null;
+  const bricks = {
     value: null,
+    found: new Int32Array(1 << D),
     reset(minimum) {
-      if (capacity < minimum) {
-        let size = 1024;
-        while (size < minimum) size *= 2;
-        allocate(size);
+      if (capacity < 2 * minimum) {
+        let slots = 1024;
+        while (slots < 2 * minimum) slots *= 2;
+        allocate(slots);
       }
       now += 1;
       if (now > 2e9) { stamp.fill(0); now = 1; }
@@ -588,40 +686,44 @@ function createHash(D) {
       now = 1;
       used = 0;
     },
-    // true when `touch` more new cells could fill the map past one half
-    full(touch) { return 2 * used > capacity - 2 * touch; },
-    slot: D === 2 ? slot2 : slot3
+    // true when `touch` more new bricks could fill the map past one half
+    full(touch) { return 2 * (used + touch) > capacity; },
+    brick: D === 2 ? brick2 : brick3
   };
-  return hash;
+  return bricks;
 
-  function allocate(size) {
-    capacity = size;
-    mask = size - 1;
-    keys = new Int32Array(D * size);
-    stamp = new Int32Array(size);
-    hash.value = new Float64Array(size);
+  function allocate(slots) {
+    capacity = slots;
+    mask = slots - 1;
+    keys = new Int32Array(D * slots);
+    stamp = new Int32Array(slots);
+    start = new Int32Array(slots);
+    // at most half the slots hold a brick
+    value = bricks.value = new Float64Array(slots / 2 * size);
   }
 
-  function slot2(x, y) {
+  function add(i) {
+    stamp[i] = now;
+    const first = used++ * size;
+    start[i] = first;
+    for (let c = first; c < first + size; ++c) value[c] = 0;
+    return first;
+  }
+
+  function brick2(x, y) {
     let i = (Math.imul(x, 73856093) ^ Math.imul(y, 19349663)) & mask;
     while (true) {
-      if (stamp[i] !== now) {
-        stamp[i] = now; keys[2 * i] = x; keys[2 * i + 1] = y; hash.value[i] = 0; used++;
-        return i;
-      }
-      if (keys[2 * i] === x && keys[2 * i + 1] === y) return i;
+      if (stamp[i] !== now) { keys[2 * i] = x; keys[2 * i + 1] = y; return add(i); }
+      if (keys[2 * i] === x && keys[2 * i + 1] === y) return start[i];
       i = (i + 1) & mask;
     }
   }
 
-  function slot3(x, y, z) {
+  function brick3(x, y, z) {
     let i = (Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791)) & mask;
     while (true) {
-      if (stamp[i] !== now) {
-        stamp[i] = now; keys[3 * i] = x; keys[3 * i + 1] = y; keys[3 * i + 2] = z; hash.value[i] = 0; used++;
-        return i;
-      }
-      if (keys[3 * i] === x && keys[3 * i + 1] === y && keys[3 * i + 2] === z) return i;
+      if (stamp[i] !== now) { keys[3 * i] = x; keys[3 * i + 1] = y; keys[3 * i + 2] = z; return add(i); }
+      if (keys[3 * i] === x && keys[3 * i + 1] === y && keys[3 * i + 2] === z) return start[i];
       i = (i + 1) & mask;
     }
   }
