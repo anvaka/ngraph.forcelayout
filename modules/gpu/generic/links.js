@@ -190,6 +190,8 @@ export function pairCode(plan, section, printer) {
     builtIn: name => slotValue(section.builtIns[name]),
     sumWidth: name => (plan.sums[name] && !plan.sums[name].grouped ? plan.sums[name].width : 0),
     sum: (name, k) => `g_${name}_${k}`,
+    // force_i += lands in the tile's force sums, as the push does
+    force: k => `pairForce${k}`,
   });
   const out = [];
   const axes = Array.from({ length: D }, (_, k) => k);
