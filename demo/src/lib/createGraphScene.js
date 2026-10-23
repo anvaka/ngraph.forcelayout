@@ -1,4 +1,4 @@
-import {createScene, createGuide, isWebGLEnabled} from 'w-gl';
+import {createScene, createGuide} from 'w-gl';
 import LineCollection from './LineCollection';
 import PointCollection from './PointCollection';
 import bus from './bus';
@@ -38,13 +38,10 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   // An experimental idea from demo/src/prototypes, attached to every new layout
   let prototype = null, prototypeParams = {}, prototypeControl = null;
   let stats = createStats();
-  // w-gl draws on WebGL and doesn't check for it: without WebGL no graph is loaded at all
-  let hasWebGL = isWebGLEnabled(canvas);
 
-  if (hasWebGL) bus.on('load-graph', loadGraph);
+  bus.on('load-graph', loadGraph);
 
   return {
-    hasWebGL,
     dispose,
     runLayout,
     updateLayoutSettings,
@@ -92,7 +89,6 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   }
 
   function restart() {
-    if (!layout) return;
     // Fresh layout keeps the settings, but forgets positions and velocities.
     gpu = null; // disposing the layout stops it
     detachPrototype();

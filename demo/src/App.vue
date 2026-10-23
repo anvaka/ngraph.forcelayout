@@ -33,8 +33,7 @@
         </template>
       </div>
       <div class='stats'>
-        <div v-if='noWebGL'>This demo draws graphs with WebGL, which is not available in this browser.</div>
-        <div v-else-if='loading'>Loading graph...</div>
+        <div v-if='loading'>Loading graph...</div>
         <div v-else-if='stats'>
           {{stats.nodes.toLocaleString()}} nodes, {{stats.links.toLocaleString()}} links<span v-if='stats.placement'>, {{stats.placement}} start</span><br>
           {{stats.steps.toLocaleString()}} steps<span v-if='stats.msPerStep'>, <span class='number'>{{formatMs(stats.msPerStep)}}</span> ms/step</span>
@@ -380,7 +379,6 @@ export default {
       selectedGraph: appState.get('graph'),
       settingsOpen: window.innerWidth > 500,
       loading: false,
-      noWebGL: false,
       layoutSettings: {
         timeStep: appState.get('timeStep'),
         springLength: appState.get('springLength'),
@@ -414,7 +412,6 @@ export default {
       placement: this.placement,
       stepsPerFrame: this.stepsPerFrame
     });
-    this.noWebGL = !this.scene.hasWebGL;
     if (this.activePrototype) this.scene.setPrototype(this.activePrototype, this.prototypeParams);
     this.loadNewGraph(this.selectedGraph);
     bus.on('load-graph', this.onGraphLoaded);
