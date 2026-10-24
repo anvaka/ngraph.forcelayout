@@ -11,6 +11,7 @@ pids
 logs
 results
 .nyc_output
+.tap
 
 npm-debug.log
 node_modules

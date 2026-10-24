@@ -48,7 +48,7 @@
     "ngraph.generators": "^20.0.0",
     "ngraph.graph": "^20.0.0",
     "rollup": "^4.64.9",
-    "tap": "^16.3.0",
+    "tap": "^21.8.0",
     "terser": "^5.51.2"
   },
   "dependencies": {
