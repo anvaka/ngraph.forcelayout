@@ -10,7 +10,11 @@
 // wherever the nodes are as dense as the ball. The layout as a whole is then neutral: big clumps
 // stop pushing everything else away.
 //
-// The push is a repulsion law, so it runs in both trees; the pull is two sums and a formula for
+// How big the ball is comes from the drawing on every step: the ball is as spread out as the
+// nodes are (times a size factor), so nothing is measured at a chosen moment. Several readers
+// (v2-1, v2-2, v1-4, v2-6, v3-4) arrived at this rule on their own; see the pull below.
+//
+// The push is a repulsion law, so it runs in both trees; the pull is three sums and a formula for
 // every body, so the simulator runs the loops.
 export default {
   id: 'v2-3-flat-world',
@@ -27,18 +31,21 @@ evenly as the disc. In D dimensions the push weakens as 1/distance^(D-1) and the
 so in 3D the push is the library's own.</p>
 <p><b>Where it comes from.</b> Feynman's Lectures, Vol. II, Ch. 18 and 20: Gauss's law, and how
 the push of a charge follows from the dimension of space.</p>
-<p><b>What to look for.</b> Compare with <b>none</b> after about 1500 steps: the big piece's share
-of the picture goes from 0.10 to 0.73 on yeast, 0.06 to 0.49 on sciMet and 0.23 to 0.60 on
-CSphd, and the eight communities of sbm8x50 separate.</p>
-<p><b>What gets worse.</b> Grids bow outward into a pillow shape, isolated nodes pile up in a band
-at the rim (protein), and star fans are not helped. Spacing is tuned for spring length 10 and
-gravity -12: with longer springs or weaker gravity the effect fades unless you lower it (see its
-help).</p>`,
+<p>The disc is not a fixed size: on every step it is made as spread out as the nodes are (times
+<b>Disc size</b>), so it follows the drawing from the first step on.</p>
+<p><b>What to look for.</b> Compare with <b>none</b> after about 1500 steps (one start each): the big
+piece fills 0.96 of the picture on yeast instead of 0.08, the star fans of megaStars fill 0.38
+instead of 0.10, rgg1500 unfolds instead of folding, and grid20 stays square.</p>
+<p><b>What gets worse.</b> The result hangs on <b>Disc size</b>: at 1.0 the drawing scrambles
+into an even disc, from 1.3 the effect fades. At the default 1.1 the main piece of npmMix4 and
+the groups of sbm8x50 get mixed up (far fewer graph neighbours stay near each other), and CSphd and
+protein pull their pieces in less than with a fixed disc. With spring length 30 or gravity -2
+even 1.3 mixes up sbm8x50.</p>`,
   tryGraphs: ['Benchmark: yeast', 'Benchmark: CSphd', 'Benchmark: sciMet', 'Benchmark: sbm8x50', 'Benchmark: starOfStars'],
   params: [
     {
-      key: 'spacing', label: 'Spacing', value: 1.5, step: '0.1',
-      help: 'Room per node in the balancing disc, in spring lengths. Smaller: tighter, more even fill, but grids bend into a disc (1.0). Larger: flatter grids, but pieces drift further out (2.0+). The default 1.5 is tuned for spring length 10 and gravity -12; for longer springs or weaker gravity, lower it (spring length 30: about 0.5; gravity -2: about 0.6). Values below 0.1 count as 0.1.'
+      key: 'size', label: 'Disc size', value: 1.1, step: '0.05',
+      help: 'How big the balancing disc is, as a multiple of how spread out the nodes are right now (1 = exactly as spread out); it follows the drawing on every step. 1.0 cancels the far push completely and the drawing scrambles into an even disc. 1.1: pieces close in and star fans grow. 1.3 and up: the pull fades and pieces and stars drift apart as with none. Values below 0.1 count as 0.1.'
     },
     {
       key: 'balance', label: 'Balance', value: 1, step: '0.1',
@@ -52,7 +59,7 @@ help).</p>`,
 
   attach({ layout, params }) {
     const simulator = layout.simulator;
-    const spacing = Math.max(0.1, numberOr(params.spacing, 1.5));
+    const size = Math.max(0.1, numberOr(params.size, 1.1));
     // Capped so a huge value from the URL can't overflow the pull to Infinity (and NaN)
     const balance = Math.min(100, Math.max(0, numberOr(params.balance, 1)));
     const falloff = numberOr(params.falloff, 1) === 2 ? 2 : 1;
@@ -61,7 +68,7 @@ help).</p>`,
     const push = 'r^(1 - D) * L^(D - 3)';
     const previousLaw = simulator.repulsionLaw().spec;
     if (falloff === 1) simulator.repulsionLaw({ force: push, params: { L: sim => sim.unit() } });
-    const stages = ['flatWorldCharge', 'flatWorldMoment', 'v2-3-pull'];
+    const stages = ['flatWorldCharge', 'flatWorldMoment', 'flatWorldSpread', 'v2-3-pull'];
     const dispose = () => {
       simulator.repulsionLaw(previousLaw);
       stages.forEach(name => { if (simulator.getStage(name)) simulator.removeStage(name); });
@@ -72,17 +79,34 @@ help).</p>`,
     // pull on body i is k q_i d / R^D (grows linearly with the distance d from the centre), outside
     // it k q_i d / |d|^D (falls off as 1/|d|^(D-1)). The charges are the column the layout pushes
     // with when the idea is attached.
+    //
+    // The ball's radius comes from the drawing on every step: R^2 = size^2 (D + 2) / D <d^2>,
+    // where <d^2> is the charge-weighted mean squared distance from the centre. At size 1 that is
+    // the radius at which the energy of the ball with the nodes is lowest, the ball exactly as
+    // spread out as the nodes (an even disc of nodes gets a ball of its own radius). In 2D, where
+    // every pair's push times its distance is the same constant, it is also the radius at which
+    // the pull cancels the push's tendency to grow the whole drawing, at any size: the size is
+    // then left to the springs. A size above 1 leaves part of that tendency, a fixed share, for the
+    // springs to hold. A ball measured from the nodes once and multiplied by a factor (spacing 3)
+    // instead feeds back on itself: the nodes come to fill the ball, so measuring again would grow
+    // it 3x each time.
     const charge = simulator.repulsionCharge();
+    const D = simulator.settings.dimensions;
     simulator.addSum('flatWorldCharge', { formula: charge });
     simulator.addSum('flatWorldMoment', { formula: `${charge} * pos` });
+    simulator.addSum('flatWorldSpread', {
+      formula: `
+        d = pos - flatWorldMoment / flatWorldCharge;
+        ${charge} * dot(d, d)`
+    });
     simulator.addNodeFormula('v2-3-pull', {
-      params: { spacing, balance, falloff, ballVolume: ballVolume(simulator.settings.dimensions) },
+      params: { size, balance, falloff, fill: (D + 2) / D },
       formula: `
         Q = flatWorldCharge;
         d = pos - flatWorldMoment / Q;
-        // The ball holds the n nodes at one node per cube of side spacing * L
-        R = spacing * unit * pow(n / ballVolume, 1 / D);
-        RD = pow(R, D);
+        // The ball as spread out as the nodes (times size); never smaller than 1% of a spring
+        R2 = max(size * size * fill * flatWorldSpread / Q, 0.0001 * unit * unit);
+        RD = pow(R2, D / 2);
         // Same strength as the push between two nodes: |G| L^(D-3), or |G| with the stock push
         strength = -gravity * (falloff == 1 ? pow(unit, D - 3) : 1 / unit);
         scale = strength * balance * Q;
@@ -93,11 +117,6 @@ help).</p>`,
     return { dispose };
   }
 };
-
-// Volume of a ball of radius 1 in D dimensions: 2, pi, 4/3 pi, ...
-function ballVolume(D) {
-  return D === 0 ? 1 : D === 1 ? 2 : ballVolume(D - 2) * 2 * Math.PI / D;
-}
 
 function numberOr(value, fallback) {
   const number = Number(value);
