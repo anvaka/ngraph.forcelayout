@@ -10,6 +10,12 @@
 // wherever the nodes are as dense as the ball. The layout as a whole is then neutral: big clumps
 // stop pushing everything else away.
 //
+// How big the ball is comes from the settings alone, never from the drawing: with this push the
+// drawing grows or shrinks to fill whatever ball it gets, so a ball sized from the drawing (its
+// spread, spacing or edges) chases itself and either swells or crushes the nodes into an even
+// ball. Each node gets a cell as wide as an edge grows where one spring's stretch balances the
+// push of the nodes around it (see naturalEdge below).
+//
 // The push is a repulsion law, so it runs in both trees; the pull is two sums and a formula for
 // every body, so the simulator runs the loops.
 export default {
@@ -27,18 +33,20 @@ evenly as the disc. In D dimensions the push weakens as 1/distance^(D-1) and the
 so in 3D the push is the library's own.</p>
 <p><b>Where it comes from.</b> Feynman's Lectures, Vol. II, Ch. 18 and 20: Gauss's law, and how
 the push of a charge follows from the dimension of space.</p>
+<p>How big the disc is follows from the spring length, spring coefficient and gravity, so the
+idea holds when you change them: at spring length 3 grids stay flat instead of folding.</p>
 <p><b>What to look for.</b> Compare with <b>none</b> after about 1500 steps: the big piece's share
-of the picture goes from 0.10 to 0.73 on yeast, 0.06 to 0.49 on sciMet and 0.23 to 0.60 on
+of the picture goes from 0.09 to 0.65 on yeast, 0.05 to 0.36 on sciMet and 0.20 to 0.57 on
 CSphd, and the eight communities of sbm8x50 separate.</p>
 <p><b>What gets worse.</b> Grids bow outward into a pillow shape, isolated nodes pile up in a band
-at the rim (protein), and star fans are not helped. Spacing is tuned for spring length 10 and
-gravity -12: with longer springs or weaker gravity the effect fades unless you lower it (see its
-help).</p>`,
+at the rim (protein), and star fans are barely helped. With long springs (30) or weak gravity
+(-2) the big piece of yeast stays small and the fans of megaStars shrink below <b>none</b>: the
+disc must stay loose enough for grids, which is too loose for hubs there.</p>`,
   tryGraphs: ['Benchmark: yeast', 'Benchmark: CSphd', 'Benchmark: sciMet', 'Benchmark: sbm8x50', 'Benchmark: starOfStars'],
   params: [
     {
-      key: 'spacing', label: 'Spacing', value: 1.5, step: '0.1',
-      help: 'Room per node in the balancing disc, in spring lengths. Smaller: tighter, more even fill, but grids bend into a disc (1.0). Larger: flatter grids, but pieces drift further out (2.0+). The default 1.5 is tuned for spring length 10 and gravity -12; for longer springs or weaker gravity, lower it (spring length 30: about 0.5; gravity -2: about 0.6). Values below 0.1 count as 0.1.'
+      key: 'spacing', label: 'Spacing', value: 1.3, step: '0.1',
+      help: 'Room per node in the balancing disc, in natural edge lengths: how long an edge grows where one spring\'s stretch balances the push of the nodes around it, worked out from spring length, spring coefficient and gravity (1.5 spring lengths at spring length 10 and gravity -12, 3.8 at spring length 3, 1.04 at 30). Smaller: pieces close in, but from about 1.0 down the drawing gets mixed up, first with long springs or weak gravity. Larger: flatter grids, but pieces drift further out. Values below 0.1 count as 0.1.'
     },
     {
       key: 'balance', label: 'Balance', value: 1, step: '0.1',
@@ -52,7 +60,7 @@ help).</p>`,
 
   attach({ layout, params }) {
     const simulator = layout.simulator;
-    const spacing = Math.max(0.1, numberOr(params.spacing, 1.5));
+    const spacing = Math.max(0.1, numberOr(params.spacing, 1.3));
     // Capped so a huge value from the URL can't overflow the pull to Infinity (and NaN)
     const balance = Math.min(100, Math.max(0, numberOr(params.balance, 1)));
     const falloff = numberOr(params.falloff, 1) === 2 ? 2 : 1;
@@ -76,12 +84,15 @@ help).</p>`,
     simulator.addSum('flatWorldCharge', { formula: charge });
     simulator.addSum('flatWorldMoment', { formula: `${charge} * pos` });
     simulator.addNodeFormula('v2-3-pull', {
-      params: { spacing, balance, falloff, ballVolume: ballVolume(simulator.settings.dimensions) },
+      params: {
+        spacing, balance, falloff, ballVolume: ballVolume(simulator.settings.dimensions),
+        edge: context => naturalEdge(context.unit(), context.springCoefficient(), context.gravity())
+      },
       formula: `
         Q = flatWorldCharge;
         d = pos - flatWorldMoment / Q;
-        // The ball holds the n nodes at one node per cube of side spacing * L
-        R = spacing * unit * pow(n / ballVolume, 1 / D);
+        // The ball holds the n nodes at one node per cube of side spacing * edge
+        R = spacing * edge * pow(n / ballVolume, 1 / D);
         RD = pow(R, D);
         // Same strength as the push between two nodes: |G| L^(D-3), or |G| with the stock push
         strength = -gravity * (falloff == 1 ? pow(unit, D - 3) : 1 / unit);
@@ -93,6 +104,22 @@ help).</p>`,
     return { dispose };
   }
 };
+
+// How long an edge grows where one spring's stretch balances the push of the nodes around it:
+// k (l - L) = crowd |G| / l^2, the library's push of `crowd` nodes at distance l. With crowd 75
+// that gives 3.8, 1.5, 1.04 and 1.14 spring lengths at spring length 3, 10 and 30 and at gravity
+// -2, where the edges of a stock 20x20 grid measure 4.0, 1.5, 1.0 and 1.2. Newton's method from
+// L + (crowd |G| / k)^(1/3), which is never below the answer, so it comes down to it without
+// overshooting.
+function naturalEdge(L, k, gravity) {
+  const crowd = 75;
+  // Without springs to stretch (k 0 or less), one spring length per node
+  if (!(k > 0)) return L;
+  const a = crowd * Math.abs(gravity) / k;
+  let l = L + Math.cbrt(a);
+  for (let i = 0; i < 30; ++i) l -= (l * l * (l - L) - a) / (l * (3 * l - 2 * L));
+  return l;
+}
 
 // Volume of a ball of radius 1 in D dimensions: 2, pi, 4/3 pi, ...
 function ballVolume(D) {
