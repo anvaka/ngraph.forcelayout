@@ -1,0 +1,19 @@
+{
+  "name": "ngraph.forcelayout.view",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Draws graphs that ngraph.forcelayout moves, on a w-gl scene",
+  "type": "module",
+  "main": "index.js",
+  "exports": "./index.js",
+  "keywords": [
+    "ngraph",
+    "ngraphjs",
+    "webgl"
+  ],
+  "author": "Andrei Kashcha",
+  "license": "BSD-3-Clause",
+  "peerDependencies": {
+    "w-gl": "^0.21.1"
+  }
+}
