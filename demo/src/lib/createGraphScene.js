@@ -1,6 +1,4 @@
 import {createScene, createGuide} from 'w-gl';
-import LineCollection from './LineCollection';
-import PointCollection from './PointCollection';
 import bus from './bus';
 import createHighLayout from 'ngraph.hde'
 import createForceLayout from './createForceLayout';
@@ -8,18 +6,18 @@ import findLargestComponent from './findLargestComponent';
 // Add-ons from modules/ in this repository (see vite.config.js), not part of ngraph.forcelayout
 import placeNodes from 'ngraph.forcelayout.pivot';
 import {createWebGPUBackend, runOnGpu} from 'ngraph.forcelayout.gpu';
+import createView from 'ngraph.forcelayout.view';
 import createGraph from 'ngraph.graph';
 
 const NODE_COLOR = 0x90f8fcff;
 const layoutProps = ['timeStep', 'springLength', 'springCoefficient', 'dimensions', 'dragCoefficient', 'gravity', 'theta', 'maxVelocity', 'integrator', 'nbody'];
 
 export default function createGraphScene(canvas, layoutSettings = {}, sceneSettings = {}) {
-  let drawLinks = true;
-
   // Since graph can be loaded dynamically, we have these uninitialized
   // and captured into closure. loadGraph will do the initialization
   let graph, layout;
-  let scene, nodes, lines, guide;
+  // `view` draws the graph (modules/view): it redraws when the layout steps or the camera moves
+  let scene, view, guide;
 
   // With WebGPU picked, the GPU runs the layout's own simulator whenever its plan says it can
   // (`gpu`); otherwise the layout stays on the CPU and `gpuReasons` says why.
@@ -31,7 +29,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
 
   let fixedViewBox = false;
   let isRunning = false;
-  let rafHandle;
+  // The frame loop runs only while the layout runs; a paused layout draws only when the view changes
+  let rafHandle = 0;
   let stepsPerFrame = sceneSettings.stepsPerFrame || 1;
   let placement = sceneSettings.placement || 'default';
   let placementChoice = '';
@@ -58,12 +57,15 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
 
   function loadGraph(newGraph, desiredLayout) {
     if (scene) {
+      view.dispose();
+      view = null;
       scene.dispose();
       gpu = null; // disposing the layout stops it
       detachPrototype();
       layout.dispose();
       scene = null
       cancelAnimationFrame(rafHandle);
+      rafHandle = 0;
     }
     // newGraph = createGraph(); newGraph.addLink(1, 2)
     scene = initScene();
@@ -82,10 +84,9 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     stats.reset();
 
     fitView();
-    initUIElements();
+    view = createView(scene, {graph, layout, nodeColor: nodeColorOf()});
 
-    isRunning = true;
-    rafHandle = requestAnimationFrame(frame);
+    runLayout(true);
   }
 
   function restart() {
@@ -96,9 +97,24 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     layout = createForceLayout(graph, layoutSettings);
     applyPlacement();
     attachPrototype();
+    showLayout();
     changeLayout(null);
     stats.reset();
     fitView();
+  }
+
+  // The view draws the current layout, in the colors of the attached idea
+  function showLayout() {
+    view.setLayout(layout);
+    view.setNodeColor(nodeColorOf());
+  }
+
+  // A prototype may color nodes, e.g. by the groups it found. Its colors are read once per
+  // attach (and after its final step), not on every frame.
+  function nodeColorOf() {
+    let nodeColor = prototypeControl && prototypeControl.nodeColor;
+    if (!nodeColor) return NODE_COLOR;
+    return node => nodeColor(node.id) || NODE_COLOR;
   }
 
   function setPrototype(newPrototype, params) {
@@ -137,6 +153,9 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     if (!prototypeControl || !prototypeControl.finish) return;
     if (gpu) await gpu.sync();
     prototypeControl.finish();
+    // The final step moved nodes in the store, and may have changed their colors
+    view.setNodeColor(nodeColorOf());
+    view.invalidate();
   }
 
   function applyPlacement() {
@@ -189,6 +208,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
         console.error('Switching the layout failed:', e);
       } finally {
         changing = false;
+        // Stopping the GPU brought its last positions into the store
+        if (view) view.invalidate();
       }
     });
     return changes;
@@ -261,6 +282,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
 
   function runLayout(newIsRunning) {
     isRunning = newIsRunning;
+    if (isRunning && !rafHandle) rafHandle = requestAnimationFrame(frame);
   }
 
   function updateLayoutSettings(newLayoutSettings) {
@@ -298,6 +320,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
 
     prevLayout.dispose();
     attachPrototype(stats.steps);
+    showLayout();
   }
 
   function setFixedViewBox(isFixed) {
@@ -305,144 +328,46 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   }
 
   function initScene() {
-    let scene = createScene(canvas);
+    // No multisampling: the view smooths its own lines, and multisampled blending made links the
+    // most expensive part of a frame (see modules/view/programs.js)
+    let scene = createScene(canvas, {wglContextOptions: {antialias: false}});
     scene.setClearColor(12/255, 41/255, 82/255, 1)
     return scene;
   }
   
-  function initUIElements() {
-    nodes = new PointCollection(scene.getGL(), {
-      capacity: graph.getNodesCount()
-    });
-
-    graph.forEachNode(node => {
-      var point = layout.getNodePosition(node.id);
-      let size = 1;
-      if (node.data && node.data.size) {
-        size = node.data.size;
-      } else {
-        if (!node.data) node.data = {};
-        node.data.size = size;
-      }
-      node.ui = {size, position: [point.x, point.y, point.z || 0], color: NODE_COLOR};
-      node.uiId = nodes.add(node.ui);
-    });
-
-    lines = new LineCollection(scene.getGL(), { capacity: graph.getLinksCount() });
-
-    graph.forEachLink(link => {
-      var from = layout.getNodePosition(link.fromId);
-      var to = layout.getNodePosition(link.toId);
-      var line = { from: [from.x, from.y, from.z || 0], to: [to.x, to.y, to.z || 0], color: 0xFFFFFF10 };
-      link.ui = line;
-      link.uiId = lines.add(link.ui);
-    });
-    // lines.add({from: [0, 0, 0], to: [0, 10, 0], color: 0xFF0000FF})
-
-    scene.appendChild(lines);
-    scene.appendChild(nodes);
-  }
-
   function frame() {
+    rafHandle = 0;
+    if (!isRunning) return;
     rafHandle = requestAnimationFrame(frame);
+    if (changing) return;
 
-    if (isRunning && !changing) {
-      let start = performance.now();
-      if (gpu) {
-        gpu.step(stepsPerFrame);
-      } else {
-        for (let i = 0; i < stepsPerFrame; ++i) layout.step();
-      }
-      stats.record(performance.now() - start, stepsPerFrame);
-      if (fixedViewBox) {
-        let rect = layout.getGraphRect();
-        scene.setViewBox({
-          left:  rect.min_x,
-          top:   rect.min_y,
-          right:  rect.max_x,
-          bottom: rect.max_y,
-        });
-      }
+    let start = performance.now();
+    if (gpu) {
+      gpu.step(stepsPerFrame);
+    } else {
+      // each step fires the layout's 'step' event, on which the view asks for a frame
+      for (let i = 0; i < stepsPerFrame; ++i) layout.step();
     }
-    drawGraph();
-    scene.renderFrame();
-  }
-
-  function drawGraph() {
-    let names = ['x', 'y', 'z']
-    // let minR = Infinity; let maxR = -minR;
-    // let minG = Infinity; let maxG = -minG;
-    // let minB = Infinity; let maxB = -minB;
-    // graph.forEachNode(node => {
-    //   let pos = layout.getNodePosition(node.id);
-    //   if (pos.c4 < minR) minR = pos.c4;
-    //   if (pos.c4 > maxR) maxR = pos.c4;
-
-    //   if (pos.c5 < minG) minG = pos.c5;
-    //   if (pos.c5 > maxG) maxG = pos.c5;
-
-    //   if (pos.c6 < minB) minB = pos.c6;
-    //   if (pos.c6 > maxB) maxB = pos.c6;
-    // });
-    // A prototype may color nodes, e.g. by the groups it found
-    let nodeColor = prototypeControl && prototypeControl.nodeColor;
-
-    graph.forEachNode(node => {
-      let pos = layout.getNodePosition(node.id);
-      let uiPosition = node.ui.position;
-      for (let i = 0; i < 3; ++i) {
-        uiPosition[i] = pos[names[i]] || 0;
-      }
-      // let r = Math.floor(255 * (pos.c4 - minR) / (maxR - minR)) << 24;
-      // let g = Math.floor(255 * (pos.c5 - minG) / (maxG - minG)) << 16;
-      // let b = Math.floor(255 * (pos.c6 - minB) / (maxB - minB)) << 8;
-      // [r, g, b] = lab2rgb(
-      //   (pos.c4 -  minR) / (maxR - minR),
-      //   (pos.c5 - minG) / (maxG - minG),
-      //   (pos.c6 - minB) / (maxB - minB)
-      // );
-      // node.ui.color = (0x000000FF | r | g | b);
-      node.ui.color = (nodeColor && nodeColor(node.id)) || NODE_COLOR;
-      nodes.update(node.uiId, node.ui)
-    });
-
-    if (drawLinks) {
-      graph.forEachLink(link => {
-        var fromPos = layout.getNodePosition(link.fromId);
-        var toPos = layout.getNodePosition(link.toId);
-        let {from, to} = link.ui;
-
-        for (let i = 0; i < 3; ++i) {
-          from[i] = fromPos[names[i]] || 0;
-          to[i] = toPos[names[i]] || 0;
-        }
-        // from[0] = fromPos.x || 0; from[1] = fromPos.y || 0; from[2] = fromPos.z || 0;
-        // to[0] = toPos.x || 0; to[1] = toPos.y || 0; to[2] = toPos.z || 0;
-        // link.ui.color = lerp(graph.getNode(link.fromId).ui.color, graph.getNode(link.toId).ui.color);
-        lines.update(link.uiId, link.ui);
-      })
+    stats.record(performance.now() - start, stepsPerFrame);
+    if (fixedViewBox) {
+      let rect = layout.getGraphRect();
+      scene.setViewBox({
+        left:  rect.min_x,
+        top:   rect.min_y,
+        right:  rect.max_x,
+        bottom: rect.max_y,
+      });
     }
-  }
-
-  function lerp(aColor, bColor) {
-    let ar = (aColor >> 24) & 0xFF;
-    let ag = (aColor >> 16) & 0xFF;
-    let ab = (aColor >> 8)  & 0xFF;
-    let br = (bColor >> 24) & 0xFF;
-    let bg = (bColor >> 16) & 0xFF;
-    let bb = (bColor >> 8)  & 0xFF;
-    let r = Math.floor((ar + br) / 2);
-    let g = Math.floor((ag + bg) / 2);
-    let b = Math.floor((ab + bb) / 2);
-    return (r << 24) | (g << 16) | (b << 8) | 0xF0;
   }
 
   function dispose() {
     cancelAnimationFrame(rafHandle);
+    rafHandle = 0;
 
     if (gpu) gpu.stop();
     gpu = null;
     detachPrototype();
+    if (view) view.dispose();
     scene.dispose();
     bus.off('load-graph', loadGraph);
   }
