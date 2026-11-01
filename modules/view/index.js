@@ -48,7 +48,8 @@ export default function createView(scene, options = {}) {
 
   let nodeProgram = createNodeProgram(gl, instancing);
   let edgeProgram = createEdgeProgram(gl, instancing);
-  let positions = {texture: null, width: TEXTURE_WIDTH, rows: 0, data: null};
+  // `hasDepth`: the layout has a third axis, so nodes are drawn with depth (see programs.js)
+  let positions = {texture: null, width: TEXTURE_WIDTH, rows: 0, data: null, hasDepth: false};
   let nodes = {count: 0, rows: gl.createBuffer(), sizes: gl.createBuffer(), colors: gl.createBuffer(), rowCount: 0};
   let edges = {count: 0, ends: gl.createBuffer(), colors: gl.createBuffer(), width: settings.linkWidth};
 
@@ -204,6 +205,7 @@ export default function createView(scene, options = {}) {
     let store = layout.simulator.store;
     let count = Math.min(store.n, nodes.count);
     packPositions(store.pos, store.D, count, positions.data);
+    positions.hasDepth = store.D >= 3;
     let rows = textureRows(count);
     gl.bindTexture(gl.TEXTURE_2D, positions.texture);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, TEXTURE_WIDTH, rows, gl.RGBA, gl.FLOAT,

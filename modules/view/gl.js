@@ -15,6 +15,8 @@ export function getCapabilities(gl) {
   if (!floatTextures) missing.push('OES_texture_float');
   if (!vertexTextures) missing.push('textures in vertex shaders');
   if (missing.length) throw new Error('This browser\'s WebGL lacks ' + missing.join(', ') + ', which the view needs');
+  // Optional: smooth edges of nodes (the node shader checks for it)
+  gl.getExtension('OES_standard_derivatives');
   return {instancing, maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE)};
 }
 

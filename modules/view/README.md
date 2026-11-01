@@ -14,6 +14,11 @@ add-ons (labels, tooltips, highlighting) can be added on top of it later:
   once per readback when the layout runs on WebGPU), a camera move, or a call below. A paused
   layout costs nothing.
 * **Colors and sizes are read once**, when the view builds its buffers, not on every frame.
+* **Edges are smoothed in the shaders, not by multisampling.** Links fade over half a pixel on
+  each side, and nodes fade at their round edge (in 3D in two passes, so an edge never hides a node
+  behind it). Create the scene without multisampling (below): with it, every blended link fragment
+  is written to every sample. On a 100k-node graph at pixel ratio 2, that made a frame about 2.5
+  times slower and looked no better.
 
 Node `i` of the drawing is body `i` of the layout (row `i` of `simulator.store`). When the graph
 changes, the view drops removed rows (`simulator.applyEdits()`) and rebuilds at the next frame;
@@ -26,7 +31,8 @@ import {createScene} from 'w-gl';
 import createLayout from 'ngraph.forcelayout';
 import createView from 'ngraph.forcelayout.view';
 
-const scene = createScene(canvas);
+// No multisampling: the view smooths its own edges
+const scene = createScene(canvas, {wglContextOptions: {antialias: false}});
 const layout = createLayout(graph);
 const view = createView(scene, {graph, layout});
 
@@ -58,10 +64,13 @@ Methods:
 
 Only x, y and z are drawn; a layout in more dimensions shows its first three axes.
 
+The first `getContext()` call on a canvas fixes its options. If you check for WebGL before
+creating the scene (e.g. with w-gl's `isWebGLEnabled()`), check on a separate canvas.
+
 ## Requirements
 
 WebGL 1 with `ANGLE_instanced_arrays`, `OES_texture_float` and texture reads in vertex shaders
-(all common). `createView()` throws an Error naming what is missing. Up to 2048 × the maximum
+(all common). Smooth node edges also use `OES_standard_derivatives`; without it, they are hard. `createView()` throws an Error naming what is missing. Up to 2048 × the maximum
 texture size nodes (16M on most GPUs).
 
 `w-gl` is a peer dependency: the view adds itself to your scene as a w-gl element, so both must

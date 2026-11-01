@@ -328,7 +328,9 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   }
 
   function initScene() {
-    let scene = createScene(canvas);
+    // No multisampling: the view smooths its own lines, and multisampled blending made links the
+    // most expensive part of a frame (see modules/view/programs.js)
+    let scene = createScene(canvas, {wglContextOptions: {antialias: false}});
     scene.setClearColor(12/255, 41/255, 82/255, 1)
     return scene;
   }
