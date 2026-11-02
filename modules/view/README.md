@@ -2,8 +2,9 @@
 
 Draws a graph that an `ngraph.forcelayout` layout moves, on a [w-gl](https://github.com/anvaka/w-gl)
 scene: nodes as round dots, links as lines of a fixed width on screen. Modules add interaction on
-top: hover, drag, select and inspect (tooltips) come with it, and work the same with a mouse, a
-pen or a finger.
+top: hover, drag, select, inspect (tooltips), navigate (keyboard and screen readers) and search
+come with it. Pointer modules work the same with a mouse, a pen or a finger, and the keyboard
+reaches the same actions.
 
 It is built so that drawing stays cheap at hundreds of thousands of nodes:
 
@@ -30,7 +31,7 @@ it also rebuilds on the simulator's `'topology'` event.
 ``` js
 import {createScene} from 'w-gl';
 import createLayout from 'ngraph.forcelayout';
-import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes} from 'ngraph.forcelayout.view';
+import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes, navigateNodes, searchNodes} from 'ngraph.forcelayout.view';
 
 // No multisampling: the view smooths its own edges
 const scene = createScene(canvas, {wglContextOptions: {antialias: false}});
@@ -40,6 +41,8 @@ view.use(hoverNodes);
 view.use(dragNodes);
 const selection = view.use(selectNodes);
 view.use(inspectNodes);
+view.use(navigateNodes);
+view.use(searchNodes);
 view.on('tap', e => { if (e.node) console.log(e.node.id); });
 
 function frame() {
@@ -57,6 +60,8 @@ Options:
 * `linkColor` (`0xffffff10`): a color, or `link => color`.
 * `nodeSize`: a number, or `node => size` in scene units. Default: `node.data.size`, or 1.
 * `linkWidth` (2): width of links in pixels.
+* `nodeLabel`: `node => text` that stands for a node in tooltips, search and announcements.
+  Default: `data.label`, else `data.name`, else the id.
 * `styles`: how flagged nodes and links look (see [Flags](#flags)).
 * `camera`: camera input, see [Camera](#camera).
 * `input`: gesture thresholds, see [Gestures](#gestures). `input: false` leaves the scene's own
@@ -77,6 +82,9 @@ Methods:
 * `flags`: per-node flags (see [Flags](#flags)).
 * `setStyles(styles)`: new styles for flagged nodes.
 * `toScreen(x, y, z)`: where a point of the scene is on the canvas, in CSS pixels.
+* `labelOf(node)`: the node's label (see `nodeLabel`).
+* `reveal(node, {margin, animate})`: pan the camera so the node is in view, gliding unless the
+  user prefers reduced motion.
 * `getLayout()`, `getCamera()` (w-gl's map controls that the view drives).
 * `dispose()`: detach the modules, give the scene its own camera controls back, stop listening
   to the graph and the layout, and free the GPU resources.
@@ -243,6 +251,42 @@ until a tap elsewhere or Escape. It follows its node as the layout and the camer
 node and inside the canvas. `content(node)` returns text (never parsed as HTML), an element, or
 null. Hover tooltips need the hover module. API: `show(node)`, `hide()`, `get()`.
 
+### navigate
+
+`view.use(navigateNodes, {pinOnDrop, help, announce})`: keyboard and screen-reader access. The
+canvas is one tab stop (`role="application"`, described as a graph with its size), and Tab always
+leaves it.
+
+| Key | Does |
+|---|---|
+| Enter | focuses the node nearest the middle of the view (or the selected one); on a focused node it is a tap: it selects (Shift adds, Cmd/Ctrl toggles) and keeps the tooltip open |
+| Arrows | move focus to the nearest node in that direction; with no node focused they move the camera |
+| `]` and `[` | next and previous neighbour of the node the walk started from, strongest link first |
+| Space | walks into the focused node: its neighbours are next |
+| Backspace | back to where the walk came from |
+| Shift+arrows | move the focused node 10 px a step (Alt: 1 px); releasing Shift drops it, as a drag ends |
+| Escape | ends a move, then (after the tooltip and the selection) leaves the nodes |
+| `?` | lists the keys |
+
+A polite live region says where focus went: the label, the number of links, whether the node is
+selected or pinned, and its place among the neighbours being walked ("Neighbour 2 of 10 of
+Grantaire, link weight 3"). The camera keeps the focused node in view, and the tooltip follows
+focus. The focus ring (`FOCUSED`) shows only while the canvas has keyboard focus, and the keys
+act only while it shows: a click on a node moves the keyboard's place there, so Enter continues
+from it, while the arrows still move the camera. Fires `focus` ({node, previous, reason}); a
+move fires `dragstart`, `drag` and `dragend` with `pointerType: 'keyboard'`. API: `focus(node)`,
+`get()`, `clear()`, `announce(text)`.
+
+### search
+
+`view.use(searchNodes, {limit, key, placeholder})`: `/` on the canvas opens a search box (an ARIA
+combobox). Typing lists the best matches: labels that start with the text, then labels with a
+word that does, then labels that contain it, then ids; nodes with more links first. Up and Down
+choose, Enter or a click goes to the node: with navigate it gets keyboard focus, otherwise it is
+tapped. The camera brings it into view. Escape gives the keys back to the canvas. A query scans
+every node: 1.6 ms at 100k nodes (17 ms at 1M), after a 31 ms index built when the box first
+opens. Fires `search` ({node, query}). API: `open(text)`, `close()`, `find(text)`.
+
 ### Writing a module
 
 A module is an object with `attach(ctx, options)`, which returns the module's API (or nothing).
@@ -267,8 +311,10 @@ view.use(pinOnDoubleTap);
 ```
 
 `ctx` has `view`, `scene`, `graph`, `layout`, `flags`, `pick()`, `nodesInRect()`, `toScreen()`,
-`fromScreen(x, y, through)`, `emit(name, fields)`, `on(name, fn)`, `onFrame(fn)` (runs inside every
-frame, before flags go to the GPU), `onCamera(fn)`, `setCursor(value, priority)` and `input`:
+`fromScreen(x, y, through)`, `screenPositions()` (every node on the canvas, one pass), `labelOf()`,
+`reveal()`, `emit(name, fields)`, `on(name, fn)`, `onFrame(fn)` (runs inside every frame, before
+flags go to the GPU), `onCamera(fn)`, `setCursor(value, priority)`, `provide(name, api)` and
+`get(name)` (APIs modules share: navigate provides `focus` and `announce`), and `input`:
 
 * `input.add(handler)`: a handler is an object with any of `priority` (lower is asked first),
   `press(p)` (claim this pointer? it must not change anything: it is also asked for the cursor),
@@ -276,6 +322,8 @@ frame, before flags go to the GPU), `onCamera(fn)`, `setCursor(value, priority)`
   `longpress` (return true to take the pointer), `tap`, `doubletap`, `contextmenu`, `twofingertap`
   (return true to stop the others), `hover(point)`, `wheel`, `key`, `keyup`, `blur`, and `cursor`.
 * `input.cancel(pointerId)`, `input.dragging()`, `input.busy()`, `input.hoverPoint()`.
+* `input.tap(node, fields)`: a tap that comes from somewhere else than a pointer (navigate's
+  Enter): the app and every module see it as a tap.
 
 A pointer `p` has `id`, `pointerType`, `button`, `x`, `y` (now), `downX`, `downY`, `clientX`,
 `clientY`, the modifier keys, `hit` and `node` (picked at the press, once, when first asked) and
@@ -292,6 +340,4 @@ use the same copy of w-gl (the demo's `vite.config.js` dedupes it).
 
 ## Not done yet
 
-Keyboard and screen-reader navigation of nodes (the `FOCUSED` flag is reserved for it, and the
-tooltip should follow focus), labels, picking links, and cooperative gestures for graphs embedded
-in a scrolling page.
+Labels, picking links, and cooperative gestures for graphs embedded in a scrolling page.
