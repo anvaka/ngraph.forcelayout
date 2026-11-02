@@ -90,6 +90,7 @@ export default {
       let root = document.createElement('div');
       root.style.cssText = ROOT_STYLE;
       root.setAttribute('role', 'search');
+      root.setAttribute('data-graph-overlay', '');
       let input = document.createElement('input');
       input.type = 'search';
       input.style.cssText = INPUT_STYLE;

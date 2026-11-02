@@ -25,6 +25,7 @@ import {createFlags, layoutFlags, SELECTED, HOVERED} from './flags.js';
 import * as FLAGS from './flags.js';
 import {createInput, ViewEvent} from './input.js';
 import {createCamera} from './camera.js';
+import {createVisibility} from './visible.js';
 
 const DEFAULTS = {
   // The text that stands for a node: in tooltips, search, announcements and labels
@@ -80,6 +81,10 @@ const ON_TOP_LIMITS = {nodes: 1000, links: 100000};
  * - `camera`: camera input options (see camera.js), `input`: thresholds (see input.js), or
  *   `input: false` to leave the scene's own controls alone (no modules then).
  * - `reach`: picking reach in pixels per pointer type (REACH above).
+ * - `occlusion`: what hides parts of the canvas, so the camera brings nodes out from under it
+ *   (see visible.js). true (default): any element on top of the canvas (a settings panel) or
+ *   outside the window, found by hit testing; false: only the canvas edges; or a function
+ *   `(x, y) => boolean` that says whether a canvas point (CSS pixels) is hidden.
  *
  * Functions are called once per node or link when the view builds its buffers (the first frame,
  * graph changes, setLayout(), setNodeColor(), refresh()), never on every frame.
@@ -151,6 +156,9 @@ export default function createView(scene, options = {}) {
   element.dispose = disposeGL;
   scene.appendChild(element);
 
+  let visibility = options.occlusion === false ? null :
+    createVisibility(canvas, typeof options.occlusion === 'function' ? options.occlusion : null);
+
   let camera = null, input = null;
   if (options.input !== false) {
     camera = createCamera(scene, options.camera);
@@ -191,6 +199,7 @@ export default function createView(scene, options = {}) {
     flags,
     labelOf,
     reveal,
+    visibleArea,
     toScreen,
     getLayout: () => layout,
     getCamera: () => camera && camera.controls,
@@ -314,6 +323,7 @@ export default function createView(scene, options = {}) {
       },
       labelOf,
       reveal,
+      visibleArea,
       /** Every node's place on the canvas this frame: {nodes, x, y, onScreen} (see screenPositions) */
       screenPositions,
       /** Makes `api` available to other modules as `ctx.get(name)` while this module is attached */
@@ -453,9 +463,10 @@ export default function createView(scene, options = {}) {
   }
 
   /**
-   * Pans the camera so `node` is inside the canvas, `margin` (a share of the smaller side, 0.15)
-   * away from its edges. It glides there (about 200 ms) unless the user prefers reduced motion or
-   * `animate` is false. Returns false when the node was in view already.
+   * Pans the camera so `node` is in view: inside the canvas and out from under what covers it (a
+   * panel over the canvas, see the `occlusion` option), `margin` (a share of the smaller side,
+   * 0.15) away from both. It glides there (about 200 ms) unless the user prefers reduced motion
+   * or `animate` is false. Returns false when the node was in view already.
    *
    * The camera pans the plane z = 0; a node at another depth moves by a different amount, so
    * every step measures again where the node is and how far it still has to go.
@@ -464,7 +475,8 @@ export default function createView(scene, options = {}) {
     let controls = camera && camera.controls;
     if (!controls || !node) return false;
     let margin = revealOptions.margin !== undefined ? revealOptions.margin : 0.15;
-    let first = remaining(node, margin);
+    let area = coversNear(node, margin) ? visibility.area() : null;
+    let first = remaining(node, margin, area);
     if (!first || (!first.x && !first.y)) return false;
     if (revealFrame) cancelAnimationFrame(revealFrame);
     revealFrame = 0;
@@ -473,13 +485,13 @@ export default function createView(scene, options = {}) {
       for (let i = 0, left = first; i < 6 && left && (Math.abs(left.x) > 0.5 || Math.abs(left.y) > 0.5); ++i) {
         controls.panByAbsoluteOffset(left.x, left.y);
         controls.redraw();
-        left = remaining(node, margin);
+        left = remaining(node, margin, area);
       }
       return true;
     }
     let frames = 0;
     let step = () => {
-      let left = remaining(node, margin);
+      let left = remaining(node, margin, area);
       frames += 1;
       if (!left || (Math.abs(left.x) <= 0.5 && Math.abs(left.y) <= 0.5) || frames > 40) {
         if (left && (left.x || left.y)) {
@@ -498,16 +510,39 @@ export default function createView(scene, options = {}) {
     return true;
   }
 
-  // How far (pixels) the camera still has to move `node` to have it `margin` inside the canvas
-  function remaining(node, margin) {
+  // How far (pixels) the camera still has to move `node` to have it `margin` inside the canvas,
+  // and, with the visible `area`, as far from what covers it
+  function remaining(node, margin, area) {
     let at = toScreenOf(node);
     if (!at) return null;
     let rect = canvas.getBoundingClientRect();
     let inset = Math.min(rect.width, rect.height) * margin;
-    return {
-      x: Math.min(Math.max(at.x, inset), rect.width - inset) - at.x,
-      y: Math.min(Math.max(at.y, inset), rect.height - inset) - at.y
-    };
+    let spot = area && area.anyHidden ? area.nearest(at.x, at.y, inset) : null;
+    if (!spot) spot = {x: clamp(at.x, inset, rect.width - inset), y: clamp(at.y, inset, rect.height - inset)};
+    return {x: spot.x - at.x, y: spot.y - at.y};
+  }
+
+  // Whether something covers the canvas near where `node` would go without covers: a quick look
+  // (25 points) before measuring the whole visible area
+  function coversNear(node, margin) {
+    if (!visibility) return false;
+    let at = toScreenOf(node);
+    if (!at) return false;
+    let rect = canvas.getBoundingClientRect();
+    let inset = Math.min(rect.width, rect.height) * margin;
+    let x = clamp(at.x, inset, rect.width - inset), y = clamp(at.y, inset, rect.height - inset);
+    let around = Math.max(inset, 8);
+    return visibility.coveredIn(Math.max(0, x - around), Math.max(0, y - around),
+      Math.min(rect.width, x + around), Math.min(rect.height, y + around), around / 2);
+  }
+
+  /**
+   * The part of the canvas the user can see (see visible.js): {isHidden(x, y), nearest(x, y,
+   * margin), center(), anyHidden, ...}, measured by hit testing (about 3 ms) or a moment ago.
+   * Null with `occlusion: false`.
+   */
+  function visibleArea() {
+    return visibility ? visibility.area() : null;
   }
 
   function labelOf(node) {
@@ -790,6 +825,10 @@ export default function createView(scene, options = {}) {
     scene.removeChild(element);
     disposeGL();
   }
+}
+
+function clamp(value, min, max) {
+  return value < min ? min : value > max ? max : value;
 }
 
 function toRGBA(color, out) {

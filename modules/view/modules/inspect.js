@@ -169,6 +169,8 @@ export default {
       if (card) return;
       card = document.createElement('div');
       card.setAttribute('role', 'tooltip');
+      // It moves with the node it describes: it doesn't hide the canvas (see visible.js)
+      card.setAttribute('data-graph-overlay', '');
       card.style.cssText = STYLE + (options.style || '');
       if (options.className) card.className = options.className;
       // The pointer can move onto the tooltip without it closing

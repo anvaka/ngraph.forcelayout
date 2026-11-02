@@ -3,7 +3,7 @@
 //   view.use(navigateNodes);
 //
 // The canvas is one tab stop. On it:
-//   Enter        focuses the node nearest the middle of the view (or the selected one); on a
+//   Enter        focuses the node nearest the middle of what shows (or the selected one); on a
 //                focused node it is a tap: it selects (Shift adds, Cmd/Ctrl toggles) and keeps
 //                its tooltip open, exactly as a click or a tap would
 //   arrows       move focus to the nearest node in that direction (with no node focused, the
@@ -240,14 +240,23 @@ export default {
     }
 
     // Where Enter starts: the selected node, else the hovered one, else the one nearest the middle
+    // of what the user sees (a panel may cover part of the canvas)
     function entryNode() {
       let selected = ctx.flags.ids(SELECTED);
       if (selected.length === 1 && graph.getNode(selected[0])) return graph.getNode(selected[0]);
       let screen = ctx.screenPositions();
       let best = -1, bestDistance = Infinity;
       let cx = screen.width / 2, cy = screen.height / 2;
+      let area = ctx.visibleArea();
+      let middle = area && area.anyHidden ? area.center() : null;
+      if (middle) {
+        cx = middle.x;
+        cy = middle.y;
+      } else {
+        area = null;
+      }
       for (let i = 0; i < screen.x.length; ++i) {
-        if (!screen.onScreen[i]) continue;
+        if (!screen.onScreen[i] || (area && area.isHidden(screen.x[i], screen.y[i]))) continue;
         let d = (screen.x[i] - cx) * (screen.x[i] - cx) + (screen.y[i] - cy) * (screen.y[i] - cy);
         if (d < bestDistance) { bestDistance = d; best = i; }
       }
@@ -421,6 +430,7 @@ export default {
       if (help) return closeHelp();
       help = document.createElement('div');
       help.style.cssText = CARD_STYLE;
+      help.setAttribute('data-graph-overlay', '');
       let title = document.createElement('div');
       title.style.cssText = 'font-weight:600;margin-bottom:4px;';
       title.textContent = 'Keys';
@@ -533,6 +543,7 @@ function createLiveRegion() {
   region.setAttribute('aria-live', 'polite');
   region.setAttribute('aria-atomic', 'true');
   region.setAttribute('data-graph-announcer', '');
+  region.setAttribute('data-graph-overlay', '');
   region.style.cssText = HIDDEN_STYLE;
   document.body.appendChild(region);
   return region;
