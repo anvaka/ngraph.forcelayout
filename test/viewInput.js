@@ -7,6 +7,7 @@ var pick = import('../modules/view/pick.js');
 var flags = import('../modules/view/flags.js');
 var input = import('../modules/view/input.js');
 var select = import('../modules/view/modules/select.js');
+var inspect = import('../modules/view/modules/inspect.js');
 
 // A camera 100 units above the origin, looking down, 90° field of view, on an 800 x 600 canvas:
 // the plane z = 0 shows 3 CSS pixels per unit, and the origin is at (400, 300).
@@ -85,6 +86,26 @@ test('pickNode: overlaps go to the node drawn last in 2D, the nearest in 3D, the
     var x = 400 + 3 + 8.5;
     t.equal(mods[1].pickNode(sticky, x, 300, 8), null, 'out of reach');
     t.equal(mods[1].pickNode(sticky, x, 300, 8, 0, 4).row, 0, 'the hovered node reaches 4 px farther');
+  });
+});
+
+test('pickNode says how clearly the nearest node wins', function (t) {
+  return Promise.all([math, pick]).then(function (mods) {
+    var p = topDown(mods[0]);
+    // Discs of radius 3 px at x = 400 and 412 (6 px between their edges)
+    var s = state(p, [0, 0, 4, 0], 2, [2, 2]);
+    var hit = mods[1].pickNode(s, 406, 300, 16, -1, 0, 8);
+    t.equal(hit.gap, 0, 'right between them: no gap');
+    hit = mods[1].pickNode(s, 397, 300, 16, -1, 0, 8);
+    t.equal(hit.row, 0);
+    t.ok(hit.inside);
+    t.ok(Math.abs(hit.gap - 12) < 1e-6, 'the other edge is 12 px farther');
+    var lone = state(p, [0, 0, 40, 0], 2, [2, 2]);
+    t.equal(mods[1].pickNode(lone, 410, 300, 16, -1, 0, 8).gap, Infinity, 'nothing else within reach and margin');
+    // The hovered node gets its bonus in the gap too
+    hit = mods[1].pickNode(s, 406, 300, 16, 0, 4, 8);
+    t.equal(hit.row, 0);
+    t.equal(hit.gap, 4);
   });
 });
 
@@ -480,7 +501,74 @@ test('select: taps select, Shift adds, Cmd toggles, the background clears', func
     t.same(ids(), []);
     t.notOk(handler.key({key: 'Escape'}), 'nothing left to clear');
     t.ok(handler.press({button: 0, shiftKey: true, pointerType: 'mouse'}), 'Shift-press draws a box');
-    t.notOk(handler.press({button: 0, shiftKey: true, pointerType: 'touch'}));
+    t.notOk(handler.press({button: 0, pointerType: 'touch'}), 'a plain press is left to others');
+    t.notOk(handler.longpress({button: 0, node: graph.getNode('a'), pointerType: 'touch'}), 'a long press on a node is left to the drag');
     api.dispose();
+  });
+});
+
+test('select: a long press on the background starts a box for any pointer, without Shift it replaces', function (t) {
+  return Promise.all([select, flags]).then(function (mods) {
+    var selectNodes = mods[0].default, f = mods[1];
+    var graph = createGraph();
+    graph.addLink('a', 'b');
+    graph.addLink('c', 'd');
+    var handler = null, cursor = null;
+    var store = f.createFlags(function () {});
+    var api = selectNodes.attach({
+      graph: graph, flags: store,
+      input: {add: function (h) { handler = h; }, cancel: function () {}},
+      nodesInRect: function () { return [graph.getNode('c'), graph.getNode('d')]; },
+      setCursor: function (value) { cursor = value; },
+      emit: function (name, fields) { return Object.assign({defaultPrevented: false}, fields); }
+    }, {});
+    global.requestAnimationFrame = global.requestAnimationFrame || function () { return 0; };
+    global.cancelAnimationFrame = global.cancelAnimationFrame || function () {};
+    api.set(['a']);
+    var p = {id: 5, button: 0, node: null, pointerType: 'touch', downX: 10, downY: 10, x: 10, y: 10, downClientX: 10, downClientY: 10, clientX: 10, clientY: 10};
+    t.ok(handler.longpress(p), 'takes the pointer');
+    t.equal(cursor, 'crosshair');
+    p.x = p.clientX = 200;
+    handler.dragstart(p);
+    handler.drag(p);
+    handler.dragend(p);
+    t.same(api.get().map(function (n) { return n.id; }).sort(), ['c', 'd'], 'replaced');
+    t.equal(cursor, null);
+
+    var q = {id: 6, button: 0, node: null, pointerType: 'mouse', shiftKey: true, downX: 10, downY: 10, x: 10, y: 10, downClientX: 10, downClientY: 10, clientX: 10, clientY: 10};
+    api.set(['a']);
+    handler.dragstart(q);
+    handler.dragend(q);
+    t.same(api.get().map(function (n) { return n.id; }).sort(), ['a', 'c', 'd'], 'Shift adds');
+
+    // A long press that never moved draws nothing
+    handler.longpress(p);
+    handler.up(p);
+    t.same(api.get().map(function (n) { return n.id; }).sort(), ['a', 'c', 'd']);
+    api.dispose();
+  });
+});
+
+test('describeNode: id, links and data fields as text', function (t) {
+  return inspect.then(function (m) {
+    var graph = createGraph();
+    graph.addNode('a', {name: '<b>Ann</b>', weight: 1 / 3, tags: ['x', 'y'], long: new Array(300).join('z')});
+    graph.addLink('a', 'b');
+    graph.addLink('a', 'c');
+    graph.addNode('d', 42);
+    var a = m.describeNode(graph.getNode('a'), graph);
+    t.equal(a.title, 'a');
+    t.same(a.rows[0], ['links', '2']);
+    t.same(a.rows[1], ['name', '<b>Ann</b>'], 'text as is: the tooltip never parses it as HTML');
+    t.same(a.rows[2], ['weight', '0.333333']);
+    t.same(a.rows[3], ['tags', '["x","y"]']);
+    t.equal(a.rows[4][1].length, 120, 'long values are cut');
+    t.same(m.describeNode(graph.getNode('d'), graph).rows, [['links', '0'], ['data', '42']]);
+    var many = {};
+    for (var i = 0; i < 20; ++i) many['f' + i] = i;
+    graph.addNode('e', many);
+    var e = m.describeNode(graph.getNode('e'), graph);
+    t.equal(e.rows.length, 1 + 12 + 1);
+    t.same(e.rows[13], ['…', '8 more']);
   });
 });

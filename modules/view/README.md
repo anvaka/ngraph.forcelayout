@@ -2,7 +2,8 @@
 
 Draws a graph that an `ngraph.forcelayout` layout moves, on a [w-gl](https://github.com/anvaka/w-gl)
 scene: nodes as round dots, links as lines of a fixed width on screen. Modules add interaction on
-top: hover, drag and select come with it.
+top: hover, drag, select and inspect (tooltips) come with it, and work the same with a mouse, a
+pen or a finger.
 
 It is built so that drawing stays cheap at hundreds of thousands of nodes:
 
@@ -29,7 +30,7 @@ it also rebuilds on the simulator's `'topology'` event.
 ``` js
 import {createScene} from 'w-gl';
 import createLayout from 'ngraph.forcelayout';
-import createView, {hoverNodes, dragNodes, selectNodes} from 'ngraph.forcelayout.view';
+import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes} from 'ngraph.forcelayout.view';
 
 // No multisampling: the view smooths its own edges
 const scene = createScene(canvas, {wglContextOptions: {antialias: false}});
@@ -38,6 +39,7 @@ const view = createView(scene, {graph, layout});
 view.use(hoverNodes);
 view.use(dragNodes);
 const selection = view.use(selectNodes);
+view.use(inspectNodes);
 view.on('tap', e => { if (e.node) console.log(e.node.id); });
 
 function frame() {
@@ -155,8 +157,9 @@ also have `scene` (the point of the scene on the plane z = 0), `button` and `hit
 ### Picking
 
 `view.pick(x, y, {pointerType, width, reach, sticky})` returns the node under a canvas point, or
-null, as `{node, row, distance, inside, x, y, radius}`: `distance` in pixels from the disc's edge
-(0 inside it), and the disc on the canvas.
+null, as `{node, row, distance, inside, clear, gap, x, y, radius}`: `distance` in pixels from the
+disc's edge (0 inside it), and the disc on the canvas. `clear` says the pick is unambiguous: the
+point is on the disc, or the next nearest node is at least half the reach farther (`gap` pixels).
 
 It works as a bubble cursor with a capped reach. A point inside a node's disc picks that node
 (overlaps go to the node drawn last in 2D, the nearest one in 3D). Otherwise the node whose disc
@@ -196,6 +199,9 @@ node's own color.
 
 ## Modules
 
+Every module works the same with a mouse, a pen and a finger; only the picking reach differs.
+Where a mouse uses a key (Shift-drag for a box), a long press does the same for every pointer.
+
 ### hover
 
 `view.use(hoverNodes, {holdStill})`: the node under a mouse or pen gets `HOVERED` and the cursor
@@ -210,9 +216,10 @@ hovered node (it changes the physics, so it is off). API: `get()`.
 goes back to the layout when dropped (`pinOnDrop: true` leaves it pinned; a node that was pinned
 stays pinned). Dragging a selected node moves the whole selection. Escape puts the nodes back.
 
-A press grabs a node when it lands on the node's drawn disc. A press that only comes near it
-(within the picking reach) grabs it after a long press. So in a dense graph at a small zoom,
-where every point is near some node, a drag still moves the camera.
+A press grabs a node when the pick is clear: on the node's disc, or clearly nearer to it than to
+any other node. Where nodes crowd (a dense graph at a small zoom, where every point is near
+several nodes) a press moves the camera instead, and a long press grabs the nearest node. The
+hover cursor shows which one a press will do: `grab` or `pointer`.
 
 The node keeps its offset from the pointer, and stays under it while the camera moves (other
 fingers can pan and zoom). In 3D it moves on the plane through it that faces the camera. It works
@@ -222,9 +229,19 @@ with the layout on the CPU or on WebGPU (through `setNodePosition()`), running o
 ### select
 
 `view.use(selectNodes, {box})`: a tap selects a node; Shift adds, Cmd or Ctrl toggles. A tap on
-the background or Escape clears. Shift-drag on the background (mouse or pen) draws a box that
-adds the nodes whose disc touches it. Fires `select` before a change is kept. API: `get()`,
-`set(nodesOrIds)`, `clear()`, `has(nodeOrId)`.
+the background or Escape clears. A long press on the background, then a drag, draws a box that
+selects the nodes whose disc touches it (a ring shows when the long press takes); Shift-drag
+draws one right away. With Shift, Cmd or Ctrl held the box adds to the selection. Fires `select`
+before a change is kept. API: `get()`, `set(nodesOrIds)`, `clear()`, `has(nodeOrId)`.
+
+### inspect
+
+`view.use(inspectNodes, {content, hover, tap, style, className})`: a tooltip with the node's id,
+its number of links and the fields of `node.data` (`describeNode()`). Hovering a node shows it
+while the pointer stays on the node or on the tooltip; a tap (mouse, pen or finger) keeps it open
+until a tap elsewhere or Escape. It follows its node as the layout and the camera move, beside the
+node and inside the canvas. `content(node)` returns text (never parsed as HTML), an element, or
+null. Hover tooltips need the hover module. API: `show(node)`, `hide()`, `get()`.
 
 ### Writing a module
 
@@ -275,5 +292,6 @@ use the same copy of w-gl (the demo's `vite.config.js` dedupes it).
 
 ## Not done yet
 
-Tooltips and keyboard and screen-reader navigation of nodes (the `FOCUSED` flag is reserved for
-it), labels, picking links, and cooperative gestures for graphs embedded in a scrolling page.
+Keyboard and screen-reader navigation of nodes (the `FOCUSED` flag is reserved for it, and the
+tooltip should follow focus), labels, picking links, and cooperative gestures for graphs embedded
+in a scrolling page.
