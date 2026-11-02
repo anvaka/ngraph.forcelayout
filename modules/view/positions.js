@@ -13,8 +13,8 @@ export function textureRows(count) {
 
 /**
  * Copies the first three axes of `n` bodies from `pos` (`D` numbers per body, as in
- * `simulator.store.pos`) into `out`, four floats per node: x, y, z (0 when D < 3), and an unused
- * fourth. Axes after the third are not drawn.
+ * `simulator.store.pos`) into `out`, four floats per node: x, y, z (0 when D < 3), and a fourth
+ * it doesn't touch (the view keeps node flags there). Axes after the third are not drawn.
  */
 export function packPositions(pos, D, n, out) {
   let i, j, o;
@@ -41,19 +41,24 @@ export function packPositions(pos, D, n, out) {
 
 /**
  * Node colors and sizes in body order. `color(node)` and `size(node)` give each node's values;
- * a color of 0 (or none) means `defaultColor`. Returns {colors: Uint32Array, sizes: Float32Array}
- * with one entry per body.
+ * a color of 0 (or none) means `defaultColor`. Returns {colors: Uint32Array, sizes: Float32Array,
+ * nodes, maxSize} with one entry per body: `nodes[row]` is the graph's node of that row, and
+ * `maxSize` the largest size.
  */
 export function collectNodes(graph, layout, color, size, defaultColor) {
   let count = layout.simulator.store.n;
   let colors = new Uint32Array(count);
   let sizes = new Float32Array(count);
+  let nodes = new Array(count);
+  let maxSize = 0;
   graph.forEachNode(node => {
     let row = layout.getBody(node.id).index;
     colors[row] = (color && color(node)) || defaultColor;
     sizes[row] = size(node);
+    nodes[row] = node;
+    if (sizes[row] > maxSize) maxSize = sizes[row];
   });
-  return {colors, sizes};
+  return {colors, sizes, nodes, maxSize};
 }
 
 /**
