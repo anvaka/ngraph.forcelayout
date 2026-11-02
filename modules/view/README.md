@@ -1,10 +1,11 @@
 # ngraph.forcelayout.view
 
 Draws a graph that an `ngraph.forcelayout` layout moves, on a [w-gl](https://github.com/anvaka/w-gl)
-scene: nodes as round dots, links as lines of a fixed width on screen.
+scene: nodes as round dots, links as lines of a fixed width on screen. Modules add interaction on
+top: hover, drag, select and inspect (tooltips) come with it, and work the same with a mouse, a
+pen or a finger.
 
-It is built so that drawing stays cheap at hundreds of thousands of nodes, and so that interactive
-add-ons (labels, tooltips, highlighting) can be added on top of it later:
+It is built so that drawing stays cheap at hundreds of thousands of nodes:
 
 * **Positions are a texture.** Each frame copies the first three axes of the layout's
   `simulator.store.pos` into a float texture in one loop, and uploads it once. Nodes and links
@@ -29,12 +30,17 @@ it also rebuilds on the simulator's `'topology'` event.
 ``` js
 import {createScene} from 'w-gl';
 import createLayout from 'ngraph.forcelayout';
-import createView from 'ngraph.forcelayout.view';
+import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes} from 'ngraph.forcelayout.view';
 
 // No multisampling: the view smooths its own edges
 const scene = createScene(canvas, {wglContextOptions: {antialias: false}});
 const layout = createLayout(graph);
 const view = createView(scene, {graph, layout});
+view.use(hoverNodes);
+view.use(dragNodes);
+const selection = view.use(selectNodes);
+view.use(inspectNodes);
+view.on('tap', e => { if (e.node) console.log(e.node.id); });
 
 function frame() {
   layout.step();          // the view asks the scene for a frame on every step
@@ -51,6 +57,11 @@ Options:
 * `linkColor` (`0xffffff10`): a color, or `link => color`.
 * `nodeSize`: a number, or `node => size` in scene units. Default: `node.data.size`, or 1.
 * `linkWidth` (2): width of links in pixels.
+* `styles`: how flagged nodes and links look (see [Flags](#flags)).
+* `camera`: camera input, see [Camera](#camera).
+* `input`: gesture thresholds, see [Gestures](#gestures). `input: false` leaves the scene's own
+  w-gl controls in place; modules can't be used then.
+* `reach`: how far from a node, in pixels, a pointer still picks it (see [Picking](#picking)).
 
 Methods:
 
@@ -60,12 +71,215 @@ Methods:
 * `invalidate()`: positions changed outside of a step, e.g. after `layout.setNodePosition()` or
   code that wrote `store.pos`.
 * `refresh()`: call the color and size functions again, e.g. when the data they read changed.
-* `dispose()`: stop listening to the graph and the layout, and free the GPU resources.
+* `use(module, options)`: attach a module; returns its API (see [Modules](#modules)).
+* `on(name, fn)`, `off(name, fn)`: listen to [events](#events).
+* `pick(x, y, options)`: the node under a canvas point (see [Picking](#picking)).
+* `flags`: per-node flags (see [Flags](#flags)).
+* `setStyles(styles)`: new styles for flagged nodes.
+* `toScreen(x, y, z)`: where a point of the scene is on the canvas, in CSS pixels.
+* `getLayout()`, `getCamera()` (w-gl's map controls that the view drives).
+* `dispose()`: detach the modules, give the scene its own camera controls back, stop listening
+  to the graph and the layout, and free the GPU resources.
 
 Only x, y and z are drawn; a layout in more dimensions shows its first three axes.
 
 The first `getContext()` call on a canvas fixes its options. If you check for WebGL before
 creating the scene (e.g. with w-gl's `isWebGLEnabled()`), check on a separate canvas.
+
+## Input
+
+The view takes over camera input from the scene. Pointers (mouse, pen, touch), the wheel and keys
+go through one input layer that the camera and the modules share, so they never fight over a
+gesture:
+
+* **Every pointer has one owner**, decided when it goes down. Modules are asked in priority order
+  whether they want it, with the node under it already picked; the camera takes the rest. One
+  finger can drag a node while two others pan and zoom.
+* **A press stays undecided** until it moves past a small distance (then it is a drag for its
+  owner) or lifts (then it is a tap). A long press is offered to every module while the press is
+  undecided. Taps fire on release, at once: a double tap doesn't make single taps wait.
+* **Every drag ends once**, with an end or a cancel: pointercancel, lost capture, leaving the
+  window, a release outside the window, or Escape.
+
+The camera is still w-gl's map controls (pan, zoom about the pointer, rotation, inertia); only
+their mouse, touch and keyboard listeners are replaced. It works with w-gl 0.21 as is: the controls
+listen on a detached element, and the view drives them.
+
+### Camera
+
+| Input | Does |
+|---|---|
+| Drag on the background | pans; with the right button or Alt it rotates and tilts |
+| Wheel | zooms about the pointer (`camera: {wheel: 'pan'}`: pans, and Cmd/Ctrl + wheel zooms) |
+| Trackpad pinch (Ctrl + wheel) | zooms, in finer steps |
+| Two fingers | pinch zooms about their centre and pans; a twist rotates (after 25 px of arc); a level two-finger move up or down tilts |
+| Double tap | zooms in (not with Shift, Ctrl, Cmd or Alt) |
+| Two-finger tap | zooms out |
+| Arrows or WASD, + and −, Q and E, R and F | pan, zoom, rotate, tilt while held |
+
+Rotation and tilt work only where the scene allows rotation. `camera` options: `wheel` ('zoom'),
+`rotate` (true), `doubleTapZoom` (true), `twoFingerTapZoom` (true), `inertia` (true), `keys` (true),
+`rotateArc` (25).
+
+### Gestures
+
+`input` options, with their defaults:
+
+* `dragDistance` (`{mouse: 3, pen: 6, touch: 10}`): pixels a press moves before it is a drag.
+* `doubleTapTime` (300 ms) and `doubleTapDistance` (`{mouse: 10, pen: 30, touch: 30}`).
+* `longPressTime` (500 ms).
+* `twoFingerTapTime` (400 ms).
+
+The canvas gets `touch-action: none` (so the browser leaves gestures to the view), no text
+selection or iOS callout, and `tabindex="0"` so it takes keys after a press. Only keys a handler
+uses are prevented, and Tab never is. The browser's context menu is off on the canvas. Held keys
+are forgotten when the window loses focus. All of this is undone by `dispose()`.
+
+### Events
+
+`view.on(name, e => …)`. App listeners run before modules and the camera, and
+`e.preventDefault()` stops them from reacting.
+
+| Event | When | Extra fields |
+|---|---|---|
+| `tap` | a press lifted before it moved (left button, touch, pen) | `count`: 2 for the second of a double tap |
+| `doubletap` | after the second `tap` | |
+| `longpress` | 500 ms without moving | |
+| `contextmenu` | a right click, on release | |
+| `hover` | the hovered node changed (hover module) | `previous` |
+| `dragstart`, `drag`, `dragend` | a node drag (drag module) | `nodes`, `cancelled` on `dragend` |
+| `select` | the selection is about to change (select module) | `nodes`, `added`, `removed` |
+
+Every event has `node` (null on the background), `id`, `row`, `x` and `y` (CSS pixels on the
+canvas), `clientX`, `clientY`, `pointerType`, the modifier keys and `originalEvent`. Pointer events
+also have `scene` (the point of the scene on the plane z = 0), `button` and `hit` (below).
+
+### Picking
+
+`view.pick(x, y, {pointerType, width, reach, sticky})` returns the node under a canvas point, or
+null, as `{node, row, distance, inside, clear, gap, x, y, radius}`: `distance` in pixels from the
+disc's edge (0 inside it), and the disc on the canvas. `clear` says the pick is unambiguous: the
+point is on the disc, or the next nearest node is at least half the reach farther (`gap` pixels).
+
+It works as a bubble cursor with a capped reach. A point inside a node's disc picks that node
+(overlaps go to the node drawn last in 2D, the nearest one in 3D). Otherwise the node whose disc
+edge is nearest wins, within `reach`: 8 px for a mouse, 10 for a pen, 16 for touch (or half the
+finger's contact width, up to 32). The `sticky` node (the hovered one) reaches 4 px farther, so
+hover doesn't flicker between neighbours.
+
+Picking runs on the CPU from the layout's own positions, and only when asked. In 2D the point is
+mapped to the plane of the graph and the positions are scanned there (0.27 ms per pick at 100k
+nodes in the demo); in 3D every node is projected.
+
+### Flags
+
+Each node has a byte of flags, kept in the unused fourth float of the positions texture, so nodes
+and links read them in their shaders with the fetch they already do.
+
+``` js
+import {SELECTED, FOCUSED} from 'ngraph.forcelayout.view';
+view.flags.set(node.id, SELECTED, true);
+view.flags.has(node.id, SELECTED);
+view.flags.ids(SELECTED);
+view.flags.clear(SELECTED);
+```
+
+`HOVERED`, `DRAGGED` and `FOCUSED` nodes are drawn larger in `pointedColor`; `SELECTED` ones in
+`selectedColor`. Links that touch any of them are lit. While anything is selected, the nodes next to
+it (`NEIGHBOR`, set by the view) stay as they are and everything else fades to `dimAlpha`. Flagged
+nodes and their links are drawn a second time after everything else, so a highlight is never
+buried under faint links. Selected nodes are drawn on top only while there are at most 1,000 of
+them; past that, dimming the rest already shows them. `CUSTOM_1` and `CUSTOM_2` are free for
+modules and not styled.
+
+`styles`, with their defaults: `pointedColor` (`0xffffffff`), `pointedScale` (1.5),
+`pointedMinSize` (8 CSS pixels), `selectedColor` (`0xffc24bff`), `selectedScale` (1.25),
+`selectedMinSize` (6), `litLinkAlpha` (0.8), `dimAlpha` (0.15). A color with alpha 0 keeps the
+node's own color.
+
+## Modules
+
+Every module works the same with a mouse, a pen and a finger; only the picking reach differs.
+Where a mouse uses a key (Shift-drag for a box), a long press does the same for every pointer.
+
+### hover
+
+`view.use(hoverNodes, {holdStill})`: the node under a mouse or pen gets `HOVERED` and the cursor
+shows what a press would do there (grab, a box's crosshair, or a pointer over a node a tap would
+pick). Fires `hover`. Touch never hovers. The node is picked again after every frame in which the
+layout or the camera moved, since nodes move under a still pointer. `holdStill: true` pins the
+hovered node (it changes the physics, so it is off). API: `get()`.
+
+### drag
+
+`view.use(dragNodes, {pinOnDrop, longPress})`: moves nodes. The node is pinned while it moves and
+goes back to the layout when dropped (`pinOnDrop: true` leaves it pinned; a node that was pinned
+stays pinned). Dragging a selected node moves the whole selection. Escape puts the nodes back.
+
+A press grabs a node when the pick is clear: on the node's disc, or clearly nearer to it than to
+any other node. Where nodes crowd (a dense graph at a small zoom, where every point is near
+several nodes) a press moves the camera instead, and a long press grabs the nearest node. The
+hover cursor shows which one a press will do: `grab` or `pointer`.
+
+The node keeps its offset from the pointer, and stays under it while the camera moves (other
+fingers can pan and zoom). In 3D it moves on the plane through it that faces the camera. It works
+with the layout on the CPU or on WebGPU (through `setNodePosition()`), running or paused. API:
+`get()` (the nodes being dragged).
+
+### select
+
+`view.use(selectNodes, {box})`: a tap selects a node; Shift adds, Cmd or Ctrl toggles. A tap on
+the background or Escape clears. A long press on the background, then a drag, draws a box that
+selects the nodes whose disc touches it (a ring shows when the long press takes); Shift-drag
+draws one right away. With Shift, Cmd or Ctrl held the box adds to the selection. Fires `select`
+before a change is kept. API: `get()`, `set(nodesOrIds)`, `clear()`, `has(nodeOrId)`.
+
+### inspect
+
+`view.use(inspectNodes, {content, hover, tap, style, className})`: a tooltip with the node's id,
+its number of links and the fields of `node.data` (`describeNode()`). Hovering a node shows it
+while the pointer stays on the node or on the tooltip; a tap (mouse, pen or finger) keeps it open
+until a tap elsewhere or Escape. It follows its node as the layout and the camera move, beside the
+node and inside the canvas. `content(node)` returns text (never parsed as HTML), an element, or
+null. Hover tooltips need the hover module. API: `show(node)`, `hide()`, `get()`.
+
+### Writing a module
+
+A module is an object with `attach(ctx, options)`, which returns the module's API (or nothing).
+`view.use()` returns that API with a `dispose()` that also removes everything registered through
+`ctx`:
+
+``` js
+const pinOnDoubleTap = {
+  name: 'pin',
+  attach(ctx) {
+    ctx.input.add({
+      priority: 10,
+      doubletap(e) {
+        if (!e.node) return false;
+        ctx.layout.pinNode(e.node, !ctx.layout.isNodePinned(e.node));
+        return true; // the camera doesn't zoom
+      }
+    });
+  }
+};
+view.use(pinOnDoubleTap);
+```
+
+`ctx` has `view`, `scene`, `graph`, `layout`, `flags`, `pick()`, `nodesInRect()`, `toScreen()`,
+`fromScreen(x, y, through)`, `emit(name, fields)`, `on(name, fn)`, `onFrame(fn)` (runs inside every
+frame, before flags go to the GPU), `onCamera(fn)`, `setCursor(value, priority)` and `input`:
+
+* `input.add(handler)`: a handler is an object with any of `priority` (lower is asked first),
+  `press(p)` (claim this pointer? it must not change anything: it is also asked for the cursor),
+  `down`, `dragstart` (return false to pass the pointer on), `drag`, `dragend`, `up`, `cancel`,
+  `longpress` (return true to take the pointer), `tap`, `doubletap`, `contextmenu`, `twofingertap`
+  (return true to stop the others), `hover(point)`, `wheel`, `key`, `keyup`, `blur`, and `cursor`.
+* `input.cancel(pointerId)`, `input.dragging()`, `input.busy()`, `input.hoverPoint()`.
+
+A pointer `p` has `id`, `pointerType`, `button`, `x`, `y` (now), `downX`, `downY`, `clientX`,
+`clientY`, the modifier keys, `hit` and `node` (picked at the press, once, when first asked) and
+`event`.
 
 ## Requirements
 
@@ -78,5 +292,6 @@ use the same copy of w-gl (the demo's `vite.config.js` dedupes it).
 
 ## Not done yet
 
-The design this is the first step of (interactive add-ons on top of the view: picking, per-node
-state flags, labels, tooltips) is in the pull request that added this module.
+Keyboard and screen-reader navigation of nodes (the `FOCUSED` flag is reserved for it, and the
+tooltip should follow focus), labels, picking links, and cooperative gestures for graphs embedded
+in a scrolling page.
