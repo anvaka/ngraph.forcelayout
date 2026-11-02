@@ -96,6 +96,14 @@ export function createInput(canvas, options) {
     busy: () => pointers.size > 0,
     /** The last mouse or pen position with no button down, or null */
     hoverPoint: () => hover,
+    /**
+     * A tap that came from somewhere else than a pointer (a key): the app's listeners, then the
+     * handlers, see it like any tap. `hit` is {node, row, ...}.
+     */
+    tap(hit, fields) {
+      let e = new ViewEvent('tap', hit, fields);
+      return dispatch('tap', e, true);
+    },
     /** The first handler (not the camera) that would claim a press like `p`, or null */
     claimant(p) {
       for (let h of handlers) {

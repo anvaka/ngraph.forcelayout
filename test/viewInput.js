@@ -8,6 +8,8 @@ var flags = import('../modules/view/flags.js');
 var input = import('../modules/view/input.js');
 var select = import('../modules/view/modules/select.js');
 var inspect = import('../modules/view/modules/inspect.js');
+var navigate = import('../modules/view/modules/navigate.js');
+var search = import('../modules/view/modules/search.js');
 
 // A camera 100 units above the origin, looking down, 90° field of view, on an 800 x 600 canvas:
 // the plane z = 0 shows 3 CSS pixels per unit, and the origin is at (400, 300).
@@ -570,5 +572,75 @@ test('describeNode: id, links and data fields as text', function (t) {
     var e = m.describeNode(graph.getNode('e'), graph);
     t.equal(e.rows.length, 1 + 12 + 1);
     t.same(e.rows[13], ['…', '8 more']);
+  });
+});
+
+test('nearestInDirection: the nearest node in a cone, off-axis counts double', function (t) {
+  return navigate.then(function (m) {
+    // 0 at the centre; 1 right; 2 farther right; 3 up-right; 4 left; 5 behind the camera
+    var screen = {
+      x: new Float32Array([100, 140, 200, 130, 60, NaN]),
+      y: new Float32Array([100, 100, 100, 70, 100, NaN])
+    };
+    var right = {x: 1, y: 0}, left = {x: -1, y: 0}, up = {x: 0, y: -1}, down = {x: 0, y: 1};
+    t.equal(m.nearestInDirection(screen, 0, right), 1);
+    t.equal(m.nearestInDirection(screen, 0, left), 4);
+    t.equal(m.nearestInDirection(screen, 0, up), 3, 'up-right is within the cone going up');
+    t.equal(m.nearestInDirection(screen, 0, down), -1, 'nothing below');
+    t.equal(m.nearestInDirection(screen, 1, right), 2);
+    // 3 is 30 px right and 30 px up of 0: along 30 + 2 * 30 = 90, against 1 at 40
+    t.equal(m.nearestInDirection(screen, 4, right), 0);
+  });
+});
+
+test('neighboursOf: strongest link first, then more links, then label; each neighbour once', function (t) {
+  return navigate.then(function (m) {
+    var graph = createGraph();
+    graph.addLink('a', 'b', {weight: 1});
+    graph.addLink('a', 'c', {weight: 5});
+    graph.addLink('a', 'd');
+    graph.addLink('a', 'e');
+    graph.addLink('e', 'x');
+    graph.addLink('b', 'a', {weight: 7}); // a second link to b, stronger
+    graph.addLink('a', 'a');              // a loop is not a neighbour
+    var list = m.neighboursOf(graph, graph.getNode('a'), function (node) { return String(node.id); });
+    t.same(list.map(function (e) { return e.node.id; }), ['b', 'c', 'e', 'd']);
+    t.equal(list[0].weight, 7, 'the strongest of two links');
+    t.equal(list[2].weight, null);
+  });
+});
+
+test('findNodes: label starts, then word starts, then contains, then ids; more links first', function (t) {
+  return search.then(function (m) {
+    var graph = createGraph();
+    graph.addNode('n1', {name: 'Valjean'});
+    graph.addNode('n2', {name: 'Mlle Vaubois'});
+    graph.addNode('n3', {name: 'Gervais'});
+    graph.addNode('va-id');
+    graph.addNode('n4', {name: 'Valentine'});
+    graph.addLink('n4', 'n2');
+    graph.addLink('n4', 'n3');
+    var labelOf = function (node) { return node.data && node.data.name ? node.data.name : String(node.id); };
+    var index = m.buildSearchIndex(graph, labelOf);
+    var found = m.findNodes(index, 'va', 10);
+    t.same(found.map(function (f) { return f.label; }), ['Valentine', 'va-id', 'Valjean', 'Mlle Vaubois', 'Gervais']);
+    t.same(found.map(function (f) { return f.rank; }), [0, 0, 0, 1, 2]);
+    t.equal(found.total, 5);
+    t.same(m.findNodes(index, 'n3', 10).map(function (f) { return f.label; }), ['Gervais'], 'ids match too, last');
+    var two = m.findNodes(index, 'va', 2);
+    t.same(two.map(function (f) { return f.label; }), ['Valentine', 'va-id'], 'the best two');
+    t.equal(two.total, 5, 'and how many there were');
+    t.same(m.findNodes(index, '  ', 10), [], 'nothing for blank text');
+  });
+});
+
+test('input: a tap from a key reaches the app first, then the handlers', function (t) {
+  return input.then(function (i) {
+    var s = setup(i);
+    var seen = [];
+    s.listeners.tap = [function (e) { seen.push('app:' + e.pointerType + ':' + e.node.id); }];
+    s.core.add({priority: 10, tap: function (e) { seen.push('module:' + (e.shiftKey ? 'shift' : '')); }});
+    s.core.tap({node: s.node, row: 0}, {pointerType: 'keyboard', button: 0, shiftKey: true});
+    t.same(seen, ['app:keyboard:n', 'module:shift']);
   });
 });

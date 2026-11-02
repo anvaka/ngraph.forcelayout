@@ -66,6 +66,28 @@ export function nodesInRect(state, x0, y0, x1, y1) {
   return rows;
 }
 
+/**
+ * Every row's place on the canvas: {x, y, onScreen, width, height}, with x and y in CSS pixels (NaN
+ * behind the camera) and onScreen 1 for rows in front of the camera and inside the canvas.
+ */
+export function projectAll(state) {
+  let {pos, D, count, projector} = state;
+  let m = projector.mvp, width = projector.width, height = projector.height;
+  // NaN: behind the camera
+  let xs = new Float32Array(count).fill(NaN), ys = new Float32Array(count).fill(NaN), visible = new Uint8Array(count);
+  for (let i = 0, j = 0; i < count; ++i, j += D) {
+    let x = pos[j], y = D > 1 ? pos[j + 1] : 0, z = D > 2 ? pos[j + 2] : 0;
+    let w = m[3] * x + m[7] * y + m[11] * z + m[15];
+    if (!(w > 0)) continue;
+    let px = ((m[0] * x + m[4] * y + m[8] * z + m[12]) / w + 1) * 0.5 * width;
+    let py = (1 - (m[1] * x + m[5] * y + m[9] * z + m[13]) / w) * 0.5 * height;
+    xs[i] = px;
+    ys[i] = py;
+    visible[i] = px >= 0 && py >= 0 && px <= width && py <= height ? 1 : 0;
+  }
+  return {x: xs, y: ys, onScreen: visible, width, height};
+}
+
 // 2D: scan in the plane z = 0. Returns false when the camera can't map pixels to that plane well
 // enough (then every node is projected instead).
 function scanPlane(state, sx, sy, reach, around, sticky, bonus, best) {
