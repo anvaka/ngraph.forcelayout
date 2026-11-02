@@ -3,7 +3,8 @@
 //
 // It works as a bubble cursor with a capped reach: a point inside a node's disc picks that node;
 // otherwise the node whose disc edge is nearest wins, if it is within `reach` pixels. Overlapping
-// discs go to the node drawn last in 2D, and to the nearest one in 3D.
+// discs go to the node drawn last in 2D, and to the nearest one in 3D. The result also says how
+// clearly it won (`gap`): how much farther the next node is.
 //
 // In 2D the point becomes a point of the scene and the positions are scanned there, with no
 // projection (0.1 ms at 100k nodes, 0.9 ms at 1M on an M4 Max). Only the few nodes near it are
@@ -22,18 +23,29 @@ const planePoint = [0, 0, 0], stepX = [0, 0, 0], stepY = [0, 0, 0];
  *
  * `sx`, `sy`: the point, in CSS pixels of the canvas. `reach`: pixels from a disc's edge within
  * which a node still counts. Row `sticky` (the hovered node, or -1) gets `bonus` more pixels.
+ * Nodes up to `margin` pixels beyond the reach are looked at too, to measure the gap.
  *
- * Returns {row, distance, inside, x, y, radius} or null: `distance` is in pixels from the disc's
- * edge (0 inside), `x`, `y` and `radius` are the disc on the canvas.
+ * Returns {row, distance, inside, x, y, radius, gap} or null: `distance` is in pixels from the
+ * disc's edge (0 inside), `x`, `y` and `radius` are the disc on the canvas, and `gap` is how many
+ * pixels farther the next nearest node is (Infinity: none within reach + margin).
  */
-export function pickNode(state, sx, sy, reach, sticky = -1, bonus = 0) {
-  let best = {row: -1, inside: false, score: Infinity, distance: 0, x: 0, y: 0, w: 0, radius: 0};
+export function pickNode(state, sx, sy, reach, sticky = -1, bonus = 0, margin = 0) {
+  let best = {
+    row: -1, inside: false, score: Infinity, distance: 0, x: 0, y: 0, w: 0, radius: 0, own: 0,
+    // The two lowest scores seen (distance from the edge, less the bonus), for the gap
+    low1: Infinity, low1Row: -1, low2: Infinity
+  };
+  let around = reach + bonus + margin;
   let flat = state.D < 3;
-  if (!flat || !scanPlane(state, sx, sy, reach, sticky, bonus, best)) {
-    scanAll(state, sx, sy, reach, sticky, bonus, best, !flat);
+  if (!flat || !scanPlane(state, sx, sy, reach, around, sticky, bonus, best)) {
+    scanAll(state, sx, sy, reach, around, sticky, bonus, best, !flat);
   }
   if (best.row < 0) return null;
-  return {row: best.row, distance: best.distance, inside: best.inside, x: best.x, y: best.y, radius: best.radius};
+  let next = best.low1Row === best.row ? best.low2 : best.low1;
+  return {
+    row: best.row, distance: best.distance, inside: best.inside,
+    x: best.x, y: best.y, radius: best.radius, gap: next - best.own
+  };
 }
 
 /**
@@ -56,7 +68,7 @@ export function nodesInRect(state, x0, y0, x1, y1) {
 
 // 2D: scan in the plane z = 0. Returns false when the camera can't map pixels to that plane well
 // enough (then every node is projected instead).
-function scanPlane(state, sx, sy, reach, sticky, bonus, best) {
+function scanPlane(state, sx, sy, reach, around, sticky, bonus, best) {
   let projector = state.projector;
   // Looking away from the plane: nothing is under the point
   if (!projector.onPlane(sx, sy, ORIGIN, Z_NORMAL, planePoint)) return true;
@@ -66,8 +78,8 @@ function scanPlane(state, sx, sy, reach, sticky, bonus, best) {
   let unitsPerPixel = 1.25 * Math.max(distance3(planePoint, stepX), distance3(planePoint, stepY));
   if (!Number.isFinite(unitsPerPixel)) return false;
 
-  let around = (reach + bonus) * unitsPerPixel;
-  let limit = around + state.maxSize * 0.5;
+  let near = around * unitsPerPixel;
+  let limit = near + state.maxSize * 0.5;
   let {pos, D, count, sizes} = state;
   let cx = planePoint[0], cy = planePoint[1];
   for (let i = 0, j = 0; i < count; ++i, j += D) {
@@ -76,7 +88,7 @@ function scanPlane(state, sx, sy, reach, sticky, bonus, best) {
     let y = D > 1 ? pos[j + 1] : 0;
     let dy = y - cy;
     if (dy > limit || dy < -limit) continue;
-    let within = around + sizes[i] * 0.5;
+    let within = near + sizes[i] * 0.5;
     if (dx * dx + dy * dy > within * within) continue;
     if (!projector.toScreen(pos[j], y, 0, onScreen)) continue;
     rank(best, i, sizes[i] * 0.5 * projector.pixelsPerUnit(onScreen.w), sx, sy, reach, sticky, bonus, false);
@@ -84,10 +96,10 @@ function scanPlane(state, sx, sy, reach, sticky, bonus, best) {
   return true;
 }
 
-function scanAll(state, sx, sy, reach, sticky, bonus, best, depth) {
+function scanAll(state, sx, sy, reach, around, sticky, bonus, best, depth) {
   let {pos, D, count, sizes, projector} = state;
   let m = projector.mvp, width = projector.width, height = projector.height;
-  let far = reach + bonus;
+  let far = around;
   for (let i = 0, j = 0; i < count; ++i, j += D) {
     let x = pos[j], y = D > 1 ? pos[j + 1] : 0, z = D > 2 ? pos[j + 2] : 0;
     let w = m[3] * x + m[7] * y + m[11] * z + m[15];
@@ -106,6 +118,14 @@ function scanAll(state, sx, sy, reach, sticky, bonus, best, depth) {
 // Keeps the better of `best` and the row at `onScreen`
 function rank(best, row, radius, sx, sy, reach, sticky, bonus, depth) {
   let distance = Math.hypot(onScreen.x - sx, onScreen.y - sy) - radius;
+  let own = Math.max(distance, 0) - (row === sticky ? bonus : 0);
+  if (own < best.low1) {
+    best.low2 = best.low1;
+    best.low1 = own;
+    best.low1Row = row;
+  } else if (own < best.low2) {
+    best.low2 = own;
+  }
   if (distance <= 0) {
     if (best.inside) {
       // Inside several discs: the hovered one, then the one on top
@@ -114,13 +134,14 @@ function rank(best, row, radius, sx, sy, reach, sticky, bonus, depth) {
     }
     best.inside = true;
     best.score = -Infinity;
+    best.own = own;
     keep(best, row, 0, radius);
     return;
   }
   if (best.inside) return;
-  let score = row === sticky ? distance - bonus : distance;
-  if (score > reach || score >= best.score) return;
-  best.score = score;
+  if (own > reach || own >= best.score) return;
+  best.score = own;
+  best.own = own;
   keep(best, row, distance, radius);
 }
 

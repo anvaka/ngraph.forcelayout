@@ -6,14 +6,15 @@
 //   selection.set(['a', 'b']);
 //
 // A tap on a node selects it; Shift adds it, Cmd or Ctrl toggles it. A tap on the background, or
-// Escape, clears the selection. Shift-drag on the background (mouse or pen) draws a box that adds
-// the nodes whose disc touches it.
+// Escape, clears the selection. A long press on the background, then a drag, draws a box (with a
+// mouse, a pen or a finger) that selects the nodes whose disc touches it; Shift-drag draws one
+// right away. With Shift, Cmd or Ctrl held, the box adds to the selection.
 //
 // 'select' fires before a change is kept: {nodes, added, removed}; e.preventDefault() keeps the
 // old selection. A box shows what it would select while it is drawn, and fires once at the end.
 //
 // Options:
-// - `box` (true): Shift-drag draws a selection box.
+// - `box` (true): a long press on the background, or Shift-drag, draws a selection box.
 // - `boxStyle`: CSS for the box element.
 import {SELECTED} from '../flags.js';
 
@@ -30,14 +31,18 @@ export default {
       name: 'select',
       priority: 30,
       cursor: 'crosshair',
-      press: p => options.box !== false && p.button === 0 && p.shiftKey && p.pointerType !== 'touch',
+      press: p => options.box !== false && p.button === 0 && p.shiftKey,
+      longpress(p) {
+        if (options.box === false || p.button !== 0 || p.node || box) return false;
+        openBox(p);
+        return true;
+      },
       dragstart(p) {
-        box = {
-          pointerId: p.id, base: new Set(selected),
-          x0: p.downX, y0: p.downY, x1: p.x, y1: p.y,
-          clientX0: p.downClientX, clientY0: p.downClientY, clientX1: p.clientX, clientY1: p.clientY,
-          element: createBoxElement(), frame: 0, inside: []
-        };
+        if (!box) openBox(p);
+      },
+      up(p) {
+        // A long press that never moved: no box
+        if (box && box.pointerId === p.id) cancelBox();
       },
       drag(p) {
         if (!box || box.pointerId !== p.id) return;
@@ -48,18 +53,13 @@ export default {
       },
       dragend(p) {
         if (!box || box.pointerId !== p.id) return;
-        let base = box.base;
-        let inside = ctx.nodesInRect(box.x0, box.y0, box.x1, box.y1);
+        let next = new Set(box.base);
+        ctx.nodesInRect(box.x0, box.y0, box.x1, box.y1).forEach(node => next.add(node.id));
         closeBox();
-        let next = new Set(base);
-        inside.forEach(node => next.add(node.id));
-        if (!change(next, p)) show(base);
+        change(next, p);
       },
       cancel(p) {
-        if (!box || box.pointerId !== p.id) return;
-        let base = box.base;
-        closeBox();
-        show(base);
+        if (box && box.pointerId === p.id) cancelBox();
       },
       tap(e) {
         if (e.button !== 0) return false;
@@ -153,6 +153,24 @@ export default {
       ids.forEach(id => ctx.flags.set(id, SELECTED, true));
     }
 
+    function openBox(p) {
+      let adds = p.shiftKey || p.metaKey || p.ctrlKey;
+      box = {
+        pointerId: p.id, base: adds ? new Set(selected) : new Set(),
+        x0: p.downX, y0: p.downY, x1: p.x, y1: p.y,
+        clientX0: p.downClientX, clientY0: p.downClientY, clientX1: p.clientX, clientY1: p.clientY,
+        element: createBoxElement(), frame: 0
+      };
+      placeBox();
+      ctx.setCursor('crosshair', 2);
+    }
+
+    function cancelBox() {
+      let shown = selected;
+      closeBox();
+      show(shown);
+    }
+
     function previewBox() {
       if (!box) return;
       box.frame = 0;
@@ -172,17 +190,28 @@ export default {
     function placeBox() {
       if (!box.element) return;
       let left = Math.min(box.clientX0, box.clientX1), top = Math.min(box.clientY0, box.clientY1);
+      let width = Math.abs(box.clientX1 - box.clientX0), height = Math.abs(box.clientY1 - box.clientY0);
       let style = box.element.style;
+      if (width < 2 && height < 2) {
+        // A long press that hasn't moved yet: a ring under the pointer (or finger) says a box is coming
+        style.left = (box.clientX0 - 12) + 'px';
+        style.top = (box.clientY0 - 12) + 'px';
+        style.width = style.height = '24px';
+        style.borderRadius = '50%';
+        return;
+      }
+      style.borderRadius = '0';
       style.left = left + 'px';
       style.top = top + 'px';
-      style.width = Math.abs(box.clientX1 - box.clientX0) + 'px';
-      style.height = Math.abs(box.clientY1 - box.clientY0) + 'px';
+      style.width = width + 'px';
+      style.height = height + 'px';
     }
 
     function closeBox() {
       if (box.frame) cancelAnimationFrame(box.frame);
       if (box.element && box.element.parentNode) box.element.parentNode.removeChild(box.element);
       box = null;
+      ctx.setCursor(null);
     }
 
     function onGraphChanged(changes) {

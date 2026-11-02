@@ -5,10 +5,11 @@
 //   view.use(dragNodes);
 //   view.on('dragend', e => console.log(e.node.id, e.nodes.length, e.cancelled));
 //
-// A press grabs a node when it lands on the node's drawn disc. A press that only comes near a
-// node (within the picking reach, as taps and hover do) grabs it after a long press. So in a dense
-// graph at a small zoom, where every point is near some node, dragging moves the camera, and a
-// node is still one long press away.
+// The same rule holds for a mouse, a pen and a finger; only the picking reach differs (8, 10 and
+// 16+ pixels). A press grabs a node when it clearly lands on it: on its drawn disc, or nearer to it
+// than to any other node by at least half the reach. Where nodes crowd (a dense graph at a small
+// zoom, where every point is near several nodes) the press moves the camera instead, and a long
+// press grabs the nearest node.
 //
 // The node stays under the pointer while the camera moves (other fingers can pan and zoom), and
 // keeps its offset from the pointer. In 3D it moves on the plane through it that faces the
@@ -20,7 +21,7 @@
 //
 // Options:
 // - `pinOnDrop` (false): leave dropped nodes pinned. Nodes that were pinned stay pinned either way.
-// - `longPress` (true): a long press near a node grabs it.
+// - `longPress` (true): a long press near a node grabs it, also where nodes crowd.
 import {DRAGGED, SELECTED} from '../flags.js';
 
 export default {
@@ -37,7 +38,7 @@ export default {
       name: 'drag',
       priority: 20,
       cursor: 'grab',
-      press: p => grabs(p) && !!p.hit && p.hit.inside,
+      press: p => grabs(p) && !!p.hit && p.hit.clear,
       longpress(p) {
         if (!longPress || !grabs(p) || !p.node) return false;
         taken.set(p.id, p.node);

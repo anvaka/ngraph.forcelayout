@@ -21,7 +21,7 @@ import {createNodeProgram, createEdgeProgram} from './programs.js';
 import {TEXTURE_WIDTH, textureRows, packPositions, collectNodes, collectEdges} from './positions.js';
 import {createProjector, ORIGIN, Z_NORMAL} from './math.js';
 import {pickNode, nodesInRect} from './pick.js';
-import {createFlags, layoutFlags, SELECTED} from './flags.js';
+import {createFlags, layoutFlags, SELECTED, HOVERED} from './flags.js';
 import * as FLAGS from './flags.js';
 import {createInput, ViewEvent} from './input.js';
 import {createCamera} from './camera.js';
@@ -138,7 +138,8 @@ export default function createView(scene, options = {}) {
   if (options.input !== false) {
     camera = createCamera(scene, options.camera);
     input = createInput(canvas, {
-      pick: (x, y, p) => pick(x, y, {pointerType: p.pointerType, width: p.width}),
+      // A press of a mouse or pen picks the node it highlighted, if it is still within reach
+      pick: (x, y, p) => pick(x, y, {pointerType: p.pointerType, width: p.width, sticky: p.pointerType === 'touch' ? null : hoveredNode()}),
       emit: (name, e) => events.emit(name, e),
       hasListeners: name => events.has(name),
       scenePoint,
@@ -326,18 +327,30 @@ export default function createView(scene, options = {}) {
   /**
    * The node under a canvas point (CSS pixels from its top left corner), or null. `options`:
    * `pointerType` ('mouse', 'pen', 'touch') and `width` (contact width) set the reach; `reach`
-   * sets it in pixels; `sticky` (a node) gets a few more pixels. Returns {node, row, distance,
-   * inside, x, y, radius}: `distance` from the disc's edge in pixels, the disc on the canvas.
+   * sets it in pixels; `sticky` (a node) gets a few more pixels.
+   *
+   * Returns {node, row, distance, inside, clear, gap, x, y, radius}: `distance` from the disc's
+   * edge in pixels, the disc on the canvas. `clear`: the point is on the disc, or the next nearest
+   * node is at least half the reach farther (`gap` pixels). Where nodes crowd, a pick is not clear.
    */
   function pick(x, y, pickOptions = {}) {
     let state = pickState();
     if (!state || !state.count) return null;
     let distance = pickOptions.reach !== undefined ? pickOptions.reach : reachFor(pickOptions.pointerType, pickOptions.width);
+    let margin = distance / 2;
     let stickyRow = pickOptions.sticky ? rowOf(pickOptions.sticky.id) : -1;
-    let hit = pickNode(state, x, y, distance, stickyRow, stickyRow >= 0 ? STICKY : 0);
+    let hit = pickNode(state, x, y, distance, stickyRow, stickyRow >= 0 ? STICKY : 0, margin);
     if (!hit) return null;
     hit.node = nodeData.nodes[hit.row];
+    hit.clear = hit.inside || hit.gap >= margin;
     return hit.node ? hit : null;
+  }
+
+  // The hovered node, if one is
+  function hoveredNode() {
+    if (!flags.count(HOVERED)) return null;
+    let ids = flags.ids(HOVERED);
+    return ids.length === 1 ? graph.getNode(ids[0]) : null;
   }
 
   function reachFor(pointerType, width) {
@@ -658,3 +671,4 @@ export {HOVERED, SELECTED, DRAGGED, FOCUSED, NEIGHBOR, CUSTOM_1, CUSTOM_2} from 
 export {default as hoverNodes} from './modules/hover.js';
 export {default as dragNodes} from './modules/drag.js';
 export {default as selectNodes} from './modules/select.js';
+export {default as inspectNodes, describeNode} from './modules/inspect.js';
