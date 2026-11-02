@@ -1,0 +1,223 @@
+// What part of the canvas the user can see. Other elements can cover it (a settings panel, a
+// toolbar, a header), and part of it can be outside the window. The view finds out the way the
+// browser routes a press: a point of the canvas is visible when a click there would reach the
+// canvas. That needs no word from the app, and follows whatever the page does (a panel that opens
+// or scrolls, a window that shrinks).
+//
+// Elements marked `data-graph-overlay` don't count: the view's own tooltip, search box and help
+// card move with what they show. Elements with `pointer-events: none` don't count either, since
+// the browser looks through them.
+//
+// Hit testing a point costs about 2 µs, so the visible area is measured on a grid of about 1500
+// cells (30 px on a 1440×900 canvas, about 3 ms) only when asked, and kept for a moment.
+
+export const OVERLAY_ATTRIBUTE = 'data-graph-overlay';
+
+const CELLS = 1500;
+const MIN_CELL = 16;
+// How long a measured area is trusted (ms): repeated keys reuse it, a panel that opens is seen
+const MAX_AGE = 300;
+
+/**
+ * `canvas`: the element. `covered`: `(x, y) => boolean` in canvas CSS pixels, to say yourself
+ * what is hidden; by default the page is hit tested.
+ */
+export function createVisibility(canvas, covered) {
+  let test = covered || hitTest(canvas);
+  let cached = null;
+
+  return {
+    /** True when the canvas point (CSS pixels) is hidden */
+    covered(x, y) {
+      return test(x, y, canvasRect());
+    },
+    /** True when any point of a `step` lattice in the box is hidden */
+    coveredIn(x0, y0, x1, y1, step) {
+      let rect = canvasRect();
+      let nx = Math.max(1, Math.ceil((x1 - x0) / step)), ny = Math.max(1, Math.ceil((y1 - y0) / step));
+      for (let j = 0; j <= ny; ++j) {
+        for (let i = 0; i <= nx; ++i) {
+          if (test(x0 + (x1 - x0) * i / nx, y0 + (y1 - y0) * j / ny, rect)) return true;
+        }
+      }
+      return false;
+    },
+    /** The visible area, measured now or a moment ago (see measureArea) */
+    area() {
+      let rect = canvasRect();
+      let now = Date.now();
+      if (!cached || now - cached.time > MAX_AGE || cached.width !== rect.width || cached.height !== rect.height) {
+        cached = measureArea(rect.width, rect.height, (x, y) => test(x, y, rect));
+        cached.time = now;
+      }
+      return cached;
+    },
+    forget() {
+      cached = null;
+    }
+  };
+
+  function canvasRect() {
+    return canvas.getBoundingClientRect();
+  }
+}
+
+// A point is covered when the topmost element there (looking through the view's own overlays)
+// is not the canvas, or when it is outside the window
+function hitTest(canvas) {
+  let root = canvas.getRootNode ? canvas.getRootNode() : null;
+  if (!root || typeof root.elementFromPoint !== 'function') root = typeof document !== 'undefined' ? document : null;
+  if (!root) return () => false;
+  return (x, y, rect) => {
+    let clientX = rect.left + x, clientY = rect.top + y;
+    let top = root.elementFromPoint(clientX, clientY);
+    if (top === canvas) return false;
+    if (!top || !isOverlay(top)) return true;
+    let stack = root.elementsFromPoint(clientX, clientY);
+    for (let i = 0; i < stack.length; ++i) {
+      if (stack[i] === canvas) return false;
+      if (!isOverlay(stack[i])) return true;
+    }
+    return true;
+  };
+}
+
+function isOverlay(element) {
+  return !!(element.closest && element.closest('[' + OVERLAY_ATTRIBUTE + ']'));
+}
+
+/**
+ * The visible part of a `width` × `height` canvas as a grid: `covered(x, y)` (canvas pixels) is
+ * sampled at the centre of each cell. Returns an area with:
+ * - `cell`, `cols`, `rows`, `hidden` (1 per covered cell), `anyHidden`;
+ * - `clearance`: per cell, how many cells away the nearest covered cell is (along either axis);
+ * - `isHidden(x, y)`, `nearest(x, y, margin)`, `center()` below.
+ */
+export function measureArea(width, height, covered, cellSize) {
+  let cell = cellSize || Math.max(MIN_CELL, Math.ceil(Math.sqrt(width * height / CELLS)));
+  let cols = Math.max(1, Math.ceil(width / cell)), rows = Math.max(1, Math.ceil(height / cell));
+  let count = cols * rows;
+  let hidden = new Uint8Array(count);
+  let anyHidden = false, allHidden = true;
+  for (let r = 0; r < rows; ++r) {
+    let y = Math.min((r + 0.5) * cell, height - 0.5);
+    for (let c = 0; c < cols; ++c) {
+      let x = Math.min((c + 0.5) * cell, width - 0.5);
+      if (covered(x, y)) {
+        hidden[r * cols + c] = 1;
+        anyHidden = true;
+      } else {
+        allHidden = false;
+      }
+    }
+  }
+  let clearance = chebyshev(hidden, cols, rows);
+
+  return {
+    width, height, cell, cols, rows, hidden, clearance, anyHidden,
+    // Nothing is visible: the page covers the whole canvas (a transparent layer that takes the
+    // clicks, say). Then nobody can tell, and covers are ignored.
+    allHidden,
+    isHidden(x, y) {
+      let c = Math.floor(x / cell), r = Math.floor(y / cell);
+      if (c < 0 || r < 0 || c >= cols || r >= rows) return true;
+      return hidden[r * cols + c] === 1;
+    },
+    /**
+     * The visible point nearest (x, y) that is at least `margin` pixels inside the canvas and
+     * `margin` away from what covers it; with a smaller margin where nothing is that far in.
+     * Null when nothing is visible.
+     */
+    nearest(x, y, margin) {
+      if (allHidden) return null;
+      for (let m = margin; ; m /= 2) {
+        let spot = nearestAt(x, y, m < 1 ? 0 : m);
+        if (spot || m < 1) return spot;
+      }
+    },
+    /** The visible point farthest from what covers the canvas and from its edges, or null */
+    center() {
+      if (allHidden) return null;
+      let best = -1, bestRoom = -1, bestOff = Infinity;
+      for (let r = 0; r < rows; ++r) {
+        for (let c = 0; c < cols; ++c) {
+          let i = r * cols + c;
+          if (hidden[i]) continue;
+          let x = (c + 0.5) * cell, y = (r + 0.5) * cell;
+          let room = Math.min((clearance[i] - 0.5) * cell, x, y, width - x, height - y);
+          let off = Math.abs(x - width / 2) + Math.abs(y - height / 2);
+          if (room > bestRoom || (room === bestRoom && off < bestOff)) {
+            best = i; bestRoom = room; bestOff = off;
+          }
+        }
+      }
+      return best < 0 ? null : {x: Math.min((best % cols + 0.5) * cell, width), y: Math.min((Math.floor(best / cols) + 0.5) * cell, height)};
+    }
+  };
+
+  function nearestAt(x, y, margin) {
+    // Cells that are `margin` away from covered cells, all of them: `need` cells apart, the gap
+    // between them is (need - 1) cells. The edge of a cover is known to half a cell.
+    let need = margin > 0 ? margin / cell + 1 : 1;
+    let x0 = margin, y0 = margin, x1 = width - margin, y1 = height - margin;
+    if (x0 > x1 || y0 > y1) return null;
+    let best = null, bestDistance = Infinity;
+    for (let r = 0; r < rows; ++r) {
+      let top = Math.max(r * cell, y0), bottom = Math.min((r + 1) * cell, y1);
+      if (top > bottom) continue;
+      let py = Math.min(Math.max(y, top), bottom);
+      let dy = py - y;
+      if (dy * dy >= bestDistance) continue;
+      for (let c = 0; c < cols; ++c) {
+        let i = r * cols + c;
+        if (hidden[i] || clearance[i] < need) continue;
+        let left = Math.max(c * cell, x0), right = Math.min((c + 1) * cell, x1);
+        if (left > right) continue;
+        let px = Math.min(Math.max(x, left), right);
+        let d = (px - x) * (px - x) + dy * dy;
+        if (d < bestDistance) {
+          bestDistance = d;
+          best = {x: px, y: py};
+        }
+      }
+    }
+    return best;
+  }
+}
+
+// Per cell: the distance in cells (the larger of the two axes) to the nearest hidden cell. Hidden
+// cells get 0; with no hidden cell at all, every cell gets a large number.
+function chebyshev(hidden, cols, rows) {
+  let far = 65535;
+  let d = new Uint16Array(cols * rows);
+  for (let i = 0; i < d.length; ++i) d[i] = hidden[i] ? 0 : far;
+  for (let r = 0; r < rows; ++r) {
+    for (let c = 0; c < cols; ++c) {
+      let i = r * cols + c;
+      if (!d[i]) continue;
+      let v = d[i];
+      if (c > 0) v = Math.min(v, d[i - 1] + 1);
+      if (r > 0) {
+        v = Math.min(v, d[i - cols] + 1);
+        if (c > 0) v = Math.min(v, d[i - cols - 1] + 1);
+        if (c < cols - 1) v = Math.min(v, d[i - cols + 1] + 1);
+      }
+      d[i] = Math.min(v, far);
+    }
+  }
+  for (let r = rows - 1; r >= 0; --r) {
+    for (let c = cols - 1; c >= 0; --c) {
+      let i = r * cols + c;
+      if (!d[i]) continue;
+      let v = d[i];
+      if (c < cols - 1) v = Math.min(v, d[i + 1] + 1);
+      if (r < rows - 1) {
+        v = Math.min(v, d[i + cols] + 1);
+        if (c < cols - 1) v = Math.min(v, d[i + cols + 1] + 1);
+        if (c > 0) v = Math.min(v, d[i + cols - 1] + 1);
+      }
+      d[i] = Math.min(v, far);
+    }
+  }
+  return d;
+}

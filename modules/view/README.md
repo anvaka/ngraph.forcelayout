@@ -67,6 +67,9 @@ Options:
 * `input`: gesture thresholds, see [Gestures](#gestures). `input: false` leaves the scene's own
   w-gl controls in place; modules can't be used then.
 * `reach`: how far from a node, in pixels, a pointer still picks it (see [Picking](#picking)).
+* `occlusion` (true): what hides parts of the canvas, so the camera brings nodes out from under
+  it (see [What the user sees](#what-the-user-sees)). `false`: only the canvas edges count; a
+  function `(x, y) => boolean` says yourself whether a canvas point (CSS pixels) is hidden.
 
 Methods:
 
@@ -84,7 +87,10 @@ Methods:
 * `toScreen(x, y, z)`: where a point of the scene is on the canvas, in CSS pixels.
 * `labelOf(node)`: the node's label (see `nodeLabel`).
 * `reveal(node, {margin, animate})`: pan the camera so the node is in view, gliding unless the
-  user prefers reduced motion.
+  user prefers reduced motion. In view means inside the canvas and out from under what covers it,
+  `margin` (0.15 of the smaller side) away from both.
+* `visibleArea()`: the part of the canvas the user sees (see
+  [What the user sees](#what-the-user-sees)).
 * `getLayout()`, `getCamera()` (w-gl's map controls that the view drives).
 * `dispose()`: detach the modules, give the scene its own camera controls back, stop listening
   to the graph and the layout, and free the GPU resources.
@@ -101,8 +107,12 @@ go through one input layer that the camera and the modules share, so they never 
 gesture:
 
 * **Every pointer has one owner**, decided when it goes down. Modules are asked in priority order
-  whether they want it, with the node under it already picked; the camera takes the rest. One
-  finger can drag a node while two others pan and zoom.
+  whether they want it, with the node under it already picked; the camera takes the rest.
+* **Two fingers pinch**, wherever they land. A finger that lands while another is down goes to
+  the camera, and takes that other finger along, even from a node it was about to drag (the
+  node goes back). Only a finger that has committed to a gesture of its own keeps it: one that
+  long-pressed, or that has dragged for `pinchTime`. So one finger can hold a node while another
+  pans.
 * **A press stays undecided** until it moves past a small distance (then it is a drag for its
   owner) or lifts (then it is a tap). A long press is offered to every module while the press is
   undecided. Taps fire on release, at once: a double tap doesn't make single taps wait.
@@ -137,11 +147,39 @@ Rotation and tilt work only where the scene allows rotation. `camera` options: `
 * `doubleTapTime` (300 ms) and `doubleTapDistance` (`{mouse: 10, pen: 30, touch: 30}`).
 * `longPressTime` (500 ms).
 * `twoFingerTapTime` (400 ms).
+* `pinchTime` (250 ms): a finger that has dragged for less than this joins a pinch when another
+  one lands.
 
 The canvas gets `touch-action: none` (so the browser leaves gestures to the view), no text
 selection or iOS callout, and `tabindex="0"` so it takes keys after a press. Only keys a handler
 uses are prevented, and Tab never is. The browser's context menu is off on the canvas. Held keys
 are forgotten when the window loses focus. All of this is undone by `dispose()`.
+
+### What the user sees
+
+Part of the canvas may be hidden: a settings panel or a toolbar over it, or the part of a tall
+canvas that is scrolled out of the window. The view finds out the way the browser routes a click:
+a point of the canvas is visible when a click there would reach the canvas. The app doesn't have
+to say anything, and whatever the page does next (a panel that opens, a window that shrinks) is
+seen the next time.
+
+The camera uses this when it brings a node into view (`reveal()`, so keyboard focus and search):
+a node under the panel comes out, `margin` from the panel's edge as from the canvas's. Enter
+starts on the node nearest the middle of what shows.
+
+Hit testing costs about 2 µs a point. `reveal()` first looks at 25 points around where the node
+would go; only when one of them is covered does it measure the whole visible area, on a grid of
+about 1500 cells (30 px on a 1440 × 900 canvas, about 3 ms), kept for 300 ms.
+
+Elements marked `data-graph-overlay` don't count as covering (the view's tooltip, search box and
+help card have it: they move with what they show), nor do elements with `pointer-events: none`.
+Pass `occlusion: (x, y) => boolean` if the page can't be hit tested, such as an opaque element
+that lets clicks through, or `occlusion: false`.
+
+`view.visibleArea()` (and `ctx.visibleArea()`) returns the measured area: `isHidden(x, y)`,
+`nearest(x, y, margin)` (the visible point nearest a canvas point, `margin` inside),
+`center()` (the visible point farthest from covers and edges), `anyHidden`, and the grid (`cell`,
+`cols`, `rows`, `hidden`).
 
 ### Events
 
@@ -229,8 +267,9 @@ any other node. Where nodes crowd (a dense graph at a small zoom, where every po
 several nodes) a press moves the camera instead, and a long press grabs the nearest node. The
 hover cursor shows which one a press will do: `grab` or `pointer`.
 
-The node keeps its offset from the pointer, and stays under it while the camera moves (other
-fingers can pan and zoom). In 3D it moves on the plane through it that faces the camera. It works
+The node keeps its offset from the pointer, and stays under it while the camera moves (another
+finger can pan). Two fingers that land together pinch, also when the first landed on a node (see
+[Input](#input)). In 3D it moves on the plane through it that faces the camera. It works
 with the layout on the CPU or on WebGPU (through `setNodePosition()`), running or paused. API:
 `get()` (the nodes being dragged).
 
@@ -259,7 +298,7 @@ leaves it.
 
 | Key | Does |
 |---|---|
-| Enter | focuses the node nearest the middle of the view (or the selected one); on a focused node it is a tap: it selects (Shift adds, Cmd/Ctrl toggles) and keeps the tooltip open |
+| Enter | focuses the node nearest the middle of what shows (or the selected one); on a focused node it is a tap: it selects (Shift adds, Cmd/Ctrl toggles) and keeps the tooltip open |
 | Arrows | move focus to the nearest node in that direction; with no node focused they move the camera |
 | `]` and `[` | next and previous neighbour of the node the walk started from, strongest link first |
 | Space | walks into the focused node: its neighbours are next |
@@ -312,7 +351,7 @@ view.use(pinOnDoubleTap);
 
 `ctx` has `view`, `scene`, `graph`, `layout`, `flags`, `pick()`, `nodesInRect()`, `toScreen()`,
 `fromScreen(x, y, through)`, `screenPositions()` (every node on the canvas, one pass), `labelOf()`,
-`reveal()`, `emit(name, fields)`, `on(name, fn)`, `onFrame(fn)` (runs inside every frame, before
+`reveal()`, `visibleArea()`, `emit(name, fields)`, `on(name, fn)`, `onFrame(fn)` (runs inside every frame, before
 flags go to the GPU), `onCamera(fn)`, `setCursor(value, priority)`, `provide(name, api)` and
 `get(name)` (APIs modules share: navigate provides `focus` and `announce`), and `input`:
 

@@ -403,6 +403,79 @@ test('input: two fingers make no taps, and a quick two-finger tap is one gesture
   });
 });
 
+test('input: two fingers pinch, also when the first landed on a node', function (t) {
+  return input.then(function (i) {
+    var s = setup(i);
+    var touch = {pointerType: 'touch'};
+    s.core.add(s.recorder('nodes', 20, function (p) { return !!p.node; }));
+
+    // The first finger on a node, the second anywhere: the camera takes both
+    s.down(1, 100, 100, touch);
+    s.advance(40);
+    s.down(2, 300, 300, touch);
+    t.same(s.log, ['nodes.down', 'nodes.cancel', 'camera.down', 'camera.down']);
+    s.move(1, 80, 100, touch);
+    s.move(2, 340, 300, touch);
+    t.same(s.log.slice(4), ['camera.dragstart', 'camera.drag', 'camera.dragstart', 'camera.drag'], 'they move the camera');
+    s.up(1, 80, 100, touch);
+    s.up(2, 340, 300, touch);
+
+    // The other way round: the first on the background, the second on a node
+    s.log.length = 0;
+    s.down(1, 300, 300, touch);
+    s.down(2, 100, 100, touch);
+    t.same(s.log, ['camera.down', 'camera.down']);
+    s.up(1, 300, 300, touch);
+    s.up(2, 100, 100, touch);
+
+    // A drag that has just started joins the pinch: it is cancelled (the node goes back)
+    s.log.length = 0;
+    s.down(1, 100, 100, touch);
+    s.move(1, 115, 100, touch);
+    s.advance(100);
+    s.down(2, 300, 300, touch);
+    t.same(s.log, ['nodes.down', 'nodes.dragstart', 'nodes.drag', 'nodes.cancel', 'camera.down', 'camera.down']);
+    s.move(1, 130, 100, touch);
+    t.equal(s.log[s.log.length - 1], 'camera.drag', 'the camera moves with it now');
+    s.up(1, 130, 100, touch);
+    s.up(2, 300, 300, touch);
+  });
+});
+
+test('input: a finger that committed to a drag keeps it; the next finger is offered as usual', function (t) {
+  return input.then(function (i) {
+    var s = setup(i);
+    var touch = {pointerType: 'touch'};
+    s.core.add(s.recorder('nodes', 20, function (p) { return !!p.node; }, {
+      longpress: function (p) { s.log.push('nodes.longpress'); return !!p.node; }
+    }));
+
+    // Dragged for longer than pinchTime
+    s.down(1, 100, 100, touch);
+    s.move(1, 115, 100, touch);
+    s.advance(300);
+    s.down(2, 300, 300, touch);
+    t.same(s.log, ['nodes.down', 'nodes.dragstart', 'nodes.drag', 'camera.down'], 'the node stays; the new finger pans');
+    s.up(2, 300, 300, touch);
+    s.up(1, 115, 100, touch);
+
+    // Taken by a long press
+    s.log.length = 0;
+    s.down(1, 100, 100, touch);
+    s.advance(500);
+    s.down(2, 300, 300, touch);
+    t.same(s.log, ['nodes.down', 'nodes.longpress', 'camera.down']);
+    s.up(2, 300, 300, touch);
+    s.up(1, 100, 100, touch);
+
+    // A mouse and a finger don't pinch
+    s.log.length = 0;
+    s.down(1, 300, 300);
+    s.down(2, 100, 100, touch);
+    t.same(s.log, ['camera.down', 'nodes.down']);
+  });
+});
+
 test('input: cancels end the gesture once, and the pointer is ignored until it lifts', function (t) {
   return input.then(function (i) {
     var s = setup(i);
@@ -642,5 +715,67 @@ test('input: a tap from a key reaches the app first, then the handlers', functio
     s.core.add({priority: 10, tap: function (e) { seen.push('module:' + (e.shiftKey ? 'shift' : '')); }});
     s.core.tap({node: s.node, row: 0}, {pointerType: 'keyboard', button: 0, shiftKey: true});
     t.same(seen, ['app:keyboard:n', 'module:shift']);
+  });
+});
+
+var visible = import('../modules/view/visible.js');
+
+test('measureArea: what covers the canvas, the nearest visible spot, the middle of what shows', function (t) {
+  return visible.then(function (v) {
+    // A 400 x 300 canvas; a panel covers x < 100, y < 200
+    var area = v.measureArea(400, 300, function (x, y) { return x < 100 && y < 200; }, 20);
+    t.equal(area.cols, 20);
+    t.equal(area.rows, 15);
+    t.ok(area.anyHidden);
+    t.ok(area.isHidden(50, 50), 'under the panel');
+    t.notOk(area.isHidden(50, 250), 'below it');
+    t.ok(area.isHidden(-1, 10), 'outside the canvas');
+
+    // A point under the panel goes right out of it, `margin` from its edge
+    var spot = area.nearest(60, 100, 40);
+    t.same(spot, {x: 140, y: 100}, 'to the right of the panel, 40 px away');
+    spot = area.nearest(60, 190, 40);
+    t.same(spot, {x: 60, y: 240}, 'below it when that is nearer');
+    t.same(area.nearest(300, 150, 40), {x: 300, y: 150}, 'a visible point stays');
+    t.same(area.nearest(390, 150, 40), {x: 360, y: 150}, 'the canvas edges count too');
+
+    // With no room for the margin, a smaller one
+    spot = area.nearest(60, 100, 200);
+    t.ok(spot && !area.isHidden(spot.x, spot.y), 'somewhere visible all the same');
+
+    var middle = area.center();
+    t.notOk(area.isHidden(middle.x, middle.y), 'the middle of what shows is visible');
+    t.ok(middle.x > 200, 'away from the panel', middle);
+
+    var none = v.measureArea(400, 300, function () { return false; }, 20);
+    t.notOk(none.anyHidden);
+    t.same(none.nearest(10, 10, 40), {x: 40, y: 40}, 'just the canvas edges');
+    var c = none.center();
+    t.ok(Math.abs(c.x - 200) <= 10 && Math.abs(c.y - 150) <= 10, 'the middle of the canvas, within half a cell', c);
+
+    var all = v.measureArea(400, 300, function () { return true; }, 20);
+    t.ok(all.allHidden);
+    t.equal(all.nearest(10, 10, 40), null, 'nothing to go by');
+    t.equal(all.center(), null);
+  });
+});
+
+test('createVisibility: a function can say what is hidden; the area is measured once for a moment', function (t) {
+  return visible.then(function (v) {
+    var calls = 0;
+    var canvas = {getBoundingClientRect: function () { return {left: 0, top: 0, width: 400, height: 300}; }};
+    var visibility = v.createVisibility(canvas, function (x) { calls += 1; return x < 100; });
+    t.ok(visibility.covered(50, 50));
+    t.notOk(visibility.covered(150, 50));
+    t.ok(visibility.coveredIn(80, 0, 200, 100, 50), 'a lattice that reaches under the cover');
+    t.notOk(visibility.coveredIn(150, 0, 300, 100, 50));
+    calls = 0;
+    var first = visibility.area();
+    var measured = calls;
+    t.ok(measured > 100, 'about 1500 cells at most', measured);
+    t.equal(visibility.area(), first, 'the same area right after');
+    t.equal(calls, measured, 'no new hit tests');
+    visibility.forget();
+    t.notEqual(visibility.area(), first, 'measured again once forgotten');
   });
 });
