@@ -138,6 +138,9 @@ export default function createView(scene, options = {}) {
   let cameraHooks = new Set();
   // APIs modules share with each other (ctx.provide / ctx.get)
   let services = new Map();
+  // What modules draw after the nodes (labels), and whether one wants the next frame too
+  let layers = [];
+  let animating = false;
   let revealFrame = 0;
   let modules = [];
   let savedCursor = canvas.style ? canvas.style.cursor : '';
@@ -175,6 +178,13 @@ export default function createView(scene, options = {}) {
     invalidate,
     refresh,
     use,
+    /** The API of the attached module with this name (the last one attached), or null */
+    getModule(name) {
+      for (let i = modules.length - 1; i >= 0; --i) {
+        if (modules[i].module.name === name && modules[i].result) return modules[i].result;
+      }
+      return null;
+    },
     on: (name, fn) => { events.on(name, fn); return api; },
     off: (name, fn) => { events.off(name, fn); return api; },
     pick,
@@ -343,6 +353,30 @@ export default function createView(scene, options = {}) {
         cameraHooks.add(fn);
         cleanups.push(() => cameraHooks.delete(fn));
       },
+      /** WebGL of the scene, for layers: the context and ANGLE_instanced_arrays */
+      gl,
+      instancing,
+      /**
+       * Draws `layer.draw(frame)` after the nodes, in `layer.order` (default 0). `frame` has gl,
+       * instancing, positions (the texture, see positions.js), mvp, drawContext, style and time.
+       * `layer.dispose()` runs when the module goes.
+       */
+      addLayer(layer) {
+        if (layer.order === undefined) layer.order = 0;
+        layers.push(layer);
+        layers.sort((a, b) => a.order - b.order);
+        cleanups.push(() => {
+          let index = layers.indexOf(layer);
+          if (index >= 0) layers.splice(index, 1);
+          if (layer.dispose) layer.dispose();
+          scene.renderFrame();
+        });
+      },
+      /** Asks for another frame after this one (an animation, such as a fade, is running) */
+      animate() {
+        animating = true;
+        scene.renderFrame();
+      },
       /** The cursor this module wants (null: none). The highest `priority` wins. */
       setCursor(value, priority = 1) {
         record.cursor = value ? {value, priority} : null;
@@ -488,15 +522,17 @@ export default function createView(scene, options = {}) {
   }
 
   /**
-   * Where every node is on the canvas: {nodes, x, y, onScreen, width, height}. `x`, `y` (CSS
-   * pixels) are per row; `onScreen[row]` is 1 when the node is in front of the camera and inside
-   * the canvas. One pass over the nodes (about 0.6 ms at 100k).
+   * Where every node is on the canvas: {nodes, x, y, radius, onScreen, width, height, sizes}. `x`,
+   * `y` (CSS pixels) and `radius` (of the disc, pixels) are per row; `onScreen[row]` is 1 when the
+   * node is in front of the camera and inside the canvas; `sizes` are the nodes' diameters in
+   * scene units. One pass over the nodes (about 0.6 ms at 100k).
    */
   function screenPositions() {
     let state = pickState();
     if (!state) return {nodes: [], x: new Float32Array(0), y: new Float32Array(0), onScreen: new Uint8Array(0), width: 0, height: 0};
     let projected = projectAll(state);
     projected.nodes = nodeData.nodes;
+    projected.sizes = nodeData.sizes;
     return projected;
   }
 
@@ -564,9 +600,14 @@ export default function createView(scene, options = {}) {
     top.edges.width = edges.width;
     edgeProgram.draw(top.edges, positions, mvp, drawContext, style, 1);
     nodeProgram.draw(top.nodes, positions, mvp, drawContext, style, 1);
-    // A frame hook (or an app listener it called) changed something after it was read: the
-    // scene ignores renderFrame() inside a frame, so ask again once this frame is over
-    if (structureDirty || nodesDirty || edgesDirty || positionsDirty || flagsDirty) {
+    if (layers.length) {
+      let frame = {gl, instancing, positions, mvp, drawContext, style, time: performance.now()};
+      layers.forEach(layer => layer.draw(frame));
+    }
+    // A frame hook (or an app listener it called) changed something after it was read, or a
+    // layer animates: the scene ignores renderFrame() inside a frame, so ask again once it's over
+    if (structureDirty || nodesDirty || edgesDirty || positionsDirty || flagsDirty || animating) {
+      animating = false;
       Promise.resolve().then(() => scene.renderFrame());
     }
   }
@@ -794,3 +835,6 @@ export {default as selectNodes} from './modules/select.js';
 export {default as inspectNodes, describeNode} from './modules/inspect.js';
 export {default as navigateNodes, nearestInDirection, neighboursOf} from './modules/navigate.js';
 export {default as searchNodes, buildSearchIndex, findNodes} from './modules/search.js';
+export {default as labelNodes} from './modules/labels.js';
+export {placeLabels} from './labels/place.js';
+export {computeImportance, rankRows} from './labels/importance.js';

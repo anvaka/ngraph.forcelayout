@@ -14,8 +14,9 @@
 // else, so a highlight is never buried under faint links.
 import {createProgram, createBuffer, bindAttribute, unbindAttribute} from './gl.js';
 
-// Row `i` of the positions texture: xyz, and the node's flags in w
-const POSITION_OF = `
+// Row `i` of the positions texture: xyz, and the node's flags in w. Layers of modules (labels)
+// read positions the same way.
+export const POSITION_OF = `
   uniform highp sampler2D positions;
   uniform vec2 positionsSize;
   vec4 positionOf(float row) {

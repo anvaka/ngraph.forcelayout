@@ -644,3 +644,60 @@ test('input: a tap from a key reaches the app first, then the handlers', functio
     t.same(seen, ['app:keyboard:n', 'module:shift']);
   });
 });
+
+var place = import('../modules/view/labels/place.js');
+var importance = import('../modules/view/labels/importance.js');
+
+test('placeLabels: in order, beside the node, never overlapping unless forced', function (t) {
+  return place.then(function (m) {
+    var options = {width: 400, height: 300, gap: 3, padding: 2};
+    var label = function (row, x, y, extra) {
+      return Object.assign({row: row, x: x, y: y, radius: 5, width: 60, height: 16, anchor: null, forced: false}, extra);
+    };
+    var placed = m.placeLabels([label(0, 100, 100), label(1, 110, 100), label(2, 300, 200)], options);
+    t.same(placed.map(function (p) { return [p.row, p.anchor]; }), [[0, 'right'], [1, 'left'], [2, 'right']], 'the second takes another side');
+    t.same([placed[0].x, placed[0].y], [108, 92], 'right of the disc, centred');
+
+    // Five narrow labels on one spot: one on each side, then no room
+    var crowd = [0, 1, 2, 3, 4].map(function (row) { return label(row, 200, 150, {width: 30}); });
+    var tight = Object.assign({}, options, {padding: 0});
+    placed = m.placeLabels(crowd, tight);
+    t.same(placed.map(function (p) { return p.anchor; }), ['right', 'left', 'above', 'below'], 'no room for a fifth');
+    t.same([placed[2].x, placed[2].y], [185, 126], 'above: centred, over the disc');
+    crowd[4].forced = true;
+    t.equal(m.placeLabels(crowd, tight).length, 5, 'unless it is forced');
+    t.equal(m.placeLabels(crowd, options).length, 3, 'padding keeps the sides apart: two, and the forced one');
+
+    // A label placed last time tries its old side first
+    placed = m.placeLabels([label(0, 100, 100, {anchor: 'above'})], options);
+    t.equal(placed[0].anchor, 'above');
+    // Off the canvas: tries the other sides
+    placed = m.placeLabels([label(0, 395, 150)], options);
+    t.equal(placed[0].anchor, 'left', 'no room on the right at the edge');
+    // At most `max` (forced ones don't count)
+    placed = m.placeLabels([label(0, 50, 50, {forced: true}), label(1, 50, 150), label(2, 250, 150)], Object.assign({max: 1}, options));
+    t.same(placed.map(function (p) { return p.row; }), [0, 1]);
+  });
+});
+
+test('importance: degree, a data field, a function, pagerank', function (t) {
+  return importance.then(function (m) {
+    var graph = createGraph();
+    ['a', 'b', 'c', 'd'].forEach(function (id, i) { graph.addNode(id, {weight: 10 - i}); });
+    graph.addLink('a', 'b');
+    graph.addLink('a', 'c');
+    graph.addLink('a', 'd');
+    graph.addLink('c', 'd');
+    var rows = {a: 0, b: 1, c: 2, d: 3};
+    var rowOf = function (id) { return id in rows ? rows[id] : -1; };
+    t.same(Array.from(m.computeImportance(graph, rowOf, 4, 'degree')), [3, 1, 2, 2]);
+    t.same(Array.from(m.computeImportance(graph, rowOf, 4, 'weight')), [10, 9, 8, 7]);
+    t.same(Array.from(m.computeImportance(graph, rowOf, 4, function (node) { return node.id === 'b' ? 5 : 0; })), [0, 5, 0, 0]);
+    var pr = m.computeImportance(graph, rowOf, 4, 'pagerank');
+    t.ok(pr[0] > pr[2] && pr[2] > pr[1], 'the hub ranks first, the leaf last');
+    t.ok(Math.abs(pr[0] + pr[1] + pr[2] + pr[3] - 1) < 1e-9, 'ranks sum to 1');
+    t.same(Array.from(m.rankRows(new Float64Array([3, 1, 2, 2]))), [0, 2, 3, 1], 'most important first, ties by row');
+    var empty = m.computeImportance(graph, rowOf, 5, 'degree');
+    t.equal(empty[4], -Infinity, 'a row with no node');
+  });
+});
