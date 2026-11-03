@@ -468,7 +468,8 @@ box first opens. Fires `search` ({node, query}). API: `open(text)`, `close()`, `
 the camera keeps the whole drawing in view, inside the part of the canvas that nothing covers
 (see [What the user sees](#what-the-user-sees)), until the user moves it. The drawing's bulk is
 framed (a few far pieces don't shrink the rest), labels get room at the sides, a 3D layout is
-tilted once, and a settled 2D drawing turns to the screen's long side. A free area smaller than
+tilted once, and a settled 2D drawing turns to the screen's long side (not while the visitor
+points at a node: it doesn't turn under a resting pointer, a focus or a selection). A free area smaller than
 `minRoom` (120 px) each way, such as the strip above a soft keyboard, doesn't move the camera, and
 neither does a free area that grows a little without making the drawing bigger (a line of a
 phone's panel folding away), so the labels stay where they are. It snaps under

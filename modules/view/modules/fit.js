@@ -22,6 +22,10 @@
 // - In 2D, once the layout settles, it turns the view so the drawing's long side runs along the
 //   long side of what shows (`orient`), when that shows it clearly larger: a wide drawing on a
 //   tall phone screen stands up. Force layouts have no up, so turning the view loses nothing.
+//   Not while the visitor points at a node (hovered, focused, dragged or selected): the drawing
+//   doesn't turn under them.
+
+import {HOVERED, SELECTED, DRAGGED, FOCUSED} from '../flags.js';
 
 // Pixels the middle of the free area may move, as it grows, before the drawing follows it
 const SMALL_SHIFT = 32;
@@ -182,8 +186,11 @@ export default {
       if (isStable && following && settings.orient) orient();
     }
 
-    // Turns the view (2D) so the drawing's main axis runs along the free area's long side
+    // Turns the view (2D) so the drawing's main axis runs along the free area's long side. Not
+    // while the visitor points at something (a resting pointer, focus, a drag, a selection): the
+    // drawing doesn't turn under them, and the turn is skipped
     function orient() {
+      if (ctx.flags && ctx.flags.ids(HOVERED | FOCUSED | DRAGGED | SELECTED).length) return;
       let cam = controls();
       let store = ctx.layout && ctx.layout.simulator && ctx.layout.simulator.store;
       if (!cam || !cam.allowRotation || !store || store.D !== 2 || store.n < 3 || angles().theta > 0.05) return;
