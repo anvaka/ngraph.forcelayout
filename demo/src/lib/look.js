@@ -31,8 +31,9 @@ const LOOK = {
   linkRGB: 0xffffff,
   // Opacity links should add to a pixel where they crowd most (the 90th percentile of a grid)
   linkInk: 0.25,
-  // Alpha range: 1/255 lets a 200k-link hairball show its texture
-  linkAlpha: [1 / 255, 0.5],
+  // Alpha range. Below 1/255 links are thinned (look.js thinned()), so the low end is a share of
+  // links drawn at 1/255: a 200k-link hairball on a phone keeps its texture
+  linkAlpha: [0.05 / 255, 0.5],
   // Links inside a category take its color; links between categories are this much fainter
   crossLinkShare: 0.6,
   linkWidth: 2,
@@ -103,7 +104,7 @@ export function colorsOf(graph) {
   let linkRGB = ((LOOK.linkRGB << 8) >>> 0);
   let ownLinks = meta.linkColors ? linkColorsOf(meta.linkColors) : null;
   if (!field) {
-    return {nodeColor: plain, legend: null, linkColor: alpha => ownLinks ? withOwn(ownLinks, alpha, linkRGB) : (linkRGB | alphaByte(alpha)) >>> 0};
+    return {nodeColor: plain, legend: null, linkColor: thinned(alpha => ownLinks ? withOwn(ownLinks, alpha, linkRGB) : (linkRGB | alphaByte(alpha)) >>> 0)};
   }
   let counts = new Map();
   graph.forEachNode(node => {
@@ -132,7 +133,7 @@ export function colorsOf(graph) {
     let value = node.data && node.data[field];
     return rgba.get(value) || other;
   };
-  let linkColor = alpha => {
+  let linkColor = thinned(alpha => {
     let a = alphaByte(alpha);
     let cross = (linkRGB | alphaByte(alpha * LOOK.crossLinkShare)) >>> 0;
     if (ownLinks) return withOwn(ownLinks, alpha, cross);
@@ -142,7 +143,7 @@ export function colorsOf(graph) {
       if (a1 === undefined || a1 !== a2 || !rgba.has(a1)) return cross;
       return ((rgba.get(a1) & 0xffffff00) | a) >>> 0;
     };
-  };
+  });
   return {nodeColor, linkColor, legend};
 }
 
@@ -189,6 +190,31 @@ function withOwn(own, alpha, fallback) {
     let color = own(link.data);
     return color ? ((color & 0xffffff00) | a) >>> 0 : fallback;
   };
+}
+
+// Below the smallest alpha an 8-bit canvas can blend (1/255), links are thinned instead: a share
+// of them, picked by a hash of their ends (the same ones every time), is drawn at 1/255 and the
+// rest not at all. A hairball on a phone then keeps the texture a bigger screen shows, where
+// every link at 1/255 would still add up to a flat disc.
+function thinned(colorOf) {
+  let floor = 1 / 255;
+  return alpha => {
+    if (alpha >= floor) return colorOf(alpha);
+    let keep = alpha / floor, color = colorOf(floor);
+    let colorFn = typeof color === 'function' ? color : () => color;
+    return link => hashOf(link) < keep ? colorFn(link) : ((colorFn(link) & 0xffffff00) >>> 0) || 0xffffff00;
+  };
+}
+
+let hashes = new WeakMap();
+function hashOf(link) {
+  let h = hashes.get(link);
+  if (h !== undefined) return h;
+  let text = String(link.fromId) + ':' + String(link.toId), x = 2166136261;
+  for (let i = 0; i < text.length; ++i) x = Math.imul(x ^ text.charCodeAt(i), 16777619);
+  h = (x >>> 0) / 4294967296;
+  hashes.set(link, h);
+  return h;
 }
 
 function alphaByte(alpha) {
