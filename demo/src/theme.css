@@ -526,21 +526,22 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
   /* Code values: a 44 px tall hit area without moving the code's lines. The dotted underline
      and the field are painted at the text, not at the padded box's edge */
   .code .value, .code select {
-    padding: 10px 4px;
+    padding: 10px 2px;
     margin: -10px 0;
+    line-height: 1.3;
     border-bottom: none;
-    background: linear-gradient(to right, var(--text-3) 50%, transparent 0) left 4px bottom 9px / 4px 1px repeat-x;
+    background: linear-gradient(to right, var(--text-3) 50%, transparent 0) left 2px bottom 10px / 4px 1px repeat-x;
   }
   .code .value:hover, .code select:hover {
-    background: linear-gradient(to right, var(--text-3) 50%, transparent 0) left 4px bottom 9px / 4px 1px repeat-x,
+    background: linear-gradient(to right, var(--text-3) 50%, transparent 0) left 2px bottom 10px / 4px 1px repeat-x,
       linear-gradient(var(--field), var(--field)) content-box;
   }
   .code .value:focus, .code select:focus {
-    background: linear-gradient(var(--accent), var(--accent)) left 4px bottom 9px / calc(100% - 8px) 1px no-repeat,
+    background: linear-gradient(var(--accent), var(--accent)) left 2px bottom 10px / calc(100% - 4px) 1px no-repeat,
       linear-gradient(var(--field-focus), var(--field-focus)) content-box;
   }
   .code .changed .value, .code .changed select, .code .value.changed {
-    background: linear-gradient(var(--accent), var(--accent)) left 4px bottom 9px / calc(100% - 8px) 1px no-repeat,
+    background: linear-gradient(var(--accent), var(--accent)) left 2px bottom 10px / calc(100% - 4px) 1px no-repeat,
       linear-gradient(var(--accent-field), var(--accent-field)) content-box;
   }
 }
