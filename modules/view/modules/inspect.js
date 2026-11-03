@@ -54,6 +54,8 @@ const NARROW = 560, DOCK_HEIGHT = 150, DOCK_ROOM = 150;
 // Smaller caps a card takes when it fits nowhere at its own size; it scrolls (and fades at its
 // edge) instead. On a narrow canvas only the heights apply.
 const COMPACT = [{width: 220, height: 110}, {width: 160, height: 72}];
+// Pixels of a scrolling card's fade at its bottom edge
+const FADE = 28;
 
 function boxBeside(side, at, width, height) {
   let right = side.endsWith('right'), below = side.startsWith('below');
@@ -98,6 +100,7 @@ export default {
     let content = options.content || (node => describeNode(node, ctx.graph, ctx.labelOf ? ctx.labelOf(node) : undefined));
     let card = null;
     let natural = null;
+    let fade = null;
     // What is shown: {node, pinned, source} (source: 'hover', 'focus' or 'tap')
     let shown = null;
     let overCard = false;
@@ -341,16 +344,28 @@ export default {
       return best;
     }
 
-    // A docked card that scrolls fades out at its bottom edge while there is more below, so the
-    // last visible line doesn't look cut
+    // A card that scrolls fades out at its bottom edge while there is more below, so the last
+    // visible line doesn't look cut: a strip in the card's own colour sticks to its bottom, so
+    // the fade hides the text under it and nothing behind the card shows through
     function fadeIfMore() {
       if (!card) return;
       let more = card.scrollHeight - card.clientHeight - card.scrollTop > 1;
-      let mask = more ? 'linear-gradient(to bottom, #000 calc(100% - 28px), transparent)' : '';
-      if (card.style.webkitMaskImage !== mask) {
-        card.style.webkitMaskImage = mask;
-        card.style.maskImage = mask;
+      if (!more) {
+        if (fade) fade.style.display = 'none';
+        return;
       }
+      if (!fade) {
+        fade = document.createElement('div');
+        fade.setAttribute('aria-hidden', 'true');
+      }
+      // fill() empties the card
+      if (fade.parentNode !== card) card.appendChild(fade);
+      let style = getComputedStyle(card);
+      let color = style.backgroundColor;
+      let rgb = (color.match(/[\d.]+/g) || [0, 0, 0]).slice(0, 3).join(',');
+      fade.style.cssText = 'display:block;position:sticky;pointer-events:none;height:' + FADE + 'px;' +
+        'bottom:-' + style.paddingBottom + ';margin:-' + FADE + 'px -' + style.paddingRight + ' -' + style.paddingBottom + ' -' + style.paddingLeft + ';' +
+        'background:linear-gradient(to bottom, rgba(' + rgb + ',0), ' + color + ');';
     }
 
     // The card sits over the canvas: the wheel over it zooms the drawing, as it would without the
