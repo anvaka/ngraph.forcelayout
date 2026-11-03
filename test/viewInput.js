@@ -791,6 +791,11 @@ test('placeLabels: in order, beside the node, never overlapping unless forced', 
     t.same(placed.map(function (p) { return [p.row, p.anchor]; }), [[0, 'right']], 'right of the cover, none under it');
     placed = m.placeLabels([label(0, 100, 200, {forced: true})], Object.assign({blocked: blocked}, options));
     t.equal(placed.length, 1, 'a forced label goes anyway');
+    // A forced label takes a side where it fits: not cut at the canvas edge, clear of others
+    placed = m.placeLabels([label(0, 395, 150, {forced: true})], options);
+    t.equal(placed[0].anchor, 'left', 'a selected node at the right edge: its name goes left');
+    placed = m.placeLabels([label(0, 100, 100), label(1, 110, 100, {forced: true})], options);
+    t.same(placed.map(function (p) { return p.anchor; }), ['right', 'left'], 'and clear of a label placed already');
 
     // A layout jiggles: two labels shown last time end up 1 px apart (padding asks for 2)
     var near = [label(0, 100, 100, {anchor: 'right'}), label(1, 100, 117, {anchor: 'right'})];

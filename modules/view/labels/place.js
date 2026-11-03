@@ -43,17 +43,12 @@ export function placeLabels(candidates, options) {
     // Too near the node of a label placed already (more important, or shown last time)
     if (spacing && !c.forced && spacing.near(c.x, c.y, !!c.anchor)) continue;
     let first = c.anchor && ANCHOR_INDEX[c.anchor] !== undefined ? c.anchor : null;
-    for (let k = first ? -1 : 0; k < ANCHORS.length; ++k) {
-      let anchor = k < 0 ? first : ANCHORS[k];
-      if (k >= 0 && anchor === first) continue;
+    // A forced label goes anyway, but where it fits if it can: clear of the others, else inside
+    // the canvas (a selected node's name isn't cut at the edge), else on its first side
+    for (let level = 2; level >= (c.forced ? 0 : 2); --level) {
+      let anchor = sideThatFits(c, first, level);
+      if (!anchor) continue;
       boxBeside(c, anchor, gap, box);
-      if (!c.forced) {
-        if (box.x < -margin || box.y < -margin || box.x + box.width > options.width + margin ||
-            box.y + box.height > options.height + margin) continue;
-        // Only on the side it had: a label that has to move is placed like a new one
-        if (grid.collides(box, anchor === first ? padding - slack : padding)) continue;
-        if (blocked && blocked(box)) continue;
-      }
       grid.add(box);
       if (spacing) spacing.add(c.x, c.y);
       placed.push({row: c.row, anchor, x: box.x, y: box.y, width: box.width, height: box.height});
@@ -62,6 +57,24 @@ export function placeLabels(candidates, options) {
     }
   }
   return placed;
+
+  // The first side (the one it had first) where the label fits: level 2 clear of everything,
+  // 1 inside the canvas and not blocked, 0 anywhere
+  function sideThatFits(c, first, level) {
+    for (let k = first ? -1 : 0; k < ANCHORS.length; ++k) {
+      let anchor = k < 0 ? first : ANCHORS[k];
+      if (k >= 0 && anchor === first) continue;
+      if (level === 0) return anchor;
+      boxBeside(c, anchor, gap, box);
+      if (box.x < -margin || box.y < -margin || box.x + box.width > options.width + margin ||
+          box.y + box.height > options.height + margin) continue;
+      if (blocked && blocked(box)) continue;
+      // Only on the side it had: a label that has to move is placed like a new one
+      if (level === 2 && grid.collides(box, anchor === first ? padding - slack : padding)) continue;
+      return anchor;
+    }
+    return null;
+  }
 }
 
 /**
