@@ -446,6 +446,11 @@ body.drag-over::after {
   }
   .about-line .credit {
     max-width: calc(100vw - 132px);
+    /* it sits over the drawing: on the panel's colour, so nodes behind it don't swallow it */
+    padding: 1px 6px;
+    margin-left: -6px;
+    border-radius: 4px;
+    background: var(--panel, rgb(12, 41, 82));
   }
 }
 
