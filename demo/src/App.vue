@@ -15,7 +15,7 @@
         <button type='button' class='install' @click='copyInstall' :title='installNote || "Copy the install command"'
           :aria-label='"Copy the install command: " + installLine'><code>{{copied ? 'copied' : installLine}}</code></button>
       </div>
-      <p class='pitch' v-if='showPitch'><span class='long'>{{pitch}}</span><span class='short'>{{pitchShort}}</span></p>
+      <p class='pitch' v-if='showPitch'>{{pitchShort}}</p>
     </div>
     <div class='layout-box'>
       <div class='buttons graph-row'>
@@ -136,7 +136,7 @@
 import createGraphScene from './lib/createGraphScene';
 import {graphGroups, graphTitle} from './lib/getAvailableGraphs';
 import graphInfo from './lib/graphInfo';
-import {libraryDefaultLabel, libraryDefaultsLabel, pitch, pitchShort, installLine, installNote} from './lib/release';
+import {libraryDefaultLabel, libraryDefaultsLabel, pitchShort, installLine, installNote} from './lib/release';
 import loadDroppedGraph from './lib/loadDroppedGraph';
 import CodeSettings from './components/CodeSettings.vue';
 import './styles/layout.css';
@@ -618,7 +618,6 @@ export default {
       installLine,
       installNote,
       showPitch: true,
-      pitch,
       pitchShort,
       graphGroups,
       libraryDefaultLabel,

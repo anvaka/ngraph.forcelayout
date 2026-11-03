@@ -766,6 +766,13 @@ test('placeLabels: in order, beside the node, never overlapping unless forced', 
     t.same(placed.map(function (p) { return [p.row, p.anchor]; }), [[0, 'right']], 'right of the cover, none under it');
     placed = m.placeLabels([label(0, 100, 200, {forced: true})], Object.assign({blocked: blocked}, options));
     t.equal(placed.length, 1, 'a forced label goes anyway');
+
+    // A layout jiggles: two labels shown last time end up 1 px apart (padding asks for 2)
+    var near = [label(0, 100, 100, {anchor: 'right'}), label(1, 100, 117, {anchor: 'right'})];
+    t.same(m.placeLabels(near, options).map(function (p) { return p.anchor; }), ['right', 'left'], 'without slack the second one jumps');
+    t.same(m.placeLabels(near, Object.assign({slack: 3}, options)).map(function (p) { return p.anchor; }), ['right', 'right'], 'with slack it stays');
+    var fresh = [label(0, 100, 100, {anchor: 'right'}), label(1, 100, 117)];
+    t.same(m.placeLabels(fresh, Object.assign({slack: 3}, options)).map(function (p) { return p.anchor; }), ['right', 'left'], 'a new label gets no slack');
   });
 });
 
