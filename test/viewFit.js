@@ -43,13 +43,13 @@ test('layoutBounds frames the bulk when a few nodes are far away', function (t) 
     });
     var all = m.layoutBounds(layout);
     t.equal(all.maxX, 1000, 'every node without a bulk share');
-    var bulk = m.layoutBounds(layout, 0.01, 1.3);
+    var bulk = m.layoutBounds(layout, 0.01, 2);
     t.ok(bulk.maxX < 20 && bulk.minX > -20, 'the far pair is left out: ' + bulk.minX + '..' + bulk.maxX);
     t.ok(bulk.maxY >= 18, 'the patch stays whole');
     // a compact drawing keeps every node
     layout.setNodePosition(198, 9, 19);
     layout.setNodePosition(199, 0, 19);
-    var compact = m.layoutBounds(layout, 0.01, 1.3);
+    var compact = m.layoutBounds(layout, 0.01, 2);
     t.same([compact.minX, compact.maxX], [0, 9], 'nothing is trimmed when the box is not much larger');
     t.end();
   });

@@ -33,6 +33,7 @@
 //
 // API: focus(node), get(), clear(), announce(text).
 import {FOCUSED, SELECTED, DRAGGED} from '../flags.js';
+import {placeOverCanvas} from '../visible.js';
 
 const DIRECTIONS = {
   ArrowRight: {x: 1, y: 0, name: 'to the right'},
@@ -477,13 +478,11 @@ export default {
       });
       help.style.overflowY = 'auto';
       document.body.appendChild(help);
-      // Top left of what shows: out from under a panel, and clear of buttons along the bottom
-      let rect = canvas.getBoundingClientRect();
+      // At the top of what shows, not under a panel, and clear of buttons along the bottom
       let area = ctx.visibleArea && ctx.visibleArea();
-      let free = (area && area.largestRect()) || {x: 0, y: 0, width: rect.width, height: rect.height};
-      help.style.left = (rect.left + free.x + 12) + 'px';
-      help.style.top = (rect.top + free.y + 12) + 'px';
-      help.style.maxHeight = Math.max(120, free.height - 24 - 56) + 'px';
+      let free = area && area.largestRect();
+      if (free) help.style.maxHeight = Math.max(120, free.height - 24 - 56) + 'px';
+      placeOverCanvas(help, canvas, area, 'top');
       say('Keys: ' + keys.map(([name, what]) => `${name}: ${what}`).join('. ') + '. Gestures: ' +
         GESTURES.map(([gesture, what]) => `${gesture}: ${what}`).join('. ') + '.');
     }

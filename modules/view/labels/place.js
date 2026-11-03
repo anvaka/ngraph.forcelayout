@@ -14,7 +14,8 @@ export const ANCHOR_INDEX = {right: 0, left: 1, above: 2, below: 3};
  *
  * `options`: width, height (the canvas), gap (pixels between the disc and the label, 3),
  * padding (pixels kept free around each label, 2), margin (pixels past the canvas edges where
- * labels may still go, 0), max (labels at most, not counting forced ones), cell (grid cell, 32).
+ * labels may still go, 0), max (labels at most, not counting forced ones), cell (grid cell, 32),
+ * blocked (`box => boolean`: true where a label can't go, such as under a panel; optional).
  *
  * Returns [{row, anchor, x, y, width, height}]: the placed labels' boxes (top left corner).
  */
@@ -23,6 +24,7 @@ export function placeLabels(candidates, options) {
   let padding = options.padding !== undefined ? options.padding : 2;
   let margin = options.margin || 0;
   let max = options.max !== undefined ? options.max : Infinity;
+  let blocked = options.blocked;
   let grid = createGrid(options.width, options.height, options.cell || 32, margin);
   let placed = [];
   let free = 0;
@@ -39,6 +41,7 @@ export function placeLabels(candidates, options) {
         if (box.x < -margin || box.y < -margin || box.x + box.width > options.width + margin ||
             box.y + box.height > options.height + margin) continue;
         if (grid.collides(box, padding)) continue;
+        if (blocked && blocked(box)) continue;
       }
       grid.add(box);
       placed.push({row: c.row, anchor, x: box.x, y: box.y, width: box.width, height: box.height});
