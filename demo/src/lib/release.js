@@ -15,5 +15,5 @@ export const libraryDefaultLabel = RELEASED ? 'library default' : 'library defau
 export const libraryDefaultsLabel = RELEASED ? 'library defaults' : 'library defaults on main';
 
 export const pitch = 'Force-directed graph layout for JavaScript. 2D, 3D, any dimension. WebGPU add-on.';
-// The same in one line of a phone
-export const pitchShort = 'Force-directed graph layout for JavaScript, any dimension.';
+// The line under the name and the install line: one line on a phone and in the 360 px panel
+export const pitchShort = 'Force-directed graph layout for JavaScript.';
