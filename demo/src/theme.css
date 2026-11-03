@@ -528,7 +528,6 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
   align-items: center;
   flex-wrap: wrap;
   gap: 6px 12px;
-  margin-top: 10px;
   font-size: 12px;
 }
 .code-actions button { flex: none; height: 28px; font-size: 12px; }
@@ -566,4 +565,46 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
    only their surface */
 .sheet {
   background: var(--panel);
+}
+
+/* The way out at the end of Settings: a quiet field with the accent, like the active half of a
+   switch */
+.settings-done {
+  height: var(--row);
+  padding: 0 16px;
+  border: none;
+  border-radius: var(--radius-field);
+  background: var(--accent-field);
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.settings-done:hover { background: rgba(127, 231, 239, 0.2); }
+
+/* The fold (phones, phones on their side, touch tablets): a grip under the panel; folded, the
+   graph's name and a quiet "Show" chip with a chevron */
+.panel-fold { color: var(--text); }
+.panel-fold .grip { background: var(--line-strong); }
+.panel-fold:hover .grip, .panel-fold:focus-visible .grip { background: var(--text-3); }
+.panel-fold .fold-chevron {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px 0 10px;
+  border-radius: var(--radius-field);
+  background: var(--field);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 400;
+}
+.panel-fold .fold-chevron::after {
+  content: '';
+  width: 5px;
+  height: 5px;
+  margin-top: -3px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
 }
