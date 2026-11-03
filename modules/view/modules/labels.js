@@ -140,6 +140,8 @@ export default {
       textColor: rgba(settings.color), haloColor: rgba(settings.halo)};
 
     let pending = true;
+    // The layout or the camera moved since the last placement
+    let moved = true;
     let last = -Infinity;
     // The canvas at the last placement (CSS pixels)
     let canvasSize = {width: 0, height: 0};
@@ -248,7 +250,10 @@ export default {
         ranked = null;
         pending = true;
       }
-      if (change.positions || change.camera || change.structure) boxCache = null;
+      if (change.positions || change.camera || change.structure) {
+        boxCache = null;
+        moved = true;
+      }
       let now = performance.now();
       if (pending) {
         place(now);
@@ -310,13 +315,19 @@ export default {
       let covered = coveredTest(ctx.visibleArea());
       let spacing = spacingFor(settings.spacing, screen, max);
       let fadingOut = fadingBoxes(screen, now);
-      let placed = placeLabels(candidates(screen, max), {
+      let list = candidates(screen, max);
+      moved = false;
+      let placed = placeLabels(list, {
         width: screen.width, height: screen.height, gap: settings.gap, padding: paddingFor(settings.padding, screen), slack: SLACK, max,
         spacing,
         // No new name prints over one still fading out
         blocked: fadingOut.length ? box => (covered && covered(box)) || overlapsAny(box, fadingOut) : covered
       });
+      let waiting = placed.length;
       placed = withoutOverprint(placed, screen);
+      // Labels that wait for a dropped one to fade come at the next placement: make sure there is
+      // one, also when nothing moves any more
+      if (placed.length < waiting) schedule(settings.fade + 20);
       canvasSize.width = screen.width;
       canvasSize.height = screen.height;
       apply(placed, screen, now);
@@ -365,8 +376,11 @@ export default {
       // biggest names arrive at once and stay while the layout runs
       let topCount = 0;
       while (topCount < ranked.order.length && ranked.tier[ranked.order[topCount]] === 0) topCount += 1;
-      // (those shown last time first, so two landmarks of one cluster don't take turns)
-      for (let pass = 0; pass < 2; ++pass) {
+      // (those shown last time first, so two landmarks of one cluster don't take turns). On a still
+      // drawing (nothing moved since the last placement: a panel folded, a tap cleared the
+      // selection) only those shown: a label on screen never makes way for a newcomer there
+      let still = !moved;
+      for (let pass = 0; pass < (still ? 1 : 2); ++pass) {
         for (let i = 0; i < topCount; ++i) {
           let row = ranked.order[i];
           if (!screen.onScreen[row]) continue;
