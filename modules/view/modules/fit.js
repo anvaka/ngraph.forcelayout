@@ -235,7 +235,6 @@ export default {
       let cam = controls(), layout = ctx.layout;
       if (!cam || !layout || !node || !layout.getBody(node.id)) return false;
       let p = layout.getNodePosition(node.id);
-      let at = [p.x, p.y || 0, p.z || 0];
       // How long its links are: the median, in layout units
       let lengths = [];
       ctx.graph.forEachLinkedNode(node.id, other => {
@@ -260,8 +259,13 @@ export default {
       let free = (area && area.largestRect()) || {x: 0, y: 0, width: rect.width, height: rect.height};
       let dx = -(free.x + free.width / 2 - rect.width / 2) / ppu(r);
       let dy = -(free.y + free.height / 2 - rect.height / 2) / ppu(r);
-      let m = view.cameraWorld;
-      let to = [at[0] + m[0] * dx - m[4] * dy, at[1] + m[1] * dx - m[5] * dy, at[2] + m[2] * dx - m[6] * dy];
+      let m = Array.from(view.cameraWorld);
+      // where the camera looks for the node where it is now (a running layout moves it)
+      let target = () => {
+        let q = layout.getNodePosition(node.id);
+        let x = q.x, y = q.y || 0, z = q.z || 0;
+        return [x + m[0] * dx - m[4] * dy, y + m[1] * dx - m[5] * dy, z + m[2] * dx - m[6] * dy];
+      };
       setFollowing(false);
       if (gliding) cancelAnimationFrame(gliding);
       let start = performance.now();
@@ -270,6 +274,7 @@ export default {
         gliding = 0;
         let t = time > 0 ? Math.min(1, (performance.now() - start) / time) : 1;
         let e = t < 1 ? 1 - Math.pow(1 - t, 3) : 1;
+        let to = target();
         place(from.center.map((v, i) => v + (to[i] - v) * e), from.r * Math.pow(r / from.r, e));
         if (t < 1) gliding = requestAnimationFrame(step);
       };
