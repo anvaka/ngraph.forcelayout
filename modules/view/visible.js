@@ -30,7 +30,18 @@ const STALE_ON = ['pointerup', 'keyup', 'click', 'scroll', 'transitionend', 'ani
 export function createVisibility(canvas, covered) {
   let test = covered || hitTest(canvas);
   let cached = null;
-  let forget = () => { cached = null; };
+  let listeners = new Set();
+  let notifying = 0;
+  // After the page had a chance to change: the app's own handlers of this event, and its
+  // re-render, run first
+  let notify = () => {
+    notifying = 0;
+    listeners.forEach(fn => fn());
+  };
+  let forget = () => {
+    cached = null;
+    if (listeners.size && !notifying) notifying = setTimeout(notify, 0);
+  };
   let doc = typeof document !== 'undefined' ? document : null;
   let win = typeof window !== 'undefined' ? window : null;
   // Capture: a panel's own handlers may stop the event from bubbling
@@ -64,8 +75,15 @@ export function createVisibility(canvas, covered) {
       return cached;
     },
     forget,
+    /** `fn()` runs when what covers the canvas may have changed; returns a function that stops it */
+    onChange(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
     dispose() {
       cached = null;
+      listeners.clear();
+      clearTimeout(notifying);
       if (doc && doc.removeEventListener) STALE_ON.forEach(name => doc.removeEventListener(name, forget, true));
       if (win && win.removeEventListener) win.removeEventListener('resize', forget);
     }

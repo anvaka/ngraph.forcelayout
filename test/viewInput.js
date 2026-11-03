@@ -877,5 +877,21 @@ test('createVisibility: a function can say what is hidden; the area is measured 
     t.equal(calls, measured, 'no new hit tests');
     visibility.forget();
     t.not(visibility.area(), first, 'measured again once forgotten');
+
+    // Listeners hear about it once, after the page had a chance to change
+    var heard = 0;
+    var stop = visibility.onChange(function () { heard += 1; });
+    visibility.forget();
+    visibility.forget();
+    t.equal(heard, 0, 'not at once');
+    return new Promise(function (resolve) { setTimeout(resolve, 10); }).then(function () {
+      t.equal(heard, 1, 'once for both');
+      stop();
+      visibility.forget();
+      return new Promise(function (resolve) { setTimeout(resolve, 10); });
+    }).then(function () {
+      t.equal(heard, 1, 'not after it stopped listening');
+      visibility.dispose();
+    });
   });
 });

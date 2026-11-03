@@ -116,6 +116,14 @@ export default {
     });
     // What is labelled for sure changes with these: place again at the next frame
     ['hover', 'select', 'focus', 'dragstart', 'dragend'].forEach(name => ctx.on(name, soon));
+    // A panel opened or closed: place again, as often as while the camera moves
+    let coversChanged = false;
+    if (ctx.onVisibleAreaChange) {
+      ctx.onVisibleAreaChange(() => {
+        coversChanged = true;
+        ctx.requestFrame();
+      });
+    }
     graph.on('changed', onGraphChanged);
     ctx.requestFrame();
 
@@ -168,7 +176,8 @@ export default {
       let now = performance.now();
       if (pending) {
         place(now);
-      } else if (change.positions || change.camera) {
+      } else if (change.positions || change.camera || coversChanged) {
+        coversChanged = false;
         // Moving: place again every `every` ms, and once more after it stops
         if (now - last >= settings.every) place(now);
         else schedule(settings.every - (now - last));
