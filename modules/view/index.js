@@ -358,6 +358,14 @@ export default function createView(scene, options = {}) {
         frameHooks.add(fn);
         cleanups.push(() => frameHooks.delete(fn));
       },
+      /**
+       * `fn()` runs when what covers the canvas may have changed (a click, a key, a resize, a
+       * scroll, the end of a transition): a module that avoids covers (labels) looks again
+       */
+      onVisibleAreaChange(fn) {
+        if (!visibility) return;
+        cleanups.push(visibility.onChange(fn));
+      },
       /** `fn()` runs after every camera move */
       onCamera(fn) {
         cameraHooks.add(fn);
@@ -643,7 +651,7 @@ export default function createView(scene, options = {}) {
     }
     // A frame hook (or an app listener it called) changed something after it was read, or a
     // layer animates: the scene ignores renderFrame() inside a frame, so ask again once it's over
-    if (structureDirty || nodesDirty || edgesDirty || positionsDirty || flagsDirty || animating) {
+    if (structureDirty || nodesDirty || edgesDirty || positionsDirty || flagsDirty || cameraMoved || animating) {
       animating = false;
       Promise.resolve().then(() => scene.renderFrame());
     }
@@ -653,11 +661,11 @@ export default function createView(scene, options = {}) {
     let structureChanged = structureDirty;
     build();
     if (edgesDirty) buildEdges();
-    if (frameHooks.size) {
-      let change = {positions: positionsDirty, camera: cameraMoved, structure: structureChanged};
-      frameHooks.forEach(fn => fn(change));
-    }
+    let change = {positions: positionsDirty, camera: cameraMoved, structure: structureChanged};
+    // A hook may move the camera (a fit that follows the layout): that move belongs to the next
+    // frame, so it is cleared before the hooks run, not after
     cameraMoved = false;
+    if (frameHooks.size) frameHooks.forEach(fn => fn(change));
     if (flagsDirty) writeFlags();
     if (positionsDirty) {
       packPositions(layout.simulator.store.pos, layout.simulator.store.D, Math.min(layout.simulator.store.n, nodes.count), positions.data);
