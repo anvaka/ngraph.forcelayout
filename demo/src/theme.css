@@ -94,7 +94,7 @@ h2 {
   letter-spacing: 0.01em;
 }
 .title h2 { padding: 0; }
-h2 a { color: var(--text); }
+h2 a { display: inline-block; line-height: 24px; color: var(--text); }
 h2 .sub { color: var(--text-3); font-weight: 400; }
 
 /* The install line: a field with a copy glyph, in the mono face */
