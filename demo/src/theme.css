@@ -562,19 +562,8 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
   .about-line .credit { margin: 0; }
   .stats { padding: 4px 2px 8px; }
 }
-/* Settings as a sheet from the bottom, on phones only: the graph stays in view above it */
-@media (max-width: 500px) {
-  .sheet {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    max-height: 46dvh;
-    overflow-y: auto;
-    padding: 6px var(--gap) calc(var(--gap) + env(safe-area-inset-bottom));
-    background: var(--panel);
-    border-top: 1px solid var(--line);
-    border-radius: var(--radius) var(--radius) 0 0;
-    box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.35);
-  }
+/* Settings on a phone (#settings.sheet): where they open is layout (styles/layout.css); here
+   only their surface */
+.sheet {
+  background: var(--panel);
 }

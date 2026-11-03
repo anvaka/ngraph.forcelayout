@@ -47,6 +47,9 @@ export function createVisibility(canvas, covered) {
   // Capture: a panel's own handlers may stop the event from bubbling
   if (doc && doc.addEventListener) STALE_ON.forEach(name => doc.addEventListener(name, forget, true));
   if (win && win.addEventListener) win.addEventListener('resize', forget);
+  // A soft keyboard opens or closes: the visual viewport changes, the window may not
+  let vv = win && win.visualViewport;
+  if (vv && vv.addEventListener) vv.addEventListener('resize', forget);
 
   return {
     /** True when the canvas point (CSS pixels) is hidden */
@@ -86,6 +89,7 @@ export function createVisibility(canvas, covered) {
       clearTimeout(notifying);
       if (doc && doc.removeEventListener) STALE_ON.forEach(name => doc.removeEventListener(name, forget, true));
       if (win && win.removeEventListener) win.removeEventListener('resize', forget);
+      if (vv && vv.removeEventListener) vv.removeEventListener('resize', forget);
     }
   };
 
@@ -121,8 +125,11 @@ function hitTest(canvas) {
   let root = canvas.getRootNode ? canvas.getRootNode() : null;
   if (!root || typeof root.elementFromPoint !== 'function') root = typeof document !== 'undefined' ? document : null;
   if (!root) return () => false;
+  let vv = typeof window !== 'undefined' ? window.visualViewport : null;
   return (x, y, rect) => {
     let clientX = rect.left + x, clientY = rect.top + y;
+    // Below the visual viewport is what a soft keyboard covers: the page doesn't know it is there
+    if (vv && clientY > vv.offsetTop + vv.height) return true;
     let top = root.elementFromPoint(clientX, clientY);
     if (top === canvas) return false;
     if (!top || !isOverlay(top)) return true;

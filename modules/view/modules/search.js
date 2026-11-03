@@ -53,6 +53,12 @@ export default {
       }
     });
     ctx.graph.on('changed', forget);
+    // A turned phone or a resized window: the box goes again where the canvas shows
+    let onResize = () => {
+      if (!box || box.root.style.display === 'none') return;
+      setTimeout(() => placeOverCanvas(box.root, canvas, ctx.visibleArea(), 'top', RESULTS_ROOM), 300);
+    };
+    window.addEventListener('resize', onResize);
 
     return {
       open,
@@ -61,6 +67,7 @@ export default {
       dispose() {
         close(false);
         ctx.graph.off('changed', forget);
+        window.removeEventListener('resize', onResize);
       }
     };
 
@@ -212,12 +219,11 @@ export default {
       close(true, byPointer);
       let node = match.node;
       let focus = ctx.get('focus');
-      if (focus) {
-        focus.set(node, 'search');
-      } else {
-        ctx.reveal(node);
-        ctx.input.tap(node, {});
-      }
+      if (focus) focus.set(node, 'search');
+      else ctx.reveal(node);
+      // Found reads as picked: the node is selected as a tap would (its ring, its links lit, the
+      // rest dimmed, the tooltip kept), so it stands out on any graph
+      ctx.input.tap(node, {});
       ctx.emit('search', {node, id: node.id, query});
     }
   }

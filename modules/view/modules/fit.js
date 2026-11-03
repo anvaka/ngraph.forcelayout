@@ -104,6 +104,7 @@ export default {
     let api = {
       /** Fits the layout now, and follows it again until the user moves the camera */
       fit() {
+        stopCamera();
         pending = true;
         mine = null;
         setFollowing(true);
@@ -228,7 +229,17 @@ export default {
       if (change > 16) {
         easing = true;
         ctx.requestFrame();
+        // the free area's shape changed: a settled drawing may turn to its new long side
+        let layout = ctx.layout;
+        if (settings.orient && layout && layout.getStability && layout.getStability().stable) setTimeout(() => { if (following) orient(); }, 450);
       }
+    }
+
+    // A pan or pinch can leave the camera gliding (inertia): stop it before this module moves it
+    function stopCamera() {
+      let cam = controls();
+      if (cam && cam.panAnimation) cam.panAnimation.cancel();
+      if (cam && cam.rotateAnimation) cam.rotateAnimation.cancel();
     }
 
     function zoomTo(node, {linkPixels = 60, duration = 450} = {}) {
@@ -267,6 +278,7 @@ export default {
         return [x + m[0] * dx - m[4] * dy, y + m[1] * dx - m[5] * dy, z + m[2] * dx - m[6] * dy];
       };
       setFollowing(false);
+      stopCamera();
       if (gliding) cancelAnimationFrame(gliding);
       let start = performance.now();
       let time = reduced && reduced.matches ? 0 : duration;

@@ -2,6 +2,13 @@
 <div class='code-settings'>
   <!-- The program that makes this drawing. Every value is an input named after its option; what
        you change, the layout uses at once, and Copy takes the program home. -->
+  <!-- First, so a visitor who came for the code has it at once -->
+  <div class='code-actions'>
+    <button type='button' class='copy' @click='copy'>{{copied ? 'Copied' : 'Copy code'}}</button>
+    <button type='button' class='link' @click='$emit("reset")' title='Every setting back to what this page starts with'>Reset all</button>
+    <button type='button' class='link' @click='$emit("speedups", "device")' title='The speed-ups picked for this device; the physics stay'>Device speed-ups</button>
+    <a :href='repo + "#api"' target='_blank' rel='noopener'>API</a>
+  </div>
   <div class='code' role='group' aria-label='Settings, written as the code that makes this layout'>
     <!-- The lines before the options fold, so the values are what shows first -->
     <button type='button' class='line comment fold' :aria-expanded='preambleOpen ? "true" : "false"' aria-controls='code-preamble'
@@ -38,7 +45,7 @@
     <label class='line toggle' :class='{off: backend !== "webgpu"}'>
       <input type='checkbox' :checked='backend === "webgpu"' :disabled='!gpuAvailable'
         @change='$emit("set", "backend", $event.target.checked ? "webgpu" : "cpu")'>
-      <span v-if='backend === "webgpu"'><span class='kw'>const</span> gpu = <span class='kw'>await</span> runOnGpu(layout, <span class='kw'>await</span> createWebGPUBackend());</span>
+      <span v-if='backend === "webgpu"'><span class='kw'>const</span> gpu = <span class='kw'>await</span> runOnGpu(layout, <span class='kw'>await</span> createWebGPUBackend()); <span class='comment'>// or the CPU, in the copy</span></span>
       <span v-else class='comment'>// const gpu = await runOnGpu(layout, ...); WebGPU (add-on){{gpuAvailable ? '' : ': not in this browser'}}</span>
     </label>
     <div class='line blank'></div>
@@ -64,12 +71,6 @@
     <div class='line'>}</div>
     <div class='line'>frame();</div>
     <div class='line comment' v-if='parts.helpers.length'>// … and {{helperNames}} (in the copy)</div>
-  </div>
-  <div class='code-actions'>
-    <button type='button' class='copy' @click='copy'>{{copied ? 'Copied' : 'Copy code'}}</button>
-    <button type='button' class='link' @click='$emit("reset")' title='Every setting back to what this page starts with'>Reset all</button>
-    <button type='button' class='link' @click='$emit("speedups", "device")' title='The speed-ups picked for this device; the physics stay'>Device speed-ups</button>
-    <a :href='repo + "#api"' target='_blank' rel='noopener'>API</a>
   </div>
   <template v-if='copyFailed'>
     <p class='code-note' role='status'>Copy didn't work here: the code below is selected, press Ctrl+C or Cmd+C.</p>
@@ -200,10 +201,7 @@ export default {
       let gpu = this.backend === 'webgpu', pivot = this.placement === 'pivot';
       let d = this.describe ? this.describe() : {};
       let graphPart = graphProgram(d.name || '', d.fileName || '', d.base || '');
-      let drawing = drawingProgram(d.graph, {
-        springLength: this.settings.springLength, dimensions: this.settings.dimensions,
-        linkAlpha: d.linkAlpha, nodeMinSize: d.nodeMinSize
-      });
+      let drawing = drawingProgram(d.graph, {springLength: this.settings.springLength, fileStyle: !!graphPart.fileStyle});
       let core = {packages: [], addons: [], imports: [`import createLayout from 'ngraph.forcelayout';`]};
       if (pivot) {
         core.addons.push('pivot');
@@ -231,12 +229,18 @@ export default {
       let lines = [...parts.head, ''];
       lines.push(changed.length ? `const layout = createLayout(graph, {\n${changed.join('\n')}\n});` : `const layout = createLayout(graph);`);
       if (pivot) lines.push(this.placeLine());
-      if (gpu) lines.push(`const gpu = await runOnGpu(layout, await createWebGPUBackend());`);
+      if (gpu) {
+        lines.push(`// WebGPU where the browser has it and the layout runs there, else the CPU`,
+          `const backend = await createWebGPUBackend();`,
+          `const gpu = backend && layout.simulator.plan(backend).runs ? await runOnGpu(layout, backend) : null;`);
+      }
       lines.push('', ...parts.drawing, '');
       lines.push(`let settled = false; // it stops when the layout settles, and wakes when you drag a node`,
         `layout.on('stable', isStable => { settled = isStable; if (!isStable) requestAnimationFrame(frame); });`,
         `function frame() {`, `  if (settled) return;`);
-      lines.push(gpu ? `  gpu.step(${steps});` : `  for (let i = 0; i < ${steps}; ++i) layout.step();`);
+      let auto = this.stepsPerFrame === 0 ? ` // ${steps}: what "auto" picked here (as many as fit in ${this.frameBudget} ms)` : '';
+      if (gpu) lines.push(`  if (gpu) gpu.step(${steps});${auto}`, `  else for (let i = 0; i < ${steps}; ++i) layout.step();`);
+      else lines.push(`  for (let i = 0; i < ${steps}; ++i) layout.step();${auto}`);
       lines.push(`  requestAnimationFrame(frame); // the view draws every step`, `}`, `frame();`);
       lines.push(...parts.helpers);
       return lines.join('\n');
