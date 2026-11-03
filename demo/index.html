@@ -21,12 +21,13 @@
         box-sizing: border-box;
       }
 body {
-  font-family: 'Avenir', Helvetica, Arial, sans-serif;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  color: #EEE;
+  color: #e6ebf2;
   margin: 0;
-  background: rgb(12, 41, 82);
+  /* the canvas color of src/theme.css, so the page doesn't flash another color while it loads */
+  background: #0e1624;
   overflow: hidden;
 }
 canvas {
@@ -56,7 +57,7 @@ canvas {
 }
 #no-webgl .hint {
   font-size: 16px;
-  color: #AAA;
+  color: #a7b2c2;
 }
 .no-webgl #no-webgl {
   display: flex;
@@ -68,9 +69,9 @@ canvas {
   </head>
   <body>
     <noscript>
-      <strong>We're sorry but puller doesn't work properly without JavaScript enabled. Please enable it to continue.</strong>
+      <strong>This demo lays out graphs with JavaScript: please turn JavaScript on to see it.</strong>
     </noscript>
-    <canvas id='cnv'></canvas>
+    <main><canvas id='cnv'></canvas></main>
     <div id="app"></div>
     <div id='no-webgl'>
       <p>This demo draws graphs with WebGL, which is not available in this browser.</p>

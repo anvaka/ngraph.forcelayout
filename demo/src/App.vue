@@ -1,17 +1,40 @@
 <template>
-  <div>
-    <h2><a href='https://github.com/anvaka/ngraph.forcelayout'>ngraph.forcelayout</a> demo</h2>
+  <section aria-label='Graph and settings' :class='{"settings-open": settingsOpen, "panel-folded": panelFolded}'>
+    <!-- First after the canvas in Tab order: the controls that act on the canvas -->
+    <!-- Not an overlay: they cover the canvas, so the fit, labels and the card keep clear of them -->
+    <div class='canvas-tools'>
+      <button v-if='!following' class='tool fit-view' @click='fitView'
+        title='Show the whole graph, and follow it as the layout moves (0)'>Fit graph</button>
+      <button class='tool' @click='toggleHelp' :aria-expanded='helpOpen ? "true" : "false"' aria-label='Keys and gestures' title='Keys and gestures (?)'>?</button>
+      <button class='tool' @click='openSearch' aria-label='Find a node' title='Find a node (/)'>
+        <svg aria-hidden='true' viewBox='0 0 16 16' width='16' height='16'><circle cx='6.5' cy='6.5' r='4.5' fill='none' stroke='currentColor' stroke-width='1.6'/><path d='M10 10l4 4' stroke='currentColor' stroke-width='1.6' stroke-linecap='round'/></svg>
+      </button>
+    </div>
+    <div class='title-row'>
+      <div class='name-line'>
+        <h2><a href='https://github.com/anvaka/ngraph.forcelayout#readme'>ngraph.forcelayout</a></h2>
+        <button type='button' class='install' @click='copyInstall' :title='installNote || "Copy the install command"'
+          :aria-label='"Copy the install command: " + installLine'><code>{{copied ? 'copied' : installLine}}</code></button>
+      </div>
+      <p class='pitch' v-if='showPitch'>{{pitchShort}}</p>
+    </div>
     <div class='layout-box'>
-      <div class='buttons'>
-        <label class='graph-picker' title='Graph'>
-          <select v-model='selectedGraph'>
-            <option v-for="graph in graphs" :key='graph' :value='graph'>{{graph}}</option>
+      <div class='buttons graph-row'>
+        <label class='graph-picker'>
+          <span class='visually-hidden'>Graph</span>
+          <select v-model='graphChoice' ref='graphSelect' @keydown='pickerKey = $event.key' @pointerdown='pickerKey = ""'>
+            <option v-if='fileName' value='__file__'>{{fileName}}</option>
+            <option value='__open__'>Your graph: open a .dot or .json file…</option>
+            <optgroup v-for='group in graphGroups' :key='group.label' :label='group.label'>
+              <option v-for='graph in group.graphs' :key='graph' :value='graph'>{{graphTitle(graph)}}</option>
+            </optgroup>
           </select>
         </label>
-        <a href="#" @click.prevent='toggleLayoutRun' class='btn'>{{isRunning ? 'Pause' : 'Run'}}</a>
-        <a href="#" @click.prevent='restart' class='btn restart' title='Start over from initial positions'>Reset</a>
+        <input type='file' ref='fileInput' class='visually-hidden' accept='.dot,.gv,.json' tabindex='-1' aria-hidden='true' @change='onFilePicked'>
+        <button @click='toggleLayoutRun' class='btn'>{{isRunning ? 'Pause' : 'Run'}}</button>
+        <button @click='restart' class='btn restart' title='Start over from initial positions'>Reset</button>
       </div>
-      <div class='buttons idea-bar' v-if='prototypes.length'>
+      <div class='buttons idea-bar' v-if='prototype'>
         <label class='graph-picker' title='Layout idea to try'>
           <select v-model='prototypeId'>
             <option v-for='option in prototypeOptions' :key='option.value' :value='option.value'>{{option.label}}</option>
@@ -23,7 +46,7 @@
         </label>
         <help-icon @show='aboutOpen = !aboutOpen' :class='{open: aboutOpen}'></help-icon>
       </div>
-      <div class='about idea-about' v-if='aboutOpen && prototypes.length'>
+      <div class='about idea-about' v-if='aboutOpen && prototype'>
         <div v-if='prototype' v-html='prototype.description'></div>
         <template v-else>
           Experimental changes to the layout, one per folder in <code>demo/src/prototypes</code>.
@@ -32,104 +55,68 @@
           changing one carries on from the current drawing, and Reset starts over.
         </template>
       </div>
-      <div class='stats'>
-        <div v-if='loading'>Loading graph...</div>
-        <div v-else-if='stats'>
-          {{stats.nodes.toLocaleString()}} nodes, {{stats.links.toLocaleString()}} links<span v-if='stats.placement'>, {{stats.placement}} start</span><br>
-          {{stats.steps.toLocaleString()}} steps<span v-if='stats.msPerStep'>, <span class='number'>{{formatMs(stats.msPerStep)}}</span> ms/step</span>
-          on {{stats.backend === 'webgpu' ? 'WebGPU' : 'CPU'}}
+      <div class='stats stats-row'>
+        <div v-if='loading' role='status'>Loading {{graphTitle(selectedGraph)}}…</div>
+        <div v-else-if='stats' class='stats-text'>
+          <div>{{stats.nodes.toLocaleString()}} nodes · {{stats.links.toLocaleString()}} links<span class='placement' v-if='stats.placement'> · {{stats.placement}} start</span></div>
+          <div :title='speedTitle'>{{speedLine}}</div>
           <div v-if='stats.gpuReasons' class='off-gpu'>Runs on the CPU: {{stats.gpuReasons}}.</div>
+          <div v-if='fileError' class='off-gpu file-error' role='alert'>{{fileError}}</div>
+          <div v-if='gpuNote' class='off-gpu' role='status'>{{gpuNote}}</div>
         </div>
-        <a href='#' @click.prevent='settingsOpen = !settingsOpen' class='toggle-settings'>Settings {{settingsOpen ? '▴' : '▾'}}</a>
+      </div>
+      <div class='controls-row'>
+        <div class='switch' role='group' aria-label='Dimensions'>
+          <button type='button' :aria-pressed='layoutSettings.dimensions === 2 ? "true" : "false"' @click='setDimensions(2)'>2D</button>
+          <button type='button' :aria-pressed='layoutSettings.dimensions === 3 ? "true" : "false"' @click='setDimensions(3)'>3D</button>
+        </div>
+        <div class='switch' role='group' aria-label='Run the layout on'>
+          <button type='button' :aria-pressed='backend === "cpu" ? "true" : "false"' @click='backend = "cpu"'
+            title='The library itself, on the CPU'>CPU</button>
+          <button type='button' :aria-pressed='backend === "webgpu" ? "true" : "false"' :aria-disabled='gpuAvailable === false ? "true" : null'
+            @click='pickGpu' title='The WebGPU add-on (modules/gpu)'>GPU</button>
+        </div>
+        <button @click='settingsOpen = !settingsOpen' class='toggle-settings' :class='{tuned: !settingsOpen && changedCount > 0}'
+          :aria-expanded='settingsOpen ? "true" : "false"' aria-controls='settings'
+          :aria-label='!settingsOpen && changedCount ? `Settings, ${changedCount} changed` : null'>Settings<span class='changed-count' v-if='!settingsOpen && changedCount'> · {{changedCount}} changed</span><span aria-hidden='true'> {{settingsOpen ? '▴' : '▾'}}</span></button>
+      </div>
+      <div class='about-line' v-if='info && !loading'>
+        <p class='about-text' id='about-text' v-if='info.about' :class='{open: aboutTextOpen, "with-legend": !!(legendData && legendData.items.length)}' @click='aboutTextOpen = !aboutTextOpen'>{{info.about}}</p>
+        <legend-row v-if='legendData && legendData.items.length' :title='legendData.title' :items='legendData.items'
+          :more='legendData.more ? legendData.more.count : 0'>
+          <button type='button' class='about-toggle' v-if='info.about' @click='aboutTextOpen = !aboutTextOpen'
+            :aria-expanded='aboutTextOpen ? "true" : "false"' aria-controls='about-text' aria-label='About this graph'>ⓘ</button>
+        </legend-row>
+        <div class='credit' v-if='info.credit'>Data: <a :href='info.credit.href' target='_blank' rel='noopener'>{{info.credit.text}}</a></div>
       </div>
     </div>
-    <div class='content' v-if='settingsOpen'>
-      <input-value label='Time step' v-model='layoutSettings.timeStep'>
-      This is integration time step value. The higher it is, the faster nodes will move, but setting it too high
-      can result in lots of jitter and instability.
-      </input-value>
-      <input-value label='Gravity' v-model='layoutSettings.gravity'>
-        This coefficient defines how strongly each node repels each other.
-      </input-value>
-      <input-value label='Ideal spring length' v-model='layoutSettings.springLength'>
-         What is the ideal length of each spring?
-      </input-value>
-      <input-value label='Spring coefficient' v-model='layoutSettings.springCoefficient'>
-        Higher values makes the spring force stronger, pushing edges closer to the ideal spring length.
-      </input-value>
-      <input-value label='Drag coefficient' v-model='layoutSettings.dragCoefficient'
-        :disabled='usesFire' :note="usesFire ? 'Not used by the fire integrator.' : ''">
-        This coefficient introduces "resistance" from environment. When it is close to 0 the forces
-        will have a lot of freedom, nothing will be stopping them, and that can result in a very
-        unstable simulation.
-      </input-value>
-      <input-value label='Theta' v-model='layoutSettings.theta'
-        :disabled='onGpu' :note="onGpu ? 'Not used on WebGPU.' : ''">
-        This coefficient influences when we apply long distance forces approximation. When this value is
-        close to 0, the simulation compares forces between every single node (giving O(n^2), slow performance).
-        Recommended value is 0.8.
-      </input-value>
+    <!-- Phones: the panel folds to one line, out of the drawing's way (a tap or a swipe up), and
+         unfolds by a tap or a swipe down -->
+    <button type='button' class='panel-fold' @click='onFoldClick' @pointerdown='onFoldDown' @pointermove='onFoldMove'
+      @pointerup='onFoldUp' @pointercancel='onFoldUp' :aria-expanded='panelFolded ? "false" : "true"'
+      :aria-label='panelFolded ? "Show the panel (" + foldTitle + ")" : "Hide the panel"' :title='panelFolded ? "Show the panel" : "Hide the panel"'>
+      <span class='fold-title' v-if='panelFolded'>{{foldTitle}}</span>
+      <span class='fold-chevron' v-if='panelFolded' aria-hidden='true'>Show</span>
+      <span class='grip' aria-hidden='true'></span>
+    </button>
+    <div class='content sheet' id='settings' v-if='settingsOpen' ref='sheet' @focusin='onSettingsFocus'>
+      <code-settings :settings='layoutSettings' :steps-per-frame='stepsPerFrame' :auto-now='stats ? stats.stepsPerFrame : 0'
+        :frame-budget='device.frameBudget' :placement='placement' :backend='backend' :gpu-available='gpuAvailable !== false'
+        :gpu-message='gpuMessage' :install-line='installLine' :install-note='installNote' :library-default-label='libraryDefaultLabel'
+        :describe='describeProgram' :program-key='programKey'
+        @set='setSetting' @reset='resetSettings' @speedups='useDeviceDefaults'></code-settings>
 
-      <input-value label='Dimensions' v-model='layoutSettings.dimensions' step=1>
-      Defines number of dimensions of the space where layout is performed. For visualization purpose
-      2 or 3 dimensions are normally enough. Note: Memory consumptions grows exponentially with number
-      of dimensions.
-      </input-value>
-
-      <div class='section'>
-        Speed-ups
-        <small>
-          <a href='#' @click.prevent='useSpeedups(true)'>turn all on</a> |
-          <a href='#' @click.prevent='useSpeedups(false)'>library defaults</a>
-        </small>
-      </div>
-      <input-value label='Max velocity' v-model='layoutSettings.maxVelocity'>
-        Maximum distance a node can travel in one unit of time (each step moves a node by at most
-        time step * max velocity). Library default is 4. Set it to 1 to get the layouts of versions
-        before v3.4, which settle more slowly.
-      </input-value>
-      <input-select label='Integrator' v-model='layoutSettings.integrator' :options='integratorOptions'>
-        How forces move nodes. <b>euler</b> is the classic integration slowed down by drag.
-        <b>fire</b> (Fast Inertial Relaxation Engine) ignores drag: the whole system keeps its momentum
-        while it moves "downhill", and stops dead when it overshoots. Usually reaches a good layout in
-        fewer steps, especially on trees and grids.
-      </input-select>
-      <input-select label='Repulsion' v-model='layoutSettings.nbody' :options='nbodyOptions'
-        :disabled='onGpu' :note="onGpu ? 'Not used on WebGPU: exact pairs up to 1,024 nodes, a grid pyramid beyond.' : ''">
-        How node repulsion is computed. <b>quad tree</b> is Barnes-Hut: each node walks the tree.
-        <b>dual tree</b> lets pairs of tree cells interact with each other, which is 5-10x faster on large
-        graphs with the same accuracy. Both use theta.
-      </input-select>
-      <input-value label='Steps per frame' v-model='stepsPerFrame' step=1>
-        How many layout steps to run before each frame is rendered. Fast layouts can do many steps per frame.
-      </input-value>
-
-      <input-flag label='Follow bounding box' v-model='fixedViewBox' step=1>
-      Setting this to true will disable pan/zoom but will always keep the graph visible. This is not
-      part of the layout algorithm. Just a view setting of the renderer.
-      </input-flag>
-
-      <div class='section'>
-        Add-ons
-        <small><a href='https://github.com/anvaka/ngraph.forcelayout/tree/main/modules'>not part of the library</a></small>
-      </div>
-      <input-select label='Start from' v-model='placement' :options='placementOptions'>
-        Initial positions of nodes. <b>pivot MDS</b> places nodes so that distances follow graph distances
-        (or uses a radial tree when it fits better), so the layout only needs to polish it.
-        Changing this restarts the layout.
-        This is a separate module, <code>modules/pivot</code> in this repository; ngraph.forcelayout itself
-        places each node at random near its already placed neighbours.
-      </input-select>
-      <input-select label='Run on' v-model='backend' :options='backendOptions' :note='gpuMessage'>
-        <b>WebGPU</b> runs the layout's own simulation on the GPU when it can run all of it (for now
-        the built in physics with any repulsion law, node formulas and sums, in any number of
-        dimensions); otherwise the layout stays on the CPU and the note under the stats says why.
-        Repulsion is exact over all pairs up to 1,024 nodes; larger layouts use a grid pyramid
-        instead of a tree (in 2D and 3D), so Theta and Repulsion settings do not apply. It is hundreds of times faster on large graphs, so raise
-        Steps per frame (e.g. 20) to see it: with one step per frame, drawing the graph is the
-        bottleneck. This is a separate module, <code>modules/gpu</code> in this repository;
-        ngraph.forcelayout itself always runs on the CPU.
-      </input-select>
+      <template v-if='prototypes.length && !prototype'>
+        <div class='section'>
+          Layout ideas
+          <small><a href='https://github.com/anvaka/ngraph.forcelayout/tree/main/demo/src/prototypes'>experiments, not part of the library</a></small>
+        </div>
+        <input-select label='Try an idea' v-model='prototypeId' :options='prototypeOptions'>
+          Experimental changes to the layout, one per folder in <code>demo/src/prototypes</code>.
+          Picking an idea restarts the layout from the same start as <b>none</b>, and puts it at
+          the top of the panel; its <b>on</b> box turns it off and on again, so you can compare the two.
+        </input-select>
+      </template>
 
       <template v-if='prototype'>
         <div class='section'>
@@ -152,27 +139,31 @@
           </a>
         </div>
       </template>
+      <button type='button' class='settings-done' @click='settingsOpen = false'>Done</button>
     </div>
-  </div>
+  </section>
 </template>
 
 <script>
 import createGraphScene from './lib/createGraphScene';
-import getAvailableGraphs from './lib/getAvailableGraphs';
+import {graphGroups, graphTitle} from './lib/getAvailableGraphs';
+import graphInfo from './lib/graphInfo';
+import {libraryDefaultLabel, libraryDefaultsLabel, pitchShort, installLine, installNote} from './lib/release';
+import loadDroppedGraph from './lib/loadDroppedGraph';
+import CodeSettings from './components/CodeSettings.vue';
+import './styles/layout.css';
 import loadGraph from './lib/loadGraph';
 import bus from './lib/bus';
 import queryState from 'query-state';
 import InputValue from './components/InputValue.vue';
-import InputFlag from './components/InputFlag.vue';
 import InputSelect from './components/InputSelect.vue';
 import HelpIcon from './components/HelpIcon.vue';
+import LegendRow from './components/LegendRow.vue';
 import prototypes from './prototypes';
+import {libraryChoice, deviceKeys, maxAutoSteps, readSignals, pickDefaults, probeWebGPU} from './lib/deviceDefaults';
 
-const librarySpeedSettings = {maxVelocity: 4, integrator: 'euler', nbody: 'quadtree'};
-const fastSpeedSettings = {maxVelocity: 4, integrator: 'fire', nbody: 'dualtree'};
-
-let appState = queryState({
-  graph: 'Miserables',
+const DEFAULTS = {
+  graph: 'Mammals (WordNet)',
   timeStep: 0.5,
   springLength: 10,
   springCoefficient: 0.8,
@@ -182,12 +173,47 @@ let appState = queryState({
   gravity: -12,
   maxVelocity: 4,
   integrator: 'euler',
-  nbody: 'quadtree',
-  placement: 'default',
-  backend: 'cpu',
-  stepsPerFrame: 1,
+  // nbody, placement, backend and stepsPerFrame have no defaults here: the device picks them
+  // (deviceDefaults.js), and they are in the URL only when the link or the visitor sets them
   prototype: 'none',
-}, { useSearch: true });
+};
+
+// The address keeps only what differs from the defaults, so a shared link says what was changed
+// (and a later change of a default reaches old links)
+let urlState = queryState({}, { useSearch: true });
+let appState = {
+  get(key) {
+    let value = urlState.get(key);
+    return value === undefined ? DEFAULTS[key] : value;
+  },
+  set(key, value) {
+    if (key in DEFAULTS && DEFAULTS[key] === value) urlState.unset(key);
+    else urlState.set(key, value);
+  },
+  unset: key => urlState.unset(key),
+  has: key => urlState.get(key) !== undefined
+};
+// The physics settings, as the page starts them
+const PHYSICS = ['timeStep', 'springLength', 'springCoefficient', 'dragCoefficient', 'dimensions', 'theta', 'gravity', 'maxVelocity', 'integrator'];
+// Pixels a swipe on the panel's fold button travels before it folds or unfolds the panel
+const FOLD_SWIPE = 16;
+const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+
+const deviceChoice = pickDefaults(readSignals());
+// Device settings the URL doesn't set: they follow the device until the visitor changes them
+const pickedByDevice = Object.fromEntries(deviceKeys.map(key => [key, appState.get(key) === undefined]));
+
+function startValue(key) {
+  return pickedByDevice[key] ? deviceChoice[key] : appState.get(key);
+}
+
+function startsFolded() {
+  return typeof matchMedia === 'function' && matchMedia('(max-width: 500px) and (max-height: 700px), (max-height: 500px)').matches;
+}
+
+function formatSeconds(seconds) {
+  return seconds < 10 ? `${seconds.toFixed(1)} s` : `${Math.round(seconds)} s`;
+}
 
 // Prototype parameters live in the URL as p.<key>
 const PARAM_PREFIX = 'p.';
@@ -210,9 +236,10 @@ export default {
   name: 'app',
   components: {
     InputValue,
-    InputFlag,
     InputSelect,
-    HelpIcon
+    CodeSettings,
+    HelpIcon,
+    LegendRow
   },
   computed: {
     onGpu() {
@@ -222,13 +249,77 @@ export default {
       return this.layoutSettings.integrator === 'fire';
     },
     integratorOptions() {
-      return [{value: 'euler', label: 'euler (default)'}, {value: 'fire', label: 'fire'}];
+      return [{value: 'euler', label: `euler (${libraryDefaultLabel})`}, {value: 'fire', label: 'fire'}];
     },
     nbodyOptions() {
-      return [{value: 'quadtree', label: 'quad tree (default)'}, {value: 'dualtree', label: 'dual tree'}];
+      return [{value: 'quadtree', label: `quad tree (${libraryDefaultLabel})`}, {value: 'dualtree', label: 'dual tree'}];
     },
     placementOptions() {
-      return [{value: 'default', label: 'library default'}, {value: 'pivot', label: 'pivot MDS (add-on)'}];
+      return [{value: 'default', label: libraryDefaultLabel}, {value: 'pivot', label: 'pivot MDS (add-on)'}];
+    },
+    // The picker's value: a graph's name, or the file that was dropped
+    // What the folded panel says: the graph on screen
+    foldTitle() {
+      return this.fileName || graphTitle(this.selectedGraph);
+    },
+    graphChoice: {
+      get() {
+        return this.fileName ? '__file__' : this.selectedGraph;
+      },
+      set(value) {
+        if (value === '__open__') {
+          // Arrow keys change a closed select on some systems: only a click or Enter opens the dialog
+          if (!/^Arrow|^Page|^Home$|^End$/.test(this.pickerKey || '')) {
+            this.$refs.fileInput.value = '';
+            this.$refs.fileInput.click();
+          }
+          this.$nextTick(() => { this.$refs.graphSelect.value = this.graphChoice; });
+          return;
+        }
+        if (value === '__file__') return;
+        this.fileName = '';
+        this.fileError = '';
+        if (value === this.selectedGraph) this.loadNewGraph(value);
+        else this.selectedGraph = value;
+      }
+    },
+    // "2,140 steps · 612 steps/s · 60 fps · WebGPU", or how it settled
+    speedLine() {
+      let s = this.stats;
+      if (!s) return '';
+      let where = s.backend === 'webgpu' ? 'WebGPU' : 'CPU';
+      let steps = `${s.steps.toLocaleString()} steps`;
+      if (s.settled) {
+        return s.settled.seconds > 0
+          ? `Settled in ${formatSeconds(s.settled.seconds)} · ${steps} · ${where}`
+          : `Settled · ${steps} · ${where}`;
+      }
+      if (!this.isRunning) return `Paused · ${steps} · ${where}`;
+      let rate = s.rate;
+      if (!rate) return `${steps} · ${where}`;
+      return `${steps} · ${Math.round(rate.stepsPerSecond).toLocaleString()} steps/s · ${Math.round(rate.fps)} fps · ${where}`;
+    },
+    speedTitle() {
+      let s = this.stats;
+      if (!s) return '';
+      let parts = [];
+      if (s.msPerStep) parts.push(`${this.formatMs(s.msPerStep)} ms of layout per step (${s.backend === 'webgpu' ? 'GPU time' : 'wall time'}).`);
+      if (s.settled) {
+        parts.push(s.settled.reason === 'noise'
+          ? 'Only jitter is left, so the layout stopped. Drag a node or press Run to go on.'
+          : 'The drawing stopped changing, so the layout stopped. Drag a node or press Run to go on.');
+      }
+      return parts.join(' ');
+    },
+    // The legend's first entries (the most common values), and how many more there are
+    programKey() {
+      return `${this.selectedGraph}|${this.fileName}|${this.loading}|${this.legendData ? 1 : 0}`;
+    },
+    // Settings that differ from what the page starts with (the button says so while closed)
+    changedCount() {
+      let physics = PHYSICS.filter(key => this.layoutSettings[key] !== DEFAULTS[key]).length;
+      let device = deviceKeys.filter(key => !this.picked[key] && this.deviceValue(key) !== this.device[key]).length;
+      return physics + device;
     },
     prototype() {
       return findPrototype(this.prototypeId);
@@ -247,15 +338,197 @@ export default {
     },
     backendOptions() {
       return [{value: 'cpu', label: 'CPU (library)'}, {value: 'webgpu', label: 'WebGPU (add-on)', disabled: this.gpuAvailable === false}];
+    },
+    // What still follows the device, e.g. "Picked for this device: dual tree, pivot MDS start, WebGPU, auto steps per frame."
+    deviceSummary() {
+      let names = {
+        nbody: value => value === 'dualtree' ? 'dual tree' : 'quad tree',
+        placement: value => value === 'pivot' ? 'pivot MDS start' : 'library start',
+        backend: value => value === 'webgpu' ? 'WebGPU' : this.gpuAvailable === false ? 'CPU (no WebGPU here)' : 'CPU',
+        stepsPerFrame: value => value === 0 ? 'auto steps per frame' : `${value} steps per frame`
+      };
+      let picked = deviceKeys.filter(key => this.picked[key]).map(key => names[key](this.device[key]));
+      return picked.length ? `Picked for this device: ${picked.join(', ')}.` : '';
+    },
+    stepsNote() {
+      if (this.stepsPerFrame !== 0) return '';
+      let now = this.stats && this.stats.stepsPerFrame;
+      return `Auto: ${now ? `${now} a frame now, ` : ''}as many as fit in ${this.device.frameBudget} ms.`;
     }
   },
   methods: {
-    useSpeedups(enabled) {
-      Object.assign(this.layoutSettings, enabled ? fastSpeedSettings : librarySpeedSettings);
+    // Back to what the device picks: these settings leave the URL
+    useDeviceDefaults() {
+      deviceKeys.forEach(key => {
+        this.picked[key] = true;
+        appState.unset(key);
+      });
+      this.applyChoice(this.device);
+    },
+
+    // The library's own defaults, as a choice of the visitor (it goes into the URL)
+    useLibraryDefaults() {
+      Object.assign(this.layoutSettings, {maxVelocity: 4, integrator: 'euler'});
+      this.applyChoice(libraryChoice);
+    },
+
+    applyChoice(choice) {
+      this.layoutSettings.nbody = choice.nbody;
+      this.placement = choice.placement;
+      this.stepsPerFrame = choice.stepsPerFrame;
+      this.backend = choice.backend;
+    },
+
+    // Writes a changed setting to the URL, except a device setting that still has the device's
+    // value, and the CPU the demo fell back to (the link keeps asking for what it asked)
+    remember(key, value) {
+      if (this.fallback[key] === value) {
+        delete this.fallback[key];
+        return;
+      }
+      if (this.picked[key] && value === this.device[key]) return;
+      if (key in this.picked) this.picked[key] = false;
+      appState.set(key, value);
     },
 
     restart() {
       this.scene.restart();
+    },
+
+    graphTitle,
+
+    // A value from the code: a layout option, or the demo's own (placement, backend, steps)
+    setSetting(key, value) {
+      if (key in this.layoutSettings) this.layoutSettings[key] = value;
+      else if (key === 'backend' && value === 'webgpu') this.pickGpu();
+      else this[key] = value;
+    },
+
+    setDimensions(dimensions) {
+      this.layoutSettings.dimensions = dimensions;
+    },
+
+    // GPU, or say why not where a finger can read it (a title shows only on hover)
+    pickGpu() {
+      if (this.gpuAvailable === false) {
+        this.gpuNote = 'This browser has no WebGPU, so the layout runs on the CPU.';
+        clearTimeout(this.gpuNoteTimer);
+        this.gpuNoteTimer = setTimeout(() => { this.gpuNote = ''; }, 6000);
+        return;
+      }
+      this.backend = 'webgpu';
+    },
+
+    // What the copied program needs to load and draw the graph on screen as the demo does
+    describeProgram() {
+      let state = this.scene && this.scene.getDrawingState ? this.scene.getDrawingState() : {};
+      return Object.assign({
+        name: this.selectedGraph, fileName: this.fileName,
+        base: new URL(import.meta.env.BASE_URL, location.href).href
+      }, state);
+    },
+
+    // The soft keyboard covers the bottom of the screen: the field being typed in scrolls up into
+    // what shows (its panel or Settings scroll), once the keyboard has opened
+    onSettingsFocus(e) {
+      let target = e.target;
+      if (!target || !/^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName)) return;
+      let vv = window.visualViewport;
+      // Scroll the field's scrolling boxes (Settings, the panel) just enough to bring it above the
+      // keyboard: scrollIntoView would centre it in the whole window, under the keyboard
+      let reveal = () => {
+        let bottom = (vv ? vv.offsetTop + vv.height : window.innerHeight) - 12;
+        let need = target.getBoundingClientRect().bottom - bottom;
+        for (let el = target.parentElement; el && need > 0; el = el.parentElement) {
+          let style = getComputedStyle(el);
+          if (!/auto|scroll/.test(style.overflowY) || el.scrollHeight <= el.clientHeight) continue;
+          let room = el.scrollHeight - el.clientHeight - el.scrollTop;
+          let by = Math.min(need, room);
+          el.scrollTop += by;
+          need -= by;
+        }
+      };
+      if (vv) vv.addEventListener('resize', reveal, {once: true});
+      setTimeout(reveal, 350);
+    },
+
+    copyInstall() {
+      let done = () => {
+        this.copied = true;
+        clearTimeout(this.copiedTimer);
+        this.copiedTimer = setTimeout(() => { this.copied = false; }, 1500);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(installLine).then(done, () => {});
+    },
+
+    // A swipe on the fold button folds (up) or unfolds (down) the panel; a tap toggles it
+    onFoldDown(e) {
+      this.foldFrom = e.clientY;
+      this.foldSwiped = false;
+      // The swipe goes on past the button's edge
+      if (e.currentTarget.setPointerCapture) e.currentTarget.setPointerCapture(e.pointerId);
+    },
+
+    onFoldUp() {
+      this.foldFrom = null;
+    },
+
+    onFoldMove(e) {
+      if (this.foldFrom == null) return;
+      let dy = e.clientY - this.foldFrom;
+      if (Math.abs(dy) < FOLD_SWIPE) return;
+      this.foldFrom = null;
+      this.foldSwiped = true;
+      this.panelFolded = dy < 0;
+    },
+
+    onFoldClick() {
+      if (this.foldSwiped) {
+        this.foldSwiped = false;
+        return;
+      }
+      this.panelFolded = !this.panelFolded;
+    },
+
+    onFilePicked(e) {
+      this.fileError = '';
+      loadDroppedGraph(e.target.files);
+    },
+
+    deviceValue(key) {
+      return key === 'nbody' ? this.layoutSettings.nbody : this[key];
+    },
+
+    // Every setting back to what the page starts with: the physics, and what the device picks
+    resetSettings() {
+      PHYSICS.forEach(key => { this.layoutSettings[key] = DEFAULTS[key]; });
+      this.useDeviceDefaults();
+    },
+
+    openSearch() {
+      this.scene.openSearch();
+    },
+
+    toggleHelp() {
+      this.helpOpen = this.scene.toggleHelp();
+    },
+
+    onFileGraph(name) {
+      this.fileName = name;
+      this.fileError = '';
+    },
+
+    onFileError(message) {
+      this.fileError = message;
+    },
+
+    hidePitch() {
+      // On a phone the line goes once they use the canvas: the graph needs the room
+      if (coarse) this.showPitch = false;
+    },
+
+    fitView() {
+      this.scene.fitView();
     },
 
     finishPrototype() {
@@ -275,9 +548,12 @@ export default {
     updateStats() {
       if (!this.scene) return;
       this.stats = this.scene.getStats();
+      // the layout stops by itself once it settles, and runs again when it wakes
+      this.isRunning = this.stats.running;
       if (this.stats.gpuError && this.backend === 'webgpu') {
         // the GPU stopped (e.g. its device was lost): the scene carries on with the CPU
         this.gpuMessage = `WebGPU stopped (${this.stats.gpuError}), switched back to CPU.`;
+        this.fallback.backend = 'cpu';
         this.backend = 'cpu';
       }
     },
@@ -297,42 +573,65 @@ export default {
         this.loading = false;
       });
     },
-    onGraphLoaded() {
+    onGraphLoaded(graph) {
       this.isRunning = true;
+      this.info = graphInfo(this.selectedGraph, graph, this.fileName);
+      // the scene drew the graph first (it heard 'load-graph' before the app), so its colours are known
+      this.legendData = this.scene.getLegend ? this.scene.getLegend() : null;
+      this.aboutTextOpen = false;
     }
   },
   watch: {
+    // Opening Settings shows them: the panel scrolls back to its top, where they now begin
+    settingsOpen(open) {
+      if (!open) return;
+      this.$nextTick(() => {
+        let app = document.getElementById('app');
+        if (app) app.scrollTop = 0;
+      });
+    },
     layoutSettings: {
       deep: true,
       handler(newValue) {
         this.scene.updateLayoutSettings(newValue);
-        appState.set(newValue);
+        // only what changed (and not a number being typed): the device's choice stays out of the URL
+        Object.keys(newValue).forEach(key => {
+          let value = newValue[key];
+          if (value === this.lastLayoutSettings[key] || Number.isNaN(value)) return;
+          this.remember(key, value);
+        });
+        this.lastLayoutSettings = {...newValue};
       }
     },
-    fixedViewBox(newValue) {
-      this.scene.setFixedViewBox(newValue);
-    },
     placement(newValue) {
-      appState.set('placement', newValue);
+      this.remember('placement', newValue);
       this.scene.setPlacement(newValue);
     },
     stepsPerFrame(newValue) {
-      appState.set('stepsPerFrame', newValue);
+      if (Number.isFinite(newValue)) this.remember('stepsPerFrame', newValue);
       this.scene.setStepsPerFrame(newValue);
     },
     backend(newValue) {
       this.scene.setBackend(newValue).then(actualBackend => {
         if (actualBackend !== newValue) {
-          this.gpuMessage = 'WebGPU is not available in this browser.';
           this.gpuAvailable = false;
+          if (this.picked.backend) {
+            // the device turned out to have no WebGPU: its choice is the CPU
+            this.device.backend = actualBackend;
+            this.gpuMessage = 'No WebGPU in this browser: runs on the CPU.';
+          } else {
+            this.gpuMessage = 'WebGPU is not available in this browser: runs on the CPU.';
+            this.fallback.backend = actualBackend;
+          }
           this.backend = actualBackend;
-        } else if (newValue === 'webgpu') {
-          this.gpuMessage = '';
+          return;
         }
-        appState.set('backend', this.backend);
+        if (newValue === 'webgpu') this.gpuMessage = '';
+        this.remember('backend', newValue);
       });
     },
     selectedGraph(newGraph) {
+      this.fileName = '';
       appState.set('graph', newGraph);
       this.loadNewGraph(newGraph);
     },
@@ -372,12 +671,33 @@ export default {
     }
   },
   data() {
-    let graphs = getAvailableGraphs();
     return {
       isRunning: true,
-      fixedViewBox: false,
+      // the camera follows the whole drawing until the user moves it
+      following: true,
       selectedGraph: appState.get('graph'),
-      settingsOpen: window.innerWidth > 500,
+      // Closed: the first view is the graph. A link that changed settings opens them on a desktop;
+      // on a phone the Settings button says how many changed instead (they would cover the graph)
+      settingsOpen: !coarse && window.innerWidth > 500 && PHYSICS.concat(deviceKeys).some(key => appState.has(key)),
+      info: null,
+      legendData: null,
+      aboutTextOpen: false,
+      fileName: '',
+      fileError: '',
+      helpOpen: false,
+      gpuNote: '',
+      copied: false,
+      pickerKey: '',
+      installLine,
+      installNote,
+      showPitch: true,
+      // Phones: the panel is folded to one line (see .panel-fold). Short screens start folded: the
+      // panel would take half of them
+      panelFolded: startsFolded(),
+      pitchShort,
+      graphGroups,
+      libraryDefaultLabel,
+      libraryDefaultsLabel,
       loading: false,
       layoutSettings: {
         timeStep: appState.get('timeStep'),
@@ -389,12 +709,18 @@ export default {
         gravity: appState.get('gravity'),
         maxVelocity: appState.get('maxVelocity'),
         integrator: appState.get('integrator'),
-        nbody: appState.get('nbody'),
+        nbody: startValue('nbody'),
       },
-      placement: appState.get('placement'),
+      placement: startValue('placement'),
       // WebGPU is turned on after the first graph is loaded (see mounted)
       backend: 'cpu',
-      stepsPerFrame: appState.get('stepsPerFrame'),
+      stepsPerFrame: startValue('stepsPerFrame'),
+      // What this device picks, and which settings still follow it (not set by the URL or the visitor)
+      device: {...deviceChoice},
+      picked: {...pickedByDevice},
+      // The backend the demo fell back to, which the URL doesn't get (see remember)
+      fallback: {},
+      maxAutoSteps,
       prototypes,
       prototypeId: findPrototype(appState.get('prototype')) ? appState.get('prototype') : 'none',
       prototypeParams: getPrototypeParams(findPrototype(appState.get('prototype')), true),
@@ -402,20 +728,38 @@ export default {
       aboutOpen: false,
       gpuAvailable: typeof navigator !== 'undefined' && !!navigator.gpu,
       gpuMessage: '',
-      stats: null,
-      graphs
+      stats: null
     }
   },
   mounted() {
     const canvas = document.getElementById('cnv');
+    this.lastLayoutSettings = {...this.layoutSettings};
     this.scene = createGraphScene(canvas, {...this.layoutSettings}, {
       placement: this.placement,
-      stepsPerFrame: this.stepsPerFrame
+      stepsPerFrame: this.stepsPerFrame,
+      frameBudget: this.device.frameBudget
     });
+    this.scene.onFollow(following => { this.following = following; });
     if (this.activePrototype) this.scene.setPrototype(this.activePrototype, this.prototypeParams);
     this.loadNewGraph(this.selectedGraph);
     bus.on('load-graph', this.onGraphLoaded);
-    if (appState.get('backend') === 'webgpu') this.backend = 'webgpu';
+    bus.on('file-graph', this.onFileGraph);
+    bus.on('file-error', this.onFileError);
+    ['pointerdown', 'wheel', 'keydown'].forEach(name => canvas.addEventListener(name, this.hidePitch, {once: true, passive: true}));
+    if (!this.picked.backend) {
+      if (appState.get('backend') === 'webgpu') this.backend = 'webgpu';
+    } else if (this.device.backend === 'webgpu') {
+      // navigator.gpu alone is not enough: there must be a hardware adapter
+      probeWebGPU().then(ok => {
+        if (!this.picked.backend) return;
+        if (ok) {
+          this.backend = 'webgpu';
+        } else {
+          this.device.backend = 'cpu';
+          this.gpuAvailable = false;
+        }
+      });
+    }
     this.statsTimer = setInterval(this.updateStats, 250);
   },
 
@@ -430,215 +774,3 @@ export default {
 
 </script>
 
-<style lang='stylus'>
-small-screen = 500px;
-
-#app {
-  position: absolute;
-  width: 400px;
-  max-height: 100dvh;
-  overflow-y: auto;
-  background: rgb(12, 41, 82);
-  border: 1px solid white;
-}
-a {
-  text-decoration: none;
-}
-.content {
-  padding: 8px;
-  border-top: 1px solid;
-}
-.row {
-  display: flex;
-  flex-direction: row;
-  align-items: baseline;
-}
-
-.row .label {
-  flex: 1;
-}
-.row .value {
-  flex: 1;
-}
-.row select {
-  width: 100%;
-}
-
-.section {
-  margin: 12px 0 4px 0;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.3);
-  small {
-    float: right;
-    font-size: 12px;
-  }
-  a {
-    color: #267fcd;
-  }
-}
-.about {
-  font-size: 14px;
-  p {
-    margin: 6px 0;
-  }
-  p:first-child {
-    margin-top: 0;
-  }
-  p:last-child {
-    margin-bottom: 0;
-  }
-}
-.idea-bar {
-  label.idea-toggle {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 0 8px;
-    border-left: 1px solid;
-    font-size: 14px;
-    white-space: nowrap;
-    cursor: pointer;
-    &.inactive {
-      opacity: 0.5;
-      cursor: default;
-    }
-  }
-  a.help-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    flex-shrink: 0;
-    border-left: 1px solid;
-    &.open {
-      background: #004499;
-      svg {
-        fill: white;
-      }
-    }
-  }
-  select:disabled {
-    opacity: 0.5;
-  }
-}
-.idea-about {
-  padding: 8px;
-  background: #004499;
-  border-top: 1px solid;
-}
-.prototype {
-  font-size: 14px;
-  a {
-    color: #267fcd;
-  }
-  .off-note {
-    margin: 6px 0;
-    opacity: 0.7;
-  }
-  .try {
-    margin: 6px 0;
-    a {
-      margin-left: 6px;
-    }
-  }
-  .finish {
-    display: block;
-    margin-top: 8px;
-    padding: 6px 0;
-    text-align: center;
-    border: 1px solid #267fcd;
-  }
-}
-.buttons {
-  display: flex;
-  border-top: 1px solid;
-  a.btn {
-    border-left: 1px solid;
-  }
-  a.btn.restart {
-    width: 60%;
-  }
-}
-.graph-picker {
-  position: relative;
-  width: 100%;
-  min-width: 0;
-  select {
-    appearance: none;
-    width: 100%;
-    height: 32px;
-    padding: 0 24px 0 8px;
-    border: none;
-    border-radius: 0;
-    background: rgb(12, 41, 82);
-    color: rgb(244, 244, 244);
-    font: inherit;
-    text-overflow: ellipsis;
-  }
-  &::after {
-    content: '▾';
-    position: absolute;
-    right: 8px;
-    top: 7px;
-    pointer-events: none;
-  }
-}
-.stats {
-  display: flex;
-  align-items: center;
-  padding: 8px;
-  font-size: 12px;
-  border-top: 1px solid;
-  .number {
-    font-size: 12px;
-  }
-  .off-gpu {
-    margin-top: 2px;
-    opacity: 0.7;
-  }
-}
-.toggle-settings {
-  margin-left: auto;
-  padding: 0 8px;
-  border: 1px solid #267fcd;
-  border-radius: 4px;
-  color: #267fcd;
-  font-size: 14px;
-  line-height: 22px;
-  white-space: nowrap;
-}
-a.btn {
-  color: rgb(244, 244, 244);
-  text-decoration: none;
-  justify-content: center;
-  align-items: center;
-  height: 32px;
-  width: 100%;
-  display: flex;
-  margin: 0;
-}
-h2 {
-  margin: 8px;
-  font-size: 18px;
-  font-weight: normal;
-  a {
-    color: #267fcd;
-  }
-}
-.number {
-  color: yellow;
-  font-size: 18px;
-}
-.names {
-  position: fixed;
-  font-size: 24px;
-  top: 18px;
-  left: 50%;
-  transform: translateX(-50%);
-}
-@media (max-width: small-screen) {
-  #app {
-    width: 100%;
-  }
-}
-</style>

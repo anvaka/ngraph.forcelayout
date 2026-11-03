@@ -60,6 +60,20 @@ Options:
   0 (or nothing) gives the default color for that node.
 * `linkColor` (`0xffffff10`): a color, or `link => color`.
 * `nodeSize`: a number, or `node => size` in scene units. Default: `node.data.size`, or 1.
+* `nodeMinSize` (0): the smallest diameter of the smallest node in CSS pixels, at any zoom, so
+  nodes (and their colors) stay visible when a big graph is zoomed out. Bigger nodes keep their
+  order: a node four times the size of the smallest is at least twice as wide. Picking still uses
+  the node's own size.
+* `nodeRoom` (0): where nodes crowd, no node is drawn wider than this share (e.g. 0.7) of the
+  distance to its nearest neighbour that is at least as big, so the leaves around a hub or the core
+  of a hairball don't merge into a solid disc, and small nodes give way to big ones. Hovered,
+  selected and focused nodes keep their size. Rooms are measured on the CPU at most every 400 ms
+  while the drawing moves, and once after it stops (about 30 ms at 100k nodes; see `room.js`).
+* `fog` (1): in 3D, what is farther from the camera fades, down to this share of its alpha at the
+  far side of the drawing (e.g. 0.3), so depth reads. 1: no fog.
+* `blend` (`'normal'`): `'add'` lets links add their light, so where they crowd the drawing glows
+  (on a dark background; nodes still cover the links under them). Highlights and layers blend
+  normally.
 * `linkWidth` (2): width of links in pixels.
 * `nodeLabel`: `node => text` that stands for a node in tooltips, search and announcements.
   Default: `data.label`, else `data.name`, else the id.
@@ -77,6 +91,9 @@ Methods:
 * `setLayout(layout)`: draw another layout of the same graph, e.g. after a reset or a change of
   dimensions.
 * `setNodeColor(color)`, `setLinkColor(color)`: new colors (a value or a function).
+* `setNodeMinSize(pixels)`: a new `nodeMinSize`.
+* `setDrawing({nodeSize, linkWidth, nodeRoom, fog, blend})`: new drawing options.
+* `getStyles()`: the current `styles`.
 * `invalidate()`: positions changed outside of a step, e.g. after `layout.setNodePosition()` or
   code that wrote `store.pos`.
 * `refresh()`: call the color and size functions again, e.g. when the data they read changed.
@@ -169,9 +186,12 @@ The camera uses this when it brings a node into view (`reveal()`, so keyboard fo
 a node under the panel comes out, `margin` from the panel's edge as from the canvas's. Enter
 starts on the node nearest the middle of what shows.
 
-Hit testing costs about 2 µs a point. `reveal()` first looks at 25 points around where the node
+Hit testing costs a few µs a point. `reveal()` first looks at 25 points around where the node
 would go; only when one of them is covered does it measure the whole visible area, on a grid of
-about 1500 cells (30 px on a 1440 × 900 canvas, about 3 ms), kept for 300 ms.
+about 1500 cells (30 px on a 1440 × 900 canvas, 3 to 12 ms). What covers the canvas changes almost
+only when the visitor does something, so the area is kept until a click, a key, a resize, a
+scroll or the end of a transition, and at most a second. Labels use the same area: none goes
+under the panel.
 
 Elements marked `data-graph-overlay` don't count as covering (the view's tooltip, search box and
 help card have it: they move with what they show), nor do elements with `pointer-events: none`.
@@ -235,20 +255,69 @@ view.flags.clear(SELECTED);
 `HOVERED`, `DRAGGED` and `FOCUSED` nodes are drawn larger in `pointedColor`; `SELECTED` ones in
 `selectedColor`. Links that touch any of them are lit. While anything is selected, the nodes next to
 it (`NEIGHBOR`, set by the view) stay as they are and everything else fades to `dimAlpha`. Flagged
-nodes and their links are drawn a second time after everything else, so a highlight is never
-buried under faint links. Selected nodes are drawn on top only while there are at most 1,000 of
+nodes and their links are drawn a second time after everything else (the nodes after the labels
+too), so a highlight is never buried under faint links or other nodes' labels. Selected nodes are drawn on top only while there are at most 1,000 of
 them; past that, dimming the rest already shows them. `CUSTOM_1` and `CUSTOM_2` are free for
 modules and not styled.
 
 `styles`, with their defaults: `pointedColor` (`0xffffffff`), `pointedScale` (1.5),
 `pointedMinSize` (8 CSS pixels), `selectedColor` (`0xffc24bff`), `selectedScale` (1.25),
-`selectedMinSize` (6), `litLinkAlpha` (0.8), `dimAlpha` (0.15). A color with alpha 0 keeps the
+`selectedMinSize` (6), `litLinkAlpha` (0.8), `litLinkColor` (0: lit links keep their color),
+`dimAlpha` (0.15). A color with alpha 0 keeps the
 node's own color.
+
+Rings: `pointedRing` and `selectedRing` (0: none) draw a ring around pointed and selected nodes
+(`focusedRing`, when set, for focused ones: the keyboard's place, or where search went; a pointer
+on a node still shows `pointedRing`),
+`ringWidth` (2) CSS pixels wide, with a halo of `ringHalo` (`0x000000cc`; best the background's
+color) `ringGap` (2) pixels wide between the node and its ring. A ring reads on a node of any color
+and in any crowd, so with rings the fill colors can be 0, and nodes keep their own color (their
+category). Labels leave room for the ring.
 
 ## Modules
 
 Every module works the same with a mouse, a pen and a finger; only the picking reach differs.
 Where a mouse uses a key (Shift-drag for a box), a long press does the same for every pointer.
+
+### style
+
+`view.use(styleNodes, {colorBy, palette, linkColors, background, ...})`: colors and sizes from the
+graph's data, kept readable while the layout and the camera move. One set of rules for any graph,
+made for a dark background:
+
+* **Color from a category**: `colorBy`, a field of `node.data` (or `node => value`; default
+  `group` when nodes have one). Categories take `PALETTE` (eight colors, exported) in order of
+  size, the biggest first; past it they share `OTHER`. `palette` (`{value: color}`) gives the
+  data's own colors, and values that are colors (`'#e42313'`, `'red'`) are drawn as they are. Any
+  color too dark for `background` is lightened to 3:1 against it. Links inside a category take
+  its color, links between categories stay neutral and fainter (`crossLinks`, 0.6). `linkColors`
+  (`{value: color}` for `link.data`, or `'self'` when link.data is a color) colors links from the
+  data instead. Nodes without a category are `color` (`'#90f8fc'`).
+* **Size from links**: a leaf is `unit` × 0.5 scene units wide, a node with k links
+  `unit` × 0.5 √k (`unit` 1; `sizeByLinks(unit)` is exported).
+* **Link alpha from their ink**: at most every 300 ms the links are binned on a 32 × 32 grid over
+  the drawing, and their alpha is set so the most crowded tenth of the cells gets `ink` (0.25) of
+  opacity, within `alpha` (`[0.05 / 255, 0.5]`). Below 1/255 a fixed share of the links is drawn
+  at 1/255. A 200k-link hairball keeps its texture; a sparse tree's links are bright.
+* **Nodes at least `minSize`** (3.5) CSS pixels wide, less where they crowd, and at most `room`
+  (0.7) of the distance to their nearest neighbour as big (the view's `nodeRoom`).
+* **Highlights** (`rings`, true): nodes keep their color and get a ring: white under the pointer,
+  cyan when focused or found by search, amber when selected; lit links in one light color. While something is selected,
+  the rest fades to `dim` (0.3), so the visitor still sees where the selection is.
+* **`background`** (`'#0e1624'`): the scene's clear color, the rings' and the labels' halo.
+* In 3D, `fog` (0.3) fades the far side of the drawing.
+
+API: `legend()` (`{title, items: [{color, label, count}], more}`, or null when the colors are the
+data's own or the categories are bare numbers), `colorOf(node)`, `linkAlpha()`, `nodeMinSize()`,
+`update()` (read the data again). `colorsOf(graph, options)` gives the same colors without a view.
+
+### pulse
+
+`view.use(pulseNodes, {on, color, radius, count, duration})`: rings that spread from a node and
+fade, so the eye finds it in a big drawing. By default the node search goes to pulses
+(`on: ['search']`); `start(node)` pulses any node. Two rings (`count`), 900 ms each
+(`duration`), 300 ms apart, out to 64 px (`radius`). With `prefers-reduced-motion` nothing moves:
+the node's ring (see Flags) shows where it is.
 
 ### labels
 
@@ -266,6 +335,9 @@ node labels that stay put while the layout moves.
   moves, and once more when they stop. Labels placed last time go first, on the side of their
   node they had. Hovered, focused, dragged and selected nodes are always labelled, then the
   selection's neighbours. Labels fade in and out over 300 ms (`fade`), in the shader.
+* **Out of the way.** No label goes where something covers the canvas (see "What the user
+  sees" above), and nodes that are equally important get the same text size: on a grid, where
+  every node is alike, labels spread over the whole drawing and none looks more important.
 * **Cheap.** Between placements every label follows its node on the GPU: a label is a quad that
   keeps its node's row and its side, and the shader reads the node's position. A running layout
   costs the CPU nothing per frame for labels. A placement takes about 1 ms on 77 nodes and 3 ms at
@@ -316,7 +388,8 @@ before a change is kept. API: `get()`, `set(nodesOrIds)`, `clear()`, `has(nodeOr
 its number of links and the fields of `node.data` (`describeNode()`). Hovering a node shows it
 while the pointer stays on the node or on the tooltip; a tap (mouse, pen or finger) keeps it open
 until a tap elsewhere or Escape. It follows its node as the layout and the camera move, beside the
-node and inside the canvas. `content(node)` returns text (never parsed as HTML), an element, or
+node and inside the canvas. The wheel over it zooms the drawing, as it would without the tooltip,
+unless the tooltip has more to scroll. `content(node)` returns text (never parsed as HTML), an element, or
 null. Hover tooltips need the hover module. API: `show(node)`, `hide()`, `get()`.
 
 ### navigate
@@ -350,10 +423,24 @@ move fires `dragstart`, `drag` and `dragend` with `pointerType: 'keyboard'`. API
 `view.use(searchNodes, {limit, key, placeholder})`: `/` on the canvas opens a search box (an ARIA
 combobox). Typing lists the best matches: labels that start with the text, then labels with a
 word that does, then labels that contain it, then ids; nodes with more links first. Up and Down
-choose, Enter or a click goes to the node: with navigate it gets keyboard focus, otherwise it is
-tapped. The camera brings it into view. Escape gives the keys back to the canvas. A query scans
-every node: 1.6 ms at 100k nodes (17 ms at 1M), after a 31 ms index built when the box first
-opens. Fires `search` ({node, query}). API: `open(text)`, `close()`, `find(text)`.
+choose, Enter or a click goes to the node: it is tapped (so selected, with the select module), and
+with navigate it gets keyboard focus too. The camera brings it into view; with fit, listen to
+`search` and call `fit.zoomTo(e.node)` to bring it close (the demo does). The box goes where the
+canvas shows, and again after the window resizes. Escape gives the keys back to the canvas. A
+query scans every node: 1.6 ms at 100k nodes (17 ms at 1M), after a 31 ms index built when the
+box first opens. Fires `search` ({node, query}). API: `open(text)`, `close()`, `find(text)`.
+
+### fit
+
+`view.use(fitLayout, {padding, labelRoom, maxScale, ease, bulk, bulkSlack, tilt, key, orient, minRoom})`:
+the camera keeps the whole drawing in view, inside the part of the canvas that nothing covers
+(see [What the user sees](#what-the-user-sees)), until the user moves it. The drawing's bulk is
+framed (a few far pieces don't shrink the rest), labels get room at the sides, a 3D layout is
+tilted once, and a settled 2D drawing turns to the screen's long side. A free area smaller than
+`minRoom` (120 px) each way, such as the strip above a soft keyboard, doesn't move the camera. It snaps under
+`prefers-reduced-motion`. API: `fit()` (back to the whole drawing, following again; also the `0`
+key), `follow(on)`, `following()`, `on(fn)` (`fn(following)`), `zoomTo(node, {linkPixels,
+duration})` (bring a node close: its links about `linkPixels` long, 40).
 
 ### Writing a module
 
@@ -411,7 +498,6 @@ use the same copy of w-gl (the demo's `vite.config.js` dedupes it).
 
 ## Not done yet
 
-Labels that make way for what covers the canvas (they are placed under a panel now),
-group (cluster) labels over the node labels, zoom ranges fixed once the layout settles (so
+Group (cluster) labels over the node labels, zoom ranges fixed once the layout settles (so
 zooming in never removes a label), clicking on label text, picking links, and cooperative
 gestures for graphs embedded in a scrolling page.

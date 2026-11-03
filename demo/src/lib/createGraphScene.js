@@ -1,4 +1,4 @@
-import {createScene, createGuide} from 'w-gl';
+import {createScene} from 'w-gl';
 import bus from './bus';
 import createHighLayout from 'ngraph.hde'
 import createForceLayout from './createForceLayout';
@@ -6,8 +6,11 @@ import findLargestComponent from './findLargestComponent';
 // Add-ons from modules/ in this repository (see vite.config.js), not part of ngraph.forcelayout
 import placeNodes from 'ngraph.forcelayout.pivot';
 import {createWebGPUBackend, runOnGpu} from 'ngraph.forcelayout.gpu';
-import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes, navigateNodes, searchNodes, labelNodes} from 'ngraph.forcelayout.view';
+import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes, navigateNodes, searchNodes, labelNodes, fitLayout, pulseNodes} from 'ngraph.forcelayout.view';
 import createGraph from 'ngraph.graph';
+import {stepsForFrame} from './deviceDefaults';
+import look, {hasNames} from './look.js';
+import {viewOptions, labelOptions, attachDrawing} from './drawing.js';
 
 const NODE_COLOR = 0x90f8fcff;
 const layoutProps = ['timeStep', 'springLength', 'springCoefficient', 'dimensions', 'dragCoefficient', 'gravity', 'theta', 'maxVelocity', 'integrator', 'nbody'];
@@ -17,7 +20,9 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   // and captured into closure. loadGraph will do the initialization
   let graph, layout;
   // `view` draws the graph (modules/view): it redraws when the layout steps or the camera moves
-  let scene, view, guide;
+  let scene, view;
+  // The drawing's rules on the view (drawing.js): link alpha and node sizes, the legend
+  let drawing = null;
 
   // With WebGPU picked, the GPU runs the layout's own simulator whenever its plan says it can
   // (`gpu`); otherwise the layout stays on the CPU and `gpuReasons` says why.
@@ -27,11 +32,22 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   // Starting and stopping the GPU runs one change at a time; frames don't step meanwhile
   let changes = Promise.resolve(), changing = false;
 
-  let fixedViewBox = false;
+  // The camera follows the whole drawing (fitLayout) until the user moves it; `onFollow`
+  // listeners hear when that starts or stops, so the app can offer a Fit button
+  let fitter = null;
+  let followListeners = new Set();
   let isRunning = false;
+  // The layout settled and the frame loop stopped by itself (not paused by the viewer): moving a
+  // node, changing a setting or a new layout runs it again
+  let autoStopped = false;
+  // {step, reason} of the layout's last settling, while it stays settled
+  let settled = null;
   // The frame loop runs only while the layout runs; a paused layout draws only when the view changes
   let rafHandle = 0;
-  let stepsPerFrame = sceneSettings.stepsPerFrame || 1;
+  // 0 is "auto": as many steps as fit in frameBudget ms (see deviceDefaults.js)
+  let stepsPerFrame = sceneSettings.stepsPerFrame ?? 1;
+  let frameBudget = sceneSettings.frameBudget || 8;
+  let lastFrameSteps = 0;
   let placement = sceneSettings.placement || 'default';
   let placementChoice = '';
   // An experimental idea from demo/src/prototypes, attached to every new layout
@@ -44,7 +60,11 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     dispose,
     runLayout,
     updateLayoutSettings,
-    setFixedViewBox,
+    fitView,
+    onFollow: fn => followListeners.add(fn),
+    // The view's search box and its keys-and-gestures card, for buttons a finger can reach
+    openSearch: () => { let search = view && view.getModule('search'); if (search) search.open(''); },
+    toggleHelp: () => { let navigate = view && view.getModule('navigate'); return navigate ? navigate.help() : false; },
     setStepsPerFrame,
     setPlacement,
     setBackend,
@@ -53,10 +73,19 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     finishPrototype,
     restart,
     getStats,
+    getLegend,
+    // The graph and what the drawing picked for it now (for the copied program)
+    getDrawingState: () => ({
+      graph,
+      linkAlpha: drawing && drawing.linkAlpha ? drawing.linkAlpha() : undefined,
+      nodeMinSize: drawing && drawing.nodeMinSize ? drawing.nodeMinSize() : undefined
+    }),
   };
 
   function loadGraph(newGraph, desiredLayout) {
     if (scene) {
+      if (drawing) drawing.dispose();
+      drawing = null;
       view.dispose();
       view = null;
       scene.dispose();
@@ -75,25 +104,40 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     // Let them play on console with it!
     window.graph = graph;
 
-    guide = createGuide(scene, {showGrid: true, lineColor: 0xffffff10, maxAlpha: 0x10, showCursor: false});
+    // No background grid: the drawing isn't a coordinate plot, and its axes ran through the graph
     // this is a standard force layout
     layout = createForceLayout(graph, layoutSettings);
+    watchStability(layout);
     applyPlacement();
     attachPrototype();
     changeLayout(null);
     stats.reset();
 
-    fitView();
-    view = createView(scene, {graph, layout, nodeColor: nodeColorOf()});
+    view = createView(scene, viewOptions(graph, layout).options);
+    // Colors, sizes and link alpha from the data, by the same rules for every graph: modules/view's
+    // style module with the demo's options (look.js, drawing.js)
+    drawing = attachDrawing(view, graph, {springLength: layoutSettings.springLength});
+    if (prototypeControl && prototypeControl.nodeColor) view.setNodeColor(nodeColorOf());
+    // The camera keeps the whole drawing in view (modules/view fit), with room for labels when
+    // the nodes have names (look.js decides, for the labels too)
+    fitter = view.use(fitLayout, hasNames(graph) ? {} : {labelRoom: null});
+    fitter.on(following => followListeners.forEach(fn => fn(following)));
+    // A node found by search comes close: on a big graph it is a dot among thousands at the
+    // whole drawing's zoom. Fit (or 0) goes back to the whole drawing.
+    view.on('search', e => { if (e.node) fitter.zoomTo(e.node); });
+    followListeners.forEach(fn => fn(true));
     // Hover, drag, select and inspect nodes (modules/view). Dragging works while the layout is paused too.
     // Keyboard: Enter focuses a node, arrows move between nodes, / searches, ? lists the keys.
     view.use(hoverNodes);
     view.use(dragNodes);
     view.use(selectNodes);
-    view.use(inspectNodes);
+    view.use(inspectNodes, look.inspect);
     view.use(navigateNodes);
     view.use(searchNodes);
-    view.use(labelNodes);
+    // A node search goes to sends out two fading rings, so the eye finds it in a big drawing (in
+    // the focus color, as its ring)
+    view.use(pulseNodes, {color: 0x7fe7efff});
+    view.use(labelNodes, labelOptions(graph));
     window.view = view;
 
     runLayout(true);
@@ -105,12 +149,19 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     detachPrototype();
     layout.dispose();
     layout = createForceLayout(graph, layoutSettings);
+    watchStability(layout);
     applyPlacement();
     attachPrototype();
     showLayout();
+    resumeIfSettled();
     changeLayout(null);
     stats.reset();
     fitView();
+  }
+
+  // Back to the whole drawing, following it again
+  function fitView() {
+    if (fitter) fitter.fit();
   }
 
   // The view draws the current layout, in the colors of the attached idea
@@ -123,8 +174,14 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   // attach (and after its final step), not on every frame.
   function nodeColorOf() {
     let nodeColor = prototypeControl && prototypeControl.nodeColor;
-    if (!nodeColor) return NODE_COLOR;
-    return node => nodeColor(node.id) || NODE_COLOR;
+    let own = drawing ? drawing.colorOf : NODE_COLOR;
+    if (!nodeColor) return own;
+    return node => nodeColor(node.id) || (typeof own === 'function' ? own(node) : own);
+  }
+
+  // What the colors mean: {title, items: [{color, label, count}], more} or null (look.js)
+  function getLegend() {
+    return drawing ? drawing.legend : null;
   }
 
   function setPrototype(newPrototype, params) {
@@ -184,7 +241,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   }
 
   function setStepsPerFrame(newStepsPerFrame) {
-    stepsPerFrame = Math.max(1, Math.round(newStepsPerFrame) || 1);
+    stepsPerFrame = Math.max(0, Math.round(newStepsPerFrame) || 0);
   }
 
   async function setBackend(newBackend) {
@@ -195,8 +252,15 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     if (newBackend !== backend) {
       backend = newBackend;
       gpuError = '';
-      stats.reset();
-      await changeLayout(null);
+      if (layout) {
+        // The other backend does the same work from the same start, as Reset does, so a
+        // "Settled in" line is all its own (a settled layout would otherwise not move at all)
+        restart();
+        await changes;
+      } else {
+        stats.reset();
+        await changeLayout(null);
+      }
     }
     return backend;
   }
@@ -263,7 +327,15 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
       nodes: graph ? graph.getNodesCount() : 0,
       links: graph ? graph.getLinksCount() : 0,
       steps: stats.steps,
+      running: isRunning,
+      // {step, reason}: when the layout settled ('still': the drawing stopped changing; 'noise':
+      // only jitter is left), while it stays settled
+      settled,
       msPerStep: gpu ? gpu.stats().msPerStep : stats.msPerStep(),
+      // wall clock: steps and frames per second over the last second, while it runs
+      rate: isRunning ? stats.rate() : null,
+      // steps the last frame ran (with steps per frame on auto, what the budget allowed)
+      stepsPerFrame: lastFrameSteps,
       placement: placementChoice,
       canFinishPrototype: !!(prototypeControl && prototypeControl.finish),
       // why the layout runs on the CPU although WebGPU is picked
@@ -272,26 +344,17 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     };
   }
 
-  function fitView() {
-    let rect = layout.getGraphRect();
-    let cx = (rect.min_x + rect.max_x) / 2;
-    let cy = (rect.min_y + rect.max_y) / 2;
-    let half = Math.max(rect.max_x - rect.min_x, rect.max_y - rect.min_y) * 0.6;
-    if (!Number.isFinite(half) || half < 100.8) {
-      // Small graphs: keep the scene size we always had
-      cx = cy = 0;
-      half = 100.8;
-    }
-    scene.setViewBox({
-      left:  cx - half,
-      top:   cy - half,
-      right:  cx + half,
-      bottom: cy + half,
-    });
+  // Run or pause, as the viewer asked. Run on a settled layout keeps it going (until the viewer
+  // pauses, or it wakes and settles again)
+  function runLayout(newIsRunning) {
+    autoStopped = false;
+    if (newIsRunning) settled = null;
+    setRunning(newIsRunning);
   }
 
-  function runLayout(newIsRunning) {
+  function setRunning(newIsRunning) {
     isRunning = newIsRunning;
+    if (!isRunning) stats.pause();
     if (isRunning && !rafHandle) rafHandle = requestAnimationFrame(frame);
   }
 
@@ -316,6 +379,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     let prevLayout = layout;
     detachPrototype();
     layout = createForceLayout(graph, layoutSettings)
+    watchStability(layout);
     graph.forEachNode(node => {
       // a plain {x, y, ...} copy: positions are views into the layout's arrays
       let prevPos = prevLayout.getNodePosition(node.id).toJSON();
@@ -331,17 +395,47 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     prevLayout.dispose();
     attachPrototype(stats.steps);
     showLayout();
+    resumeIfSettled();
   }
 
-  function setFixedViewBox(isFixed) {
-    fixedViewBox = isFixed;
+  // When the layout settles (lib: the drawing stopped changing, or only jitter is left), the frame
+  // loop stops: no more steps, no more GPU work. When it wakes (a node is moved by hand, a setting
+  // changes), the loop runs again until it settles again.
+  function watchStability(target) {
+    settled = null;
+    target.on('stable', isStable => {
+      if (target !== layout) return;
+      if (isStable) {
+        let state = target.getStability();
+        // how long it took counts only the first time it settles after a start
+        // how long it took counts only the first time it settles after a start (load, reset)
+        settled = {step: stats.steps, reason: state.reason, seconds: stats.timed ? 0 : stats.runMs / 1000};
+        stats.timed = true;
+        if (isRunning) {
+          autoStopped = true;
+          setRunning(false);
+        }
+      } else {
+        settled = null;
+        resumeIfSettled();
+      }
+    });
+  }
+
+  function resumeIfSettled() {
+    if (!autoStopped) return;
+    autoStopped = false;
+    setRunning(true);
   }
 
   function initScene() {
     // No multisampling: the view smooths its own lines, and multisampled blending made links the
     // most expensive part of a frame (see modules/view/programs.js)
     let scene = createScene(canvas, {wglContextOptions: {antialias: false}});
-    scene.setClearColor(12/255, 41/255, 82/255, 1)
+    let [r, g, b] = look.background;
+    scene.setClearColor(r / 255, g / 255, b / 255, 1)
+    // Until the fit module takes over: the scene size small graphs always had
+    scene.setViewBox({left: -100.8, top: -100.8, right: 100.8, bottom: 100.8});
     return scene;
   }
   
@@ -351,23 +445,17 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     rafHandle = requestAnimationFrame(frame);
     if (changing) return;
 
+    let steps = stepsForFrame(stepsPerFrame, gpu ? gpu.stats().msPerStep : stats.msPerStep(), frameBudget);
+    lastFrameSteps = steps;
     let start = performance.now();
     if (gpu) {
-      gpu.step(stepsPerFrame);
+      gpu.step(steps);
     } else {
       // each step fires the layout's 'step' event, on which the view asks for a frame
-      for (let i = 0; i < stepsPerFrame; ++i) layout.step();
+      for (let i = 0; i < steps; ++i) layout.step();
     }
-    stats.record(performance.now() - start, stepsPerFrame);
-    if (fixedViewBox) {
-      let rect = layout.getGraphRect();
-      scene.setViewBox({
-        left:  rect.min_x,
-        top:   rect.min_y,
-        right:  rect.max_x,
-        bottom: rect.max_y,
-      });
-    }
+    stats.record(performance.now() - start, steps);
+    // The loop stops by itself when the layout settles: see the 'stable' listener above
   }
 
   function dispose() {
@@ -377,29 +465,62 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     if (gpu) gpu.stop();
     gpu = null;
     detachPrototype();
+    if (drawing) drawing.dispose();
     if (view) view.dispose();
     scene.dispose();
     bus.off('load-graph', loadGraph);
   }
 }
 
-// Average time per layout step over the last frames.
+// Average time per layout step over the last frames; steps and frames per second over the last
+// second (wall clock, so they compare across CPU and GPU); and how long the layout has run.
 function createStats() {
   let samples = [];
+  let recent = [];  // [time, steps, time, steps, ...] of the last second's frames
+  let lastAt = 0;
   let api = {
     steps: 0,
+    // ms the layout has been running since it started (paused time doesn't count)
+    runMs: 0,
+    // the layout settled once since it started: later settles (after a wake) aren't timed
+    timed: false,
     record(ms, steps) {
       api.steps += steps;
       samples.push(ms / steps);
       if (samples.length > 30) samples.shift();
+      let now = performance.now();
+      if (lastAt) api.runMs += Math.min(now - lastAt, 100);
+      lastAt = now;
+      recent.push(now, steps);
+      while (recent.length > 2 && now - recent[0] > 1000) recent.splice(0, 2);
+    },
+    // The loop stopped: the next frame doesn't count the pause as running time
+    pause() {
+      lastAt = 0;
+      recent = [];
     },
     reset() {
       api.steps = 0;
+      api.runMs = 0;
+      api.timed = false;
       samples = [];
+      recent = [];
+      lastAt = 0;
     },
     msPerStep() {
       if (samples.length === 0) return 0;
       return samples.reduce((a, b) => a + b, 0) / samples.length;
+    },
+    // {stepsPerSecond, fps} over the last second, or null before a quarter second of frames
+    rate() {
+      if (recent.length < 4) return null;
+      let span = recent[recent.length - 2] - recent[0];
+      if (span < 250) return null;
+      let steps = 0;
+      // the first frame's steps ran before the span started
+      for (let i = 3; i < recent.length; i += 2) steps += recent[i];
+      let frames = recent.length / 2 - 1;
+      return {stepsPerSecond: steps * 1000 / span, fps: frames * 1000 / span};
     }
   };
   return api;

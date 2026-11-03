@@ -414,10 +414,16 @@ function createRunner(layout, backend) {
       });
       return;
     }
-    const isStable = store.n === 0 || lastMove / store.n <= 0.01;
-    if (isStable !== wasStable) {
-      wasStable = isStable;
-      layout.fire('stable', isStable);
+    if (layout.checkStable) {
+      // the layout's own check, from the positions this readback brought (it counts the steps
+      // by the simulator's iteration, set in apply())
+      layout.checkStable();
+    } else {
+      const isStable = store.n === 0 || lastMove / store.n <= 0.01;
+      if (isStable !== wasStable) {
+        wasStable = isStable;
+        layout.fire('stable', isStable);
+      }
     }
     try {
       emit('readback', { steps: firstStep + appliedSteps, lastMove });

@@ -3,11 +3,27 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { build } from 'esbuild';
+import { execSync } from 'node:child_process';
 
 const libraryRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 
+// The commit this demo is built from: the copied code installs exactly it (Settings as code).
+// DEMO_COMMIT wins: a pull request's CI checks out a merge commit that a plain clone doesn't
+// have, so the preview workflow passes the pull request's own head.
+function commitOf(dir) {
+  if (process.env.DEMO_COMMIT) return process.env.DEMO_COMMIT.slice(0, 7);
+  try {
+    return execSync('git rev-parse --short HEAD', {cwd: dir, stdio: ['ignore', 'pipe', 'ignore']}).toString().trim();
+  } catch (e) {
+    return '';
+  }
+}
+
 export default defineConfig({
   base: './',
+  define: {
+    __DEMO_COMMIT__: JSON.stringify(commitOf(libraryRoot))
+  },
   plugins: [vue(), localForceLayout()],
   resolve: {
     // Add-ons that live next to the library in this repository, imported by their package names

@@ -12,7 +12,7 @@
     "webgl"
   ],
   "author": "Andrei Kashcha",
-  "license": "BSD-3-Clause",
+  "license": "MIT",
   "peerDependencies": {
     "w-gl": "^0.21.1"
   }

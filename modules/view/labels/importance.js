@@ -25,12 +25,30 @@ export function computeImportance(graph, rowOf, count, how = 'degree') {
   return scores;
 }
 
-/** Rows from the most important to the least (ties: lower row first) */
+/**
+ * Rows from the most important to the least. Ties come in a fixed scrambled order: rows follow
+ * the order the graph was built in (a grid row by row), so ties by row would put every label of
+ * a grid on its first rows, where placement stops looking.
+ */
 export function rankRows(scores) {
   let order = new Uint32Array(scores.length);
-  for (let i = 0; i < order.length; ++i) order[i] = i;
-  order.sort((a, b) => (scores[b] - scores[a]) || (a - b));
+  let mixed = new Uint32Array(scores.length);
+  for (let i = 0; i < order.length; ++i) {
+    order[i] = i;
+    mixed[i] = scramble(i);
+  }
+  order.sort((a, b) => (scores[b] - scores[a]) || (mixed[a] - mixed[b]) || (a - b));
   return order;
+}
+
+// A 32-bit integer hash (lowbias32): neighbouring rows land far apart
+function scramble(x) {
+  x ^= x >>> 16;
+  x = Math.imul(x, 0x7feb352d);
+  x ^= x >>> 15;
+  x = Math.imul(x, 0x846ca68b);
+  x ^= x >>> 16;
+  return x >>> 0;
 }
 
 // PageRank of the graph with links read both ways: 30 rounds, damping 0.85

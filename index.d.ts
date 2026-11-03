@@ -558,6 +558,11 @@ declare module "ngraph.forcelayout" {
     nodeCharge: (nodeId: NodeId) => number;
 
     /**
+     * When step() says the layout has settled (see Stability)
+     */
+    stable: StabilitySettings;
+
+    /**
      * This parameter defines number of dimensions of the space where simulation
      * is performed.
      */
@@ -842,16 +847,53 @@ declare module "ngraph.forcelayout" {
     random: any;
   }
 
+  export interface Stability {
+    stable: boolean;
+    /** 'still': the drawing stopped changing; 'noise': what still moves goes nowhere; '' while not stable */
+    reason: '' | 'still' | 'noise';
+    /** the step it settled at, -1 while not stable */
+    step: number;
+    /** how far 95% of the bodies moved over the last window, as a share of the drawing's size */
+    stillness: number;
+    /** mean squared shift over four windows divided by one window's: 16 directed, 1-4 noise */
+    noise: number;
+  }
+
+  export interface StabilitySettings {
+    /** steps between checks (100) */
+    window?: number;
+    /** 'still' below this share of the drawing's size per window (0.002) */
+    stillness?: number;
+    /** 'noise' below this ratio (5) */
+    noise?: number;
+    /** checks in a row for 'noise' (3) */
+    hold?: number;
+    /** bodies looked at (1000) */
+    sample?: number;
+  }
+
   /**
    * Force based layout for a given graph.
    */
   export interface Layout<T extends Graph> {
     /**
      * Performs one step of iterative layout algorithm
-     * @returns true if the system should be considered stable; False otherwise.
-     * The system is stable if no further call to `step()` can improve the layout.
+     * @returns true once the layout has settled (its drawing stopped changing, or only noise is
+     * left); it stays true until a node is moved by hand, the graph or a setting changes.
      */
     step(): boolean;
+
+    /**
+     * Updates whether the layout has settled from the positions in the store and fires
+     * 'stable' when that changed. step() calls it; engines that step elsewhere call it after
+     * they bring positions back.
+     */
+    checkStable(): boolean;
+
+    /**
+     * Whether and why the layout has settled
+     */
+    getStability(): Stability;
 
     /**
      * For a given `nodeId` returns position

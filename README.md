@@ -5,6 +5,9 @@
 This is a [force directed](http://en.wikipedia.org/wiki/Force-directed_graph_drawing) graph layout algorithm, 
 that works in any dimension (2D, 3D, and above).
 
+**[Live demo](https://anvaka.github.io/ngraph.forcelayout/)**: real graphs laid out in your browser, on the CPU or
+with the WebGPU add-on. Drop in your own `.dot` or `.json` file.
+
 The library uses quad tree to speed up computation of long-distance forces.
 
 This repository is part of [ngraph family](https://github.com/anvaka/ngraph), and operates on 
@@ -39,6 +42,26 @@ graph.forEachLink(function(link) {
   // }
 });
 ```
+
+## When is the layout done?
+
+`step()` returns `true` once the layout has settled, and fires `'stable'` when that changes:
+
+``` js
+let steps = 0;
+while (!layout.step() && steps < 10000) steps++; // a budget for the slowest graphs
+layout.getStability(); // {stable: true, reason: 'still', step: 900, stillness: 0.0011, noise: 106}
+```
+
+Every 100 steps the layout looks at how far a sample of 1,000 nodes moved. It has settled when
+95% of them moved less than 0.2% of the drawing's size over the last 100 steps (`'still'`: 2 px
+of a drawing shown 1000 px wide), or when they moved no further over the last 400 steps than
+over the last 100 (`'noise'`: what still moves is jitter, not progress). Both are measured in
+sizes of the drawing, so they work the same for any spring length, graph size or dimension.
+Moving a node with `setNodePosition()`, changing the graph or a setting wakes the layout up:
+`step()` returns `false` until it settles again. Pinned nodes are left out.
+
+Tune it with `stable: {window: 100, stillness: 0.002, noise: 5, hold: 3, sample: 1000}`.
 
 If you'd like to perform graph layout in space with more than two dimensions, just add one
 argument to this line:

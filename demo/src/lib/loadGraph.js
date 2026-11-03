@@ -1,6 +1,7 @@
 import createGraph from 'ngraph.graph';
 import miserables from 'miserables';
 import generate from 'ngraph.generators';
+import loadLabelledGraph, {labelledGraphs} from './loadLabelledGraph';
 
 let cache = simpleCache();
 
@@ -22,6 +23,7 @@ export default function loadGraph(name) {
   if (name === 'Miserables') return Promise.resolve(miserables);
   if (name === 'Binary') return Promise.resolve(generate.balancedBinTree(10));
   if (generatedGraphs[name]) return Promise.resolve(generatedGraphs[name]());
+  if (labelledGraphs[name]) return loadLabelledGraph(name);
   if (name.startsWith(BENCHMARK)) return loadBenchmarkGraph(name.slice(BENCHMARK.length));
 
   let mtxObject = cache.get(name);
@@ -111,6 +113,9 @@ function plantedGroups(groups, size) {
   const random = seededRandom(7);
   const pick = n => Math.floor(random() * n);
   let graph = createGraph();
+  // Each node knows its planted group, so the drawing colors it (and shows whether the layout
+  // keeps the groups apart)
+  for (let u = 0; u < groups * size; u++) graph.addNode(u, {group: Math.floor(u / size)});
   for (let u = 0; u < groups * size; u++) {
     const group = Math.floor(u / size);
     for (let k = 0; k < 3; k++) {

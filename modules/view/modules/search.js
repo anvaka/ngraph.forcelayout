@@ -16,7 +16,13 @@
 // Events: 'search' ({node, query}) when a node is picked.
 // Options: `limit` (8), `key` ('/'), `placeholder` ('Find a node').
 // API: open(text), close(), find(text) (the matching nodes), dispose().
+//
+// The box opens at the top of what shows of the canvas, beside a panel that covers part of it
+// rather than under it (see the view's visible area).
+import {placeOverCanvas} from '../visible.js';
 
+// Height kept free below the box's top for the list of matches (CSS pixels)
+const RESULTS_ROOM = 260;
 const ROOT_STYLE = 'position:fixed;z-index:2147483646;width:300px;max-width:calc(100vw - 24px);padding:6px;' +
   'border-radius:4px;background:rgba(9,22,44,0.96);border:1px solid rgba(255,255,255,0.18);' +
   'box-shadow:0 2px 10px rgba(0,0,0,0.45);font:13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;color:#e8f1ff;';
@@ -35,6 +41,11 @@ export default {
     let canvas = ctx.scene.getDrawContext().canvas;
     let index = null;
     let box = null;
+    // The last pointer on the page: after a touch or a pen, Enter is a soft keyboard's Go key, and
+    // the canvas takes focus without the keyboard's ring (as after a tap on a result)
+    let lastPointer = 'mouse';
+    let notePointer = e => { lastPointer = e.pointerType || 'mouse'; };
+    window.addEventListener('pointerdown', notePointer, true);
     let listId = 'graph-search-' + (++searchBoxes);
 
     ctx.input.add({
@@ -47,6 +58,12 @@ export default {
       }
     });
     ctx.graph.on('changed', forget);
+    // A turned phone or a resized window: the box goes again where the canvas shows
+    let onResize = () => {
+      if (!box || box.root.style.display === 'none') return;
+      setTimeout(() => placeOverCanvas(box.root, canvas, ctx.visibleArea(), 'top', RESULTS_ROOM), 300);
+    };
+    window.addEventListener('resize', onResize);
 
     return {
       open,
@@ -55,6 +72,8 @@ export default {
       dispose() {
         close(false);
         ctx.graph.off('changed', forget);
+        window.removeEventListener('resize', onResize);
+        window.removeEventListener('pointerdown', notePointer, true);
       }
     };
 
@@ -70,20 +89,21 @@ export default {
     function open(text) {
       if (!box) createBox();
       box.input.value = text || '';
-      let rect = canvas.getBoundingClientRect();
-      box.root.style.left = (rect.left + 12) + 'px';
-      box.root.style.top = (rect.top + 12) + 'px';
       box.root.style.display = 'block';
+      // At the top of what shows, not under a panel, with room for the results below it
+      placeOverCanvas(box.root, canvas, ctx.visibleArea(), 'top', RESULTS_ROOM);
       box.input.focus({preventScroll: true});
       update();
     }
 
-    function close(backToCanvas) {
+    // `byPointer`: the pick was a click or a tap, so the canvas takes focus without the keyboard's
+    // focus ring (browsers that ignore focusVisible decide themselves)
+    function close(backToCanvas, byPointer) {
       if (!box || box.root.style.display === 'none') return;
       box.root.style.display = 'none';
       box.input.setAttribute('aria-expanded', 'false');
       box.input.removeAttribute('aria-activedescendant');
-      if (backToCanvas && canvas.focus) canvas.focus({preventScroll: true});
+      if (backToCanvas && canvas.focus) canvas.focus(byPointer ? {preventScroll: true, focusVisible: false} : {preventScroll: true});
     }
 
     function createBox() {
@@ -125,7 +145,7 @@ export default {
       list.addEventListener('pointerdown', e => e.preventDefault());
       list.addEventListener('click', e => {
         let option = e.target.closest('[role=option]');
-        if (option) pick(+option.dataset.index);
+        if (option) pick(+option.dataset.index, true);
       });
       box = {root, input, list, status, matches: [], active: -1};
     }
@@ -190,7 +210,7 @@ export default {
         highlight();
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        if (box.active >= 0) pick(box.active);
+        if (box.active >= 0) pick(box.active, lastPointer === 'touch' || lastPointer === 'pen');
       } else if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
@@ -198,19 +218,18 @@ export default {
       }
     }
 
-    function pick(i) {
+    function pick(i, byPointer) {
       let match = box.matches[i];
       if (!match) return;
       let query = box.input.value;
-      close(true);
+      close(true, byPointer);
       let node = match.node;
       let focus = ctx.get('focus');
-      if (focus) {
-        focus.set(node, 'search');
-      } else {
-        ctx.reveal(node);
-        ctx.input.tap(node, {});
-      }
+      if (focus) focus.set(node, 'search');
+      else ctx.reveal(node);
+      // Found reads as picked: the node is selected as a tap would (its ring, its links lit, the
+      // rest dimmed, the tooltip kept), so it stands out on any graph
+      ctx.input.tap(node, {});
       ctx.emit('search', {node, id: node.id, query});
     }
   }

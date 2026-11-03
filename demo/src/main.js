@@ -1,6 +1,8 @@
 import { createApp } from 'vue'
 import { isWebGLEnabled } from 'w-gl';
 import App from './App.vue'
+// The look: tokens and control styles for every panel element (see theme.css)
+import './theme.css'
 import fileDrop from './lib/fileDrop.js';
 import loadDroppedGraph from './lib/loadDroppedGraph.js';
 

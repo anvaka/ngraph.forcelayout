@@ -1,0 +1,594 @@
+/* Layout of the panel's rows and the canvas tools: where things go and how big they are. Colours,
+   type and control looks come from the tokens stylesheet (ui); the var() fallbacks keep this
+   readable without it. */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Name with the install line (beside it when both fit, else under it), and one line of what
+   it is */
+.title-row .name-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.title-row {
+  padding: 8px 8px 6px;
+}
+.title-row h2 {
+  margin: 0;
+}
+.title-row .pitch {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-2, rgba(255, 255, 255, 0.75));
+}
+
+/* Buttons that act on the canvas: bottom right, where a thumb reaches */
+.canvas-tools {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 2;
+}
+.canvas-tools .tool {
+  min-width: 36px;
+  height: 36px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.35));
+  border-radius: 18px;
+  background: var(--panel, rgb(12, 41, 82));
+  color: var(--text, #fff);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+@media (pointer: coarse) {
+  .canvas-tools .tool {
+    min-width: 44px;
+    height: 44px;
+    border-radius: 22px;
+  }
+}
+
+/* What the graph is, what colour means, whose data it is */
+.about-line {
+  padding: 6px 8px 8px;
+  font-size: 12px;
+  line-height: 16px;
+  border-top: 1px solid var(--line, rgba(255, 255, 255, 0.3));
+}
+.about-line p {
+  margin: 0;
+}
+.about-line .about-text {
+  color: var(--text-2, rgba(255, 255, 255, 0.8));
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  cursor: pointer;
+}
+.about-line .about-text.open {
+  -webkit-line-clamp: unset;
+  display: block;
+}
+.about-line .legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  margin-top: 4px;
+}
+.about-line .legend-name {
+  white-space: nowrap;
+  color: var(--text-3, rgba(255, 255, 255, 0.6));
+}
+.about-line .legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.about-line .swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.about-line .credit {
+  margin-top: 4px;
+  color: var(--text-3, rgba(255, 255, 255, 0.6));
+}
+
+/* Stats: the text takes the room, the buttons keep theirs */
+.stats-row .stats-text {
+  min-width: 0;
+  flex: 1;
+}
+
+/* A file dragged over the page */
+body.drag-over::after {
+  content: 'Drop a .dot or .json file to lay it out';
+  position: fixed;
+  inset: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--accent, #267fcd);
+  border-radius: 12px;
+  background: var(--canvas-veil, rgba(12, 41, 82, 0.85));
+  color: var(--text, #fff);
+  font-size: 22px;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.about-line .about-toggle {
+  display: none;
+}
+.about-line .about-toggle {
+  padding: 0 4px 0 0;
+  border: none;
+  background: none;
+  color: var(--text-2, rgba(255, 255, 255, 0.8));
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Phones: the panel stays short. One line of what the graph is (tap for all of it), or, with
+   colours, one line of colours and a button for the text; the data credit sits at the canvas's
+   bottom left, as maps credit their data. */
+@media (max-width: 500px) {
+  .stats-row .placement {
+    display: none;
+  }
+  /* the install line beside the name: a smaller face, so both fit on one row from 360 px */
+  .title-row .install {
+    font-size: 10px;
+  }
+  .about-line {
+    padding: 4px 8px 6px;
+  }
+  .about-line .about-text {
+    -webkit-line-clamp: 1;
+  }
+  .about-line .about-text.with-legend:not(.open) {
+    display: none;
+  }
+  .about-line .about-toggle {
+    display: inline;
+    min-width: 24px;
+    min-height: 24px;
+  }
+  .about-line .legend {
+    flex-wrap: nowrap;
+    overflow: hidden;
+  }
+  .about-line .credit {
+    position: fixed;
+    left: 8px;
+    bottom: 8px;
+    max-width: calc(100vw - 140px);
+    margin: 0;
+    font-size: 11px;
+    line-height: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+/* Settings as code (full). Colours are ui's tokens; these fallbacks keep it quiet: keywords and
+   comments dim, values bright, changed values in the accent. */
+.code-settings {
+  font-size: 13px;
+}
+.code {
+  font-family: ui-monospace, Menlo, Consolas, 'DejaVu Sans Mono', monospace;
+  line-height: 22px;
+  color: var(--text-2, #c9d4e3);
+  overflow-wrap: anywhere;
+}
+.code .line {
+  display: block;
+  min-height: 22px;
+  /* long lines wrap with a hanging indent instead of running off a phone */
+  white-space: pre-wrap;
+  padding-left: 2ch;
+  text-indent: -2ch;
+}
+.code .line.indent {
+  padding-left: 4ch;
+}
+.code .line.help {
+  padding-left: 6ch;
+  line-height: 18px;
+  margin-bottom: 4px;
+}
+.code .line.help[hidden] {
+  display: none;
+}
+.code .kw, .code .comment {
+  color: var(--text-3, #8a9ab0);
+}
+.code .str {
+  color: var(--text-2, #c9d4e3);
+}
+.code label {
+  cursor: default;
+}
+.code .hit {
+  display: inline-block;
+  text-indent: 0;
+}
+.code .value {
+  font: inherit;
+  color: var(--text, #fff);
+  background: var(--field, rgba(255, 255, 255, 0.06));
+  border: none;
+  border-bottom: 1px dashed var(--line, rgba(255, 255, 255, 0.4));
+  border-radius: 2px;
+  padding: 0 3px;
+  margin: 0 1px;
+}
+.code select.value {
+  appearance: none;
+}
+.code .value:focus {
+  outline: 2px solid var(--accent, #4fb3ff);
+  outline-offset: 1px;
+}
+.code .changed .value {
+  color: var(--accent, #4fb3ff);
+  border-bottom-color: var(--accent, #4fb3ff);
+}
+.code .toggle {
+  cursor: pointer;
+  padding-left: 0;
+  text-indent: 0;
+}
+.code .toggle input {
+  margin: 0 6px 0 0;
+  vertical-align: -2px;
+}
+/* The lines before the options (install, imports, a small graph) fold, so Settings open on the
+   options themselves */
+.code .fold {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.code .preamble:not(.open) {
+  display: none;
+}
+/* Every target at least 24 px (WCAG 2.5.8) with a mouse too: 24 px lines and values, 18 px boxes */
+@media (pointer: fine), (hover: hover) {
+  .code-settings .code {
+    line-height: 24px;
+  }
+  .code-settings .code .line {
+    min-height: 24px;
+  }
+  .code-settings .code .value {
+    min-height: 24px;
+    min-width: 24px;
+  }
+  .code-settings .code .toggle input {
+    width: 18px;
+    height: 18px;
+    margin: 3px 6px 3px 0;
+  }
+}
+/* A finger needs bigger targets: taller lines, values at least 32 px each way */
+@media (pointer: coarse) {
+  .code {
+    line-height: 32px;
+  }
+  .code .line {
+    min-height: 32px;
+  }
+  .code .value {
+    min-width: 32px;
+    min-height: 32px;
+    padding: 0 6px;
+  }
+  .code .toggle input {
+    width: 22px;
+    height: 22px;
+    vertical-align: -6px;
+  }
+}
+.code-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+/* The way out of Settings (the button that opened them is at the top): it stays in sight at the
+   bottom of the Settings box while it scrolls */
+.settings-done {
+  display: block;
+  position: sticky;
+  bottom: 4px;
+  margin: 12px 0 4px auto;
+  min-width: 88px;
+  box-shadow: 0 0 0 6px var(--panel, rgb(12, 41, 82));
+}
+.code-actions button.link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent, #4fb3ff);
+  font: inherit;
+  cursor: pointer;
+}
+.code-copy {
+  width: 100%;
+  height: 160px;
+  font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+}
+.code-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-3, #8a9ab0);
+}
+
+/* Full: a row of switches under the stats */
+.controls-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 8px;
+}
+.controls-row .toggle-settings {
+  margin-left: auto;
+}
+.switch {
+  display: inline-flex;
+}
+.switch button {
+  min-width: 40px;
+  padding: 0 8px;
+  height: 26px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+@media (pointer: coarse) {
+  .switch button, .controls-row .toggle-settings {
+    height: 36px;
+  }
+}
+
+/* Phones: Settings open right under the button that opened them, as part of the panel, at most
+   45% of the screen; the graph keeps the rest below (the soft keyboard rises from the bottom, so
+   it covers the graph, not the field being typed in) */
+@media (max-width: 500px) {
+  #settings.content.sheet {
+    position: static;
+    max-height: 45dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 8px var(--inset, 12px);
+    background: none;
+    border: none;
+    border-top: 1px solid var(--line, rgba(255, 255, 255, 0.2));
+    border-radius: 0;
+    box-shadow: none;
+  }
+}
+
+/* Structure over the theme: on a desktop Settings stay in the panel (the sheet is for phones),
+   and code lines wrap with a hanging indent rather than scroll sideways (at 320 px too). Values
+   size their own text, with the theme's padding outside it. */
+@media (min-width: 501px) {
+  #settings.sheet {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    box-shadow: none;
+    border-radius: 0;
+    border-top: 1px solid var(--line, rgba(255, 255, 255, 0.2));
+    background: none;
+  }
+  #settings.sheet::before {
+    display: none;
+  }
+}
+.code-settings .code {
+  overflow-x: visible;
+}
+.code-settings .code .line {
+  white-space: pre-wrap;
+  padding-left: 2ch;
+  text-indent: -2ch;
+}
+.code-settings .code .line.indent {
+  padding-left: 4ch;
+}
+.code-settings .code .line.help {
+  padding-left: 6ch;
+}
+.code-settings .code .value {
+  box-sizing: content-box;
+}
+
+
+/* Phones: Fit graph sits above the ? and search buttons, so the bottom row leaves the data
+   credit at the bottom left uncovered */
+@media (max-width: 500px) {
+  .canvas-tools .fit-view {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 8px);
+    white-space: nowrap;
+  }
+  .about-line .credit {
+    max-width: calc(100vw - 132px);
+    /* it sits over the drawing: on the panel's colour, so nodes behind it don't swallow it */
+    padding: 1px 6px;
+    margin-left: -6px;
+    border-radius: 4px;
+    background: var(--panel, rgb(12, 41, 82));
+  }
+}
+
+/* Phones and short screens (a phone on its side): while Settings are open the panel folds to its
+   graph row and the Settings button, so Settings show at once under that button and the graph
+   keeps the rest (2D|3D and the GPU are lines of the code meanwhile). The data credit stays. */
+@media (max-width: 500px), (max-height: 500px) {
+  .settings-open .title-row,
+  .settings-open .stats-row,
+  .settings-open .about-line > :not(.credit),
+  .settings-open .idea-bar,
+  .settings-open .controls-row .switch {
+    display: none;
+  }
+}
+@media (min-width: 501px) and (max-height: 500px) {
+  .settings-open .about-line {
+    padding-top: 0;
+    padding-bottom: 6px;
+    border-top: none;
+  }
+}
+
+/* Phones: the panel folds to one line so the drawing can have the screen. Its fold button is
+   the grip under the last row; folded, it is the graph's name with the grip under it. A tap
+   or a swipe (up folds, down unfolds) works it. Phones on their side and touch tablets too;
+   bigger screens with a mouse have room: no button. */
+.panel-fold {
+  display: none;
+}
+@media (max-width: 500px), (max-height: 500px), (pointer: coarse) {
+  .panel-fold {
+    display: flex;
+    align-items: center;
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    height: 28px;
+    margin: 0;
+    padding: 0 var(--inset, 12px);
+    border: none;
+    background: none;
+    color: var(--text, #fff);
+    font: inherit;
+    cursor: pointer;
+    /* a swipe on it is ours, not a scroll of the panel */
+    touch-action: none;
+  }
+  .panel-fold .grip {
+    position: absolute;
+    left: 50%;
+    bottom: 10px;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    border-radius: 2px;
+    background: var(--text-3, rgba(255, 255, 255, 0.45));
+  }
+  /* the grip row is the panel's bottom padding (theme.css loads later: two classes win) */
+  .layout-box .about-line {
+    padding-bottom: 0;
+  }
+  .panel-folded .panel-fold {
+    height: 44px;
+  }
+  .panel-folded .panel-fold .grip {
+    bottom: 4px;
+  }
+  .panel-fold .fold-title {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .panel-fold .fold-chevron {
+    margin-left: 8px;
+    color: var(--text-2, rgba(255, 255, 255, 0.75));
+  }
+  /* Folded: every row goes but the data credit, which sits over the canvas */
+  .panel-folded .title-row,
+  .panel-folded .layout-box > :not(.about-line),
+  .panel-folded .about-line > :not(.credit),
+  .settings-open .panel-fold {
+    display: none;
+  }
+  .panel-folded .layout-box .about-line {
+    padding: 0;
+  }
+}
+
+/* Narrow and short screens: a tuned Settings button shows the accent dot (theme.css .tuned), not
+   the words, which don't fit */
+@media (max-width: 500px), (max-height: 500px) {
+  .toggle-settings .changed-count {
+    display: none;
+  }
+}
+
+/* A phone on its side and a touch tablet: open Settings scroll inside the panel, under its graph
+   row and Settings button, which stay */
+@media (min-width: 501px) and (max-height: 500px), (min-width: 501px) and (pointer: coarse) {
+  #settings.content.sheet {
+    max-height: calc(100dvh - 160px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+@media (min-width: 501px) and (pointer: coarse) {
+  .settings-open .title-row,
+  .settings-open .stats-row,
+  .settings-open .about-line > :not(.credit),
+  .settings-open .idea-bar {
+    display: none;
+  }
+}
+
+/* A phone on its side and a touch tablet: the data credit sits at the canvas's bottom left, as on
+   a phone in portrait, so the folded panel is the graph's name alone */
+@media (min-width: 501px) and (max-height: 500px), (min-width: 501px) and (pointer: coarse) {
+  .about-line .credit {
+    position: fixed;
+    left: 8px;
+    bottom: 8px;
+    max-width: calc(100vw - 140px);
+    margin: 0;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--panel, rgb(12, 41, 82));
+    font-size: 11px;
+    line-height: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}

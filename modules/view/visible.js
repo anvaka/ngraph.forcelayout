@@ -8,15 +8,20 @@
 // card move with what they show. Elements with `pointer-events: none` don't count either, since
 // the browser looks through them.
 //
-// Hit testing a point costs about 2 µs, so the visible area is measured on a grid of about 1500
-// cells (30 px on a 1440×900 canvas, about 3 ms) only when asked, and kept for a moment.
+// Hit testing a point costs a few µs (more when the page has to lay itself out first), so the
+// visible area is measured on a grid of about 1500 cells (30 px on a 1440×900 canvas, 3 to 12 ms)
+// only when asked. What covers the canvas changes almost only when the visitor does something
+// (a click, a key, a resize, a scroll) or when a transition ends, so a measured area is kept
+// until one of those happens, and at most a second (for pages that change on their own).
 
 export const OVERLAY_ATTRIBUTE = 'data-graph-overlay';
 
 const CELLS = 1500;
 const MIN_CELL = 16;
-// How long a measured area is trusted (ms): repeated keys reuse it, a panel that opens is seen
-const MAX_AGE = 300;
+// How long a measured area is trusted (ms) when nothing that could change it happened
+const MAX_AGE = 1000;
+// What makes a measured area stale: the visitor acted, the page moved or a transition ended
+const STALE_ON = ['pointerup', 'keyup', 'click', 'scroll', 'transitionend', 'animationend'];
 
 /**
  * `canvas`: the element. `covered`: `(x, y) => boolean` in canvas CSS pixels, to say yourself
@@ -25,6 +30,26 @@ const MAX_AGE = 300;
 export function createVisibility(canvas, covered) {
   let test = covered || hitTest(canvas);
   let cached = null;
+  let listeners = new Set();
+  let notifying = 0;
+  // After the page had a chance to change: the app's own handlers of this event, and its
+  // re-render, run first
+  let notify = () => {
+    notifying = 0;
+    listeners.forEach(fn => fn());
+  };
+  let forget = () => {
+    cached = null;
+    if (listeners.size && !notifying) notifying = setTimeout(notify, 0);
+  };
+  let doc = typeof document !== 'undefined' ? document : null;
+  let win = typeof window !== 'undefined' ? window : null;
+  // Capture: a panel's own handlers may stop the event from bubbling
+  if (doc && doc.addEventListener) STALE_ON.forEach(name => doc.addEventListener(name, forget, true));
+  if (win && win.addEventListener) win.addEventListener('resize', forget);
+  // A soft keyboard opens or closes: the visual viewport changes, the window may not
+  let vv = win && win.visualViewport;
+  if (vv && vv.addEventListener) vv.addEventListener('resize', forget);
 
   return {
     /** True when the canvas point (CSS pixels) is hidden */
@@ -52,8 +77,19 @@ export function createVisibility(canvas, covered) {
       }
       return cached;
     },
-    forget() {
+    forget,
+    /** `fn()` runs when what covers the canvas may have changed; returns a function that stops it */
+    onChange(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+    dispose() {
       cached = null;
+      listeners.clear();
+      clearTimeout(notifying);
+      if (doc && doc.removeEventListener) STALE_ON.forEach(name => doc.removeEventListener(name, forget, true));
+      if (win && win.removeEventListener) win.removeEventListener('resize', forget);
+      if (vv && vv.removeEventListener) vv.removeEventListener('resize', forget);
     }
   };
 
@@ -62,14 +98,57 @@ export function createVisibility(canvas, covered) {
   }
 }
 
+// Pixels between an element placed over the canvas and the canvas's edges or what covers it
+const OVERLAY_MARGIN = 12;
+
+/**
+ * Puts a fixed-position element of the view (a search box, a help card) over the canvas where it
+ * shows: the first spot from the `from` edge ('top' or 'bottom') where it fits in the visible
+ * `area`, a little away from covers and from the view's other overlays (a details card); over
+ * another overlay when it fits nowhere else; the canvas's corner on that side when it fits
+ * nowhere at all. `height`: room to keep for an element that grows (its own height when larger).
+ */
+export function placeOverCanvas(element, canvas, area, from = 'top', height = 0) {
+  let rect = canvas.getBoundingClientRect();
+  let w = element.offsetWidth, h = Math.max(element.offsetHeight, height);
+  let others = overlayBoxes(rect, element);
+  let at = area ? area.spot(w, h, OVERLAY_MARGIN, from, others) : null;
+  if (!at && area && others.length) at = area.spot(w, h, OVERLAY_MARGIN, from);
+  if (!at) {
+    at = {x: OVERLAY_MARGIN, y: from === 'bottom' ? Math.max(OVERLAY_MARGIN, rect.height - h - OVERLAY_MARGIN) : OVERLAY_MARGIN};
+  }
+  element.style.left = (rect.left + at.x) + 'px';
+  element.style.top = (rect.top + at.y) + 'px';
+}
+
+/**
+ * Boxes ({x, y, width, height}, canvas pixels) of the view's overlays that show over the canvas
+ * (elements marked `data-graph-overlay`), but `except` and what contains it or is inside it
+ */
+export function overlayBoxes(rect, except = null, root = typeof document !== 'undefined' ? document : null) {
+  let boxes = [];
+  if (!root) return boxes;
+  root.querySelectorAll('[' + OVERLAY_ATTRIBUTE + ']').forEach(element => {
+    if (except && (element === except || element.contains(except) || except.contains(element))) return;
+    let r = element.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return;
+    if (r.right <= rect.left || r.left >= rect.right || r.bottom <= rect.top || r.top >= rect.bottom) return;
+    boxes.push({x: r.left - rect.left, y: r.top - rect.top, width: r.width, height: r.height});
+  });
+  return boxes;
+}
+
 // A point is covered when the topmost element there (looking through the view's own overlays)
 // is not the canvas, or when it is outside the window
 function hitTest(canvas) {
   let root = canvas.getRootNode ? canvas.getRootNode() : null;
   if (!root || typeof root.elementFromPoint !== 'function') root = typeof document !== 'undefined' ? document : null;
   if (!root) return () => false;
+  let vv = typeof window !== 'undefined' ? window.visualViewport : null;
   return (x, y, rect) => {
     let clientX = rect.left + x, clientY = rect.top + y;
+    // Below the visual viewport is what a soft keyboard covers: the page doesn't know it is there
+    if (vv && clientY > vv.offsetTop + vv.height) return true;
     let top = root.elementFromPoint(clientX, clientY);
     if (top === canvas) return false;
     if (!top || !isOverlay(top)) return true;
@@ -91,7 +170,8 @@ function isOverlay(element) {
  * sampled at the centre of each cell. Returns an area with:
  * - `cell`, `cols`, `rows`, `hidden` (1 per covered cell), `anyHidden`;
  * - `clearance`: per cell, how many cells away the nearest covered cell is (along either axis);
- * - `isHidden(x, y)`, `nearest(x, y, margin)`, `center()` below.
+ * - `isHidden(x, y)`, `nearest(x, y, margin)`, `center()`, `largestRect()`,
+ *   `spot(width, height, margin, from)`, `boxCovered(x, y, width, height, reach)` below.
  */
 export function measureArea(width, height, covered, cellSize) {
   let cell = cellSize || Math.max(MIN_CELL, Math.ceil(Math.sqrt(width * height / CELLS)));
@@ -112,6 +192,8 @@ export function measureArea(width, height, covered, cellSize) {
     }
   }
   let clearance = chebyshev(hidden, cols, rows);
+  let largest;
+  let sumsCache = null;
 
   return {
     width, height, cell, cols, rows, hidden, clearance, anyHidden,
@@ -152,8 +234,98 @@ export function measureArea(width, height, covered, cellSize) {
         }
       }
       return best < 0 ? null : {x: Math.min((best % cols + 0.5) * cell, width), y: Math.min((Math.floor(best / cols) + 0.5) * cell, height)};
+    },
+    /**
+     * The largest rectangle of the canvas that nothing covers, {x, y, width, height} in canvas
+     * pixels (the whole canvas when nothing covers it; null when everything does). It is where
+     * the whole graph can be shown, or an overlay placed, out from under a panel.
+     */
+    largestRect() {
+      if (largest !== undefined) return largest;
+      if (allHidden) return (largest = null);
+      if (!anyHidden) return (largest = {x: 0, y: 0, width, height});
+      let best = largestOpenRect(hidden, cols, rows);
+      if (!best) return (largest = null);
+      let x = best.c0 * cell, y = best.r0 * cell;
+      largest = {
+        x, y,
+        width: Math.min(width, (best.c1 + 1) * cell) - x,
+        height: Math.min(height, (best.r1 + 1) * cell) - y
+      };
+      return largest;
+    },
+    /**
+     * Where a `width` × `height` box (a search box, a help card) fits in what shows, `margin`
+     * pixels inside the canvas and at least `margin` (and half a cell) from what covers it: its
+     * top left corner {x, y}, the first one found from the `from` edge ('top' or 'bottom'), left
+     * to right. `avoid`: more boxes ({x, y, width, height}, canvas pixels) to keep `margin` from,
+     * such as the view's other overlays. Null when it fits nowhere.
+     */
+    spot(boxWidth, boxHeight, margin = 0, from = 'top', avoid = null) {
+      if (allHidden) return null;
+      let left = margin, right = width - margin - boxWidth;
+      let top = margin, bottom = height - margin - boxHeight;
+      if (right < left || bottom < top) return null;
+      let sums = summed();
+      let reach = Math.max(margin, cell / 2);
+      let xs = candidates(left, right), ys = candidates(top, bottom);
+      if (from === 'bottom') ys.reverse();
+      for (let j = 0; j < ys.length; ++j) {
+        for (let i = 0; i < xs.length; ++i) {
+          let x = xs[i], y = ys[j];
+          let c0 = Math.max(0, Math.floor((x - reach) / cell)), c1 = Math.min(cols - 1, Math.floor((x + boxWidth + reach) / cell));
+          let r0 = Math.max(0, Math.floor((y - reach) / cell)), r1 = Math.min(rows - 1, Math.floor((y + boxHeight + reach) / cell));
+          if (countIn(sums, c0, r0, c1, r1) !== 0) continue;
+          if (avoid && avoid.some(b => x < b.x + b.width + margin && x + boxWidth + margin > b.x &&
+            y < b.y + b.height + margin && y + boxHeight + margin > b.y)) continue;
+          return {x, y};
+        }
+      }
+      return null;
+
+      // The edge positions, then every cell boundary between them
+      function candidates(from0, to) {
+        let list = [from0];
+        for (let k = Math.ceil(from0 / cell); k * cell < to; ++k) if (k * cell > from0) list.push(k * cell);
+        if (to > from0) list.push(to);
+        return list;
+      }
+    },
+    /**
+     * True when something covers the canvas within `reach` pixels (half a cell by default: a
+     * cover's edge is known to that) of the box at (x, y), `boxWidth` × `boxHeight` pixels
+     */
+    boxCovered(x, y, boxWidth, boxHeight, reach = cell / 2) {
+      if (!anyHidden) return false;
+      let c0 = Math.max(0, Math.floor((x - reach) / cell)), c1 = Math.min(cols - 1, Math.floor((x + boxWidth + reach) / cell));
+      let r0 = Math.max(0, Math.floor((y - reach) / cell)), r1 = Math.min(rows - 1, Math.floor((y + boxHeight + reach) / cell));
+      if (c1 < c0 || r1 < r0) return false;
+      return countIn(summed(), c0, r0, c1, r1) > 0;
     }
   };
+
+  function summed() {
+    if (!sumsCache) sumsCache = hiddenSums();
+    return sumsCache;
+  }
+
+  // Hidden cells summed over every top left rectangle, so a box is counted at once
+  function hiddenSums() {
+    let sums = new Uint32Array((cols + 1) * (rows + 1));
+    for (let r = 0; r < rows; ++r) {
+      let line = 0;
+      for (let c = 0; c < cols; ++c) {
+        line += hidden[r * cols + c];
+        sums[(r + 1) * (cols + 1) + c + 1] = sums[r * (cols + 1) + c + 1] + line;
+      }
+    }
+    return sums;
+  }
+
+  function countIn(sums, c0, r0, c1, r1) {
+    let w = cols + 1;
+    return sums[(r1 + 1) * w + c1 + 1] - sums[r0 * w + c1 + 1] - sums[(r1 + 1) * w + c0] + sums[r0 * w + c0];
+  }
 
   function nearestAt(x, y, margin) {
     // Cells that are `margin` away from covered cells, all of them: `need` cells apart, the gap
@@ -220,4 +392,32 @@ function chebyshev(hidden, cols, rows) {
     }
   }
   return d;
+}
+
+/**
+ * The largest all-open rectangle of a grid (`hidden[r * cols + c]` is 1 where covered), by the
+ * histogram method in O(cols × rows): {c0, c1, r0, r1} (inclusive cells), or null.
+ */
+export function largestOpenRect(hidden, cols, rows) {
+  let heights = new Int32Array(cols);
+  let stack = new Int32Array(cols + 1);
+  let best = null, bestArea = 0;
+  for (let r = 0; r < rows; ++r) {
+    for (let c = 0; c < cols; ++c) heights[c] = hidden[r * cols + c] ? 0 : heights[c] + 1;
+    let top = 0;
+    for (let c = 0; c <= cols; ++c) {
+      let h = c < cols ? heights[c] : 0;
+      while (top > 0 && heights[stack[top - 1]] >= h) {
+        let height = heights[stack[--top]];
+        let left = top > 0 ? stack[top - 1] + 1 : 0;
+        let area = height * (c - left);
+        if (area > bestArea) {
+          bestArea = area;
+          best = {c0: left, c1: c - 1, r0: r - height + 1, r1: r};
+        }
+      }
+      stack[top++] = c;
+    }
+  }
+  return best;
 }

@@ -11,16 +11,21 @@
 // from the ranking and the zoom. The most important labels are also bigger.
 //
 // Placement is stable:
-// - It runs again only every 250 ms while the layout or the camera moves, and once they stop.
+// - It runs again only every 250 ms while the layout or the camera moves, and once they stop;
+//   sooner when the zoom changed a lot (a search glide, a double tap), so the screen isn't left
+//   with the labels of nodes that flew off it.
 // - Labels placed last time go first, on the side of their node they had, so they don't jump.
 // - Hovered, focused, dragged and selected nodes are always labelled, then the selection's
 //   neighbours.
+// - Labels make way for what covers the canvas (a settings panel, a toolbar): the view measures
+//   what is visible (see visible.js and the view's `occlusion` option), and no label goes there.
 // - Labels fade in and out (300 ms) in the shader.
 // - Between placements each label follows its node on the GPU (see labels/program.js), so a
 //   running layout costs the CPU nothing per frame for labels.
 //
-// The text is the view's `labelOf(node)`, cut to `maxLength` characters, drawn once per label
-// with the canvas 2D API (any script works) into an atlas at the device's pixel ratio.
+// The text is the view's `labelOf(node)` (or `text(node)`), cut to `maxLength` characters, drawn
+// once per label with the canvas 2D API (any script works) into an atlas at the device's pixel
+// ratio. A node whose text is empty gets no label.
 //
 // Options:
 // - `importance` ('degree'): 'degree', 'pagerank', a field name of node.data, or `node => number`.
@@ -28,6 +33,8 @@
 //   between 30 and 400.
 // - `tiers`: text sizes by rank, [{share, min, size, weight}] from the most important; a node
 //   whose rank is below `share` of all nodes (and at least `min`) takes that tier.
+// - `text`: `node => string`, the label's text (default: the view's `labelOf`). Return '' for
+//   nodes that should have no label, e.g. nodes that have only an id.
 // - `font` (system-ui and friends), `color` (0xffffffff), `halo` (0x0c2952e6), `haloWidth` (2 px),
 //   `gap` (3 px between the node and its label), `every` (250 ms), `fade` (300 ms), `maxLength` (40).
 //
@@ -62,6 +69,13 @@ const YOUNG = 1000;
 const FORCED_SELECTED = 50, NEIGHBOURS = 200;
 // How many candidates (per label wanted) a placement looks at before it stops
 const LOOK_AT = 12;
+// Pixels a label on screen may come closer to others before it gives way: a running layout
+// jiggles nodes by a few pixels, and without this the labels packed tightest blink out and
+// back, or jump to another side, as their neighbours move
+const SLACK = 6;
+// The zoom changed by this factor since the last placement: place again without waiting for
+// `every`, but not more often than every ZOOM_GAP ms
+const ZOOM_STEP = 1.5, ZOOM_GAP = 50;
 
 export default {
   name: 'labels',
@@ -76,6 +90,8 @@ export default {
     let ranked = null;
     // What is on screen or fading out: node id -> label
     let shown = new Map();
+    // Rows whose label is in the top tier for now (pointed nodes), from the last placement
+    let emphasis = new Set();
     // Label sizes (CSS pixels) by tier and text
     let sizes = new Map();
     // Nodes' diameters by row (scene units), from the last placement
@@ -88,6 +104,8 @@ export default {
 
     let pending = true;
     let last = -Infinity;
+    // The camera's distance to what it looks at, at the last placement
+    let lastDistance = 0;
     let timer = 0;
     let stats = {labels: 0, placements: 0, lastMs: 0, maxMs: 0};
 
@@ -107,6 +125,14 @@ export default {
     });
     // What is labelled for sure changes with these: place again at the next frame
     ['hover', 'select', 'focus', 'dragstart', 'dragend'].forEach(name => ctx.on(name, soon));
+    // A panel opened or closed: place again, as often as while the camera moves
+    let coversChanged = false;
+    if (ctx.onVisibleAreaChange) {
+      ctx.onVisibleAreaChange(() => {
+        coversChanged = true;
+        ctx.requestFrame();
+      });
+    }
     graph.on('changed', onGraphChanged);
     ctx.requestFrame();
 
@@ -159,9 +185,10 @@ export default {
       let now = performance.now();
       if (pending) {
         place(now);
-      } else if (change.positions || change.camera) {
+      } else if (change.positions || change.camera || coversChanged) {
+        coversChanged = false;
         // Moving: place again every `every` ms, and once more after it stops
-        if (now - last >= settings.every) place(now);
+        if (now - last >= settings.every || (now - last >= ZOOM_GAP && zoomedFar())) place(now);
         else schedule(settings.every - (now - last));
       }
       if (fading(now)) ctx.animate();
@@ -175,9 +202,23 @@ export default {
       }, Math.max(16, ms));
     }
 
+    function zoomedFar() {
+      let distance = cameraDistance();
+      return lastDistance > 0 && distance > 0 &&
+        (distance > lastDistance * ZOOM_STEP || distance * ZOOM_STEP < lastDistance);
+    }
+
+    function cameraDistance() {
+      let view = ctx.scene.getDrawContext().view;
+      if (!view || !view.position || !view.center) return 0;
+      let p = view.position, c = view.center;
+      return Math.hypot(p[0] - c[0], p[1] - c[1], (p[2] || 0) - (c[2] || 0));
+    }
+
     function place(now) {
       pending = false;
       last = now;
+      lastDistance = cameraDistance();
       clearTimeout(timer);
       timer = 0;
       let screen = ctx.screenPositions();
@@ -193,7 +234,8 @@ export default {
       let max = settings.max || Math.round(Math.min(400, Math.max(30, screen.width * screen.height / 3500)));
 
       let placed = placeLabels(candidates(screen, max), {
-        width: screen.width, height: screen.height, gap: settings.gap, padding: 3, max
+        width: screen.width, height: screen.height, gap: settings.gap, padding: 3, slack: SLACK, max,
+        blocked: coveredTest(ctx.visibleArea())
       });
       apply(placed, screen, now);
       let ms = performance.now() - now;
@@ -208,19 +250,26 @@ export default {
     function candidates(screen, max) {
       let list = [];
       let taken = new Set();
+      emphasis.clear();
       let add = (node, forced) => {
         if (!node || taken.has(node.id)) return;
+        if (!textOf(node)) return;
         let body = ctx.layout.getBody(node.id);
         let row = body ? body.index : -1;
         if (row < 0 || row >= screen.x.length || !screen.onScreen[row]) return;
         taken.add(node.id);
-        let tier = ranked.tier[row];
-        let size = sizeOf(node, tier);
         let flags = ctx.flags.get(node.id);
+        let pointedNode = (flags & (HOVERED | FOCUSED | DRAGGED)) !== 0;
+        // The label of a hovered, found or focused node is in the top tier, so it reads among the
+        // labels around it
+        let tier = pointedNode ? 0 : ranked.tier[row];
+        if (pointedNode) emphasis.add(row);
+        let size = sizeOf(node, tier);
         let radius = screen.radius[row];
-        // Pointed and selected nodes are drawn larger (see the view's styles)
-        if (flags & (HOVERED | FOCUSED | DRAGGED)) radius = Math.max(radius * 1.5, 4);
-        else if (flags & SELECTED) radius = Math.max(radius * 1.25, 3);
+        // Pointed and selected nodes are drawn larger, maybe with a ring (see the view's styles)
+        let styles = ctx.view.getStyles ? ctx.view.getStyles() : {};
+        if (pointedNode) radius = Math.max(radius * (styles.pointedScale || 1.5), (styles.pointedMinSize || 8) / 2) + ringOf(styles, styles.pointedRing);
+        else if (flags & SELECTED) radius = Math.max(radius * (styles.selectedScale || 1.25), (styles.selectedMinSize || 6) / 2) + ringOf(styles, styles.selectedRing);
         let previous = shown.get(node.id);
         list.push({
           row, node, tier, x: screen.x[row], y: screen.y[row], radius,
@@ -267,7 +316,7 @@ export default {
       let keep = new Set();
       placed.forEach(p => {
         let node = screen.nodes[p.row];
-        let tier = ranked.tier[p.row];
+        let tier = emphasis.has(p.row) ? 0 : ranked.tier[p.row];
         keep.add(node.id);
         let label = shown.get(node.id);
         let text = textOf(node);
@@ -306,26 +355,14 @@ export default {
 
     // The buffer the shader reads: one entry per label shown or fading out
     function fill() {
+      shown.forEach((label, id) => { if (!ctx.layout.getBody(id)) shown.delete(id); });
+      drawImages();
       if (data.length < shown.size * STRIDE) data = new Float32Array(Math.max(shown.size, 2 * data.length / STRIDE) * STRIDE);
       count = 0;
-      let generation = atlas.generation;
       shown.forEach((label, id) => {
+        // No image: even an empty atlas could not hold every label; this one waits
+        if (!label.entry || label.generation !== atlas.generation) return;
         let body = ctx.layout.getBody(id);
-        if (!body) {
-          shown.delete(id);
-          return;
-        }
-        if (!label.entry || label.generation !== generation) {
-          label.entry = image(label);
-          if (!label.entry) {
-            // The atlas is full: start it over, and draw what is on screen again
-            atlas.reset();
-            generation = atlas.generation;
-            label.entry = image(label);
-          }
-          label.generation = atlas.generation;
-        }
-        if (!label.entry) return;
         let e = label.entry, o = count * STRIDE;
         data[o] = body.index;
         data[o + 1] = nodeSizes && body.index < nodeSizes.length ? nodeSizes[body.index] : 1;
@@ -342,9 +379,32 @@ export default {
         data[o + 12] = label.to;
         count += 1;
       });
-      // Images drawn after an atlas reset above belong to the new generation
-      shown.forEach(label => { if (label.entry && label.generation !== atlas.generation) label.entry = null; });
       program.update(data, count);
+    }
+
+    // Every label gets its image before any of them is written for the shader. The atlas keeps
+    // images until it is full; then it starts over with only the labels shown now, those on
+    // screen first and those fading out last, so no label points at an image that is gone.
+    function drawImages() {
+      for (let attempt = 0; ; ++attempt) {
+        let full = false;
+        for (let pass = 0; pass < 2 && !full; ++pass) {
+          for (let label of shown.values()) {
+            if ((label.to > 0) !== (pass === 0)) continue;
+            if (label.entry && label.generation === atlas.generation) continue;
+            let entry = image(label);
+            if (!entry) {
+              full = true;
+              break;
+            }
+            label.entry = entry;
+            label.generation = atlas.generation;
+          }
+        }
+        // Full even when empty: the labels that didn't fit wait for the next placement
+        if (!full || attempt > 0) return;
+        atlas.reset();
+      }
     }
 
     function image(label) {
@@ -370,7 +430,8 @@ export default {
     }
 
     function textOf(node) {
-      let text = ctx.labelOf(node);
+      let text = settings.text ? settings.text(node) : ctx.labelOf(node);
+      if (!text) return '';
       let max = settings.maxLength;
       return text.length > max ? text.slice(0, max - 1) + '…' : text;
     }
@@ -398,6 +459,14 @@ export default {
         while (t < bounds.length - 1 && i >= bounds[t]) t += 1;
         tier[order[i]] = t;
       }
+      // Equal nodes get equal text: a tie takes the smallest size of its members, so when a grid's
+      // nodes are all alike, none of them looks more important than the others
+      for (let start = 0, i = 1; i <= order.length; ++i) {
+        if (i < order.length && scores[order[i]] === scores[order[start]]) continue;
+        let t = tier[order[i - 1]];
+        for (let k = start; k < i; ++k) tier[order[k]] = t;
+        start = i;
+      }
       return {count: rows, order, position, tier};
     }
 
@@ -411,9 +480,33 @@ export default {
   }
 };
 
+// `box => boolean` for placeLabels: true where something covers the canvas (a panel, a toolbar),
+// from the view's measured visible area. The area is known to a cell (a cover's edge to half a
+// cell), so a box keeps half a cell clear of covered cells. Null when nothing covers it.
+function coveredTest(area) {
+  if (!area || !area.anyHidden || area.allHidden) return null;
+  let {cell, cols, rows, hidden} = area;
+  let reach = cell / 2;
+  return box => {
+    let c0 = Math.max(0, Math.floor((box.x - reach) / cell)), c1 = Math.min(cols - 1, Math.floor((box.x + box.width + reach) / cell));
+    let r0 = Math.max(0, Math.floor((box.y - reach) / cell)), r1 = Math.min(rows - 1, Math.floor((box.y + box.height + reach) / cell));
+    for (let r = r0; r <= r1; ++r) {
+      for (let c = c0; c <= c1; ++c) {
+        if (hidden[r * cols + c]) return true;
+      }
+    }
+    return false;
+  };
+}
+
 function alphaAt(label, time, fade) {
   let t = Math.min(1, Math.max(0, (time - label.start) / fade));
   return label.from + (label.to - label.from) * t;
+}
+
+// Pixels a ring adds around a node (the view's styles: halo and ring), or 0 without a ring
+function ringOf(styles, ring) {
+  return ring ? (styles.ringGap || 0) + (styles.ringWidth || 0) : 0;
 }
 
 function merge(options) {

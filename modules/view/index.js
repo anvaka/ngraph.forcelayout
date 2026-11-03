@@ -21,11 +21,12 @@ import {createNodeProgram, createEdgeProgram} from './programs.js';
 import {TEXTURE_WIDTH, textureRows, packPositions, collectNodes, collectEdges} from './positions.js';
 import {createProjector, ORIGIN, Z_NORMAL} from './math.js';
 import {pickNode, nodesInRect, projectAll} from './pick.js';
-import {createFlags, layoutFlags, SELECTED, HOVERED} from './flags.js';
+import {createFlags, layoutFlags, SELECTED} from './flags.js';
 import * as FLAGS from './flags.js';
 import {createInput, ViewEvent} from './input.js';
 import {createCamera} from './camera.js';
 import {createVisibility} from './visible.js';
+import {computeRooms} from './room.js';
 
 const DEFAULTS = {
   // The text that stands for a node: in tooltips, search, announcements and labels
@@ -41,7 +42,18 @@ const DEFAULTS = {
   linkColor: 0xffffff10,
   linkWidth: 2,
   // Size of a node's dot in scene units
-  nodeSize: node => (node.data && node.data.size) || 1
+  nodeSize: node => (node.data && node.data.size) || 1,
+  // Smallest diameter of the smallest node in CSS pixels, at any zoom (0: nodes shrink with the
+  // zoom). Bigger nodes keep their order: four times the size is at least twice as wide
+  nodeMinSize: 0,
+  // Where nodes crowd, no node is drawn wider than this share of the distance to its nearest
+  // neighbour at least as big (see room.js), so small nodes give way to big ones. 0: off
+  nodeRoom: 0,
+  // How nodes and links mix with what is under them: 'normal' (alpha), or 'add' (light adds up,
+  // so dense places glow; on a dark background). Highlights and layers always blend normally.
+  blend: 'normal',
+  // In 3D, what is farther from the camera fades to this share of its alpha (1: no fog)
+  fog: 1
 };
 
 // How flagged nodes and links look. "Pointed" is hovered, dragged or focused.
@@ -53,8 +65,20 @@ const STYLES = {
   selectedColor: 0xffc24bff,
   selectedScale: 1.25,
   selectedMinSize: 6,
-  // Links that touch a selected or pointed node get at least this alpha
+  // Rings around pointed and selected nodes (0: none): a halo in `ringHalo` (best the background's
+  // color) `ringGap` pixels wide, then the ring, `ringWidth` pixels. A ring reads on a node of any
+  // color, so with rings the fill colors above can be 0 (the node keeps its own color).
+  pointedRing: 0,
+  selectedRing: 0,
+  // A focused node's ring (the keyboard's place, or where search went); 0: pointedRing
+  focusedRing: 0,
+  ringHalo: 0x000000cc,
+  ringGap: 2,
+  ringWidth: 2,
+  // Links that touch a selected or pointed node get at least this alpha, and this color (alpha
+  // 0: they keep their own)
   litLinkAlpha: 0.8,
+  litLinkColor: 0,
   // While something is selected, nodes and links away from it fade to this alpha
   dimAlpha: 0.15
 };
@@ -97,7 +121,7 @@ export default function createView(scene, options = {}) {
   let canvas = scene.getDrawContext().canvas;
 
   let settings = {...DEFAULTS};
-  ['nodeColor', 'linkColor', 'linkWidth', 'nodeSize', 'nodeLabel'].forEach(name => {
+  ['nodeColor', 'linkColor', 'linkWidth', 'nodeSize', 'nodeLabel', 'nodeMinSize', 'nodeRoom', 'blend', 'fog'].forEach(name => {
     if (options[name] !== undefined) settings[name] = options[name];
   });
   let styles = {...STYLES, ...(options.styles || {})};
@@ -105,14 +129,23 @@ export default function createView(scene, options = {}) {
   let style = {
     pointedColor: new Float32Array(4), pointedSize: new Float32Array(2),
     selectedColor: new Float32Array(4), selectedSize: new Float32Array(2),
-    litAlpha: 1, dimAlpha: 1
+    pointedRing: new Float32Array(4), selectedRing: new Float32Array(4), focusedRing: new Float32Array(4), ringHalo: new Float32Array(4),
+    ringSize: new Float32Array(2),
+    litAlpha: 1, litColor: new Float32Array(4), dimAlpha: 1, minSize: 0, fog: new Float32Array([0, 1, 1])
   };
 
   let nodeProgram = createNodeProgram(gl, instancing);
   let edgeProgram = createEdgeProgram(gl, instancing);
   // `hasDepth`: the layout has a third axis, so nodes are drawn with depth (see programs.js)
   let positions = {texture: null, width: TEXTURE_WIDTH, rows: 0, data: null, hasDepth: false};
-  let nodes = {count: 0, rows: gl.createBuffer(), sizes: gl.createBuffer(), colors: gl.createBuffer(), rowCount: 0};
+  // `rooms` is set while `roomBuffer` holds a room for every node
+  let nodes = {count: 0, rows: gl.createBuffer(), sizes: gl.createBuffer(), colors: gl.createBuffer(), rooms: null, rowCount: 0};
+  let roomBuffer = gl.createBuffer();
+  // Rooms of the nodes (room.js), when they were measured, what that took, and a timer for the
+  // measure after the drawing stopped moving
+  let rooms = {data: new Float32Array(0), reach: new Float32Array(0), cache: {}, at: -Infinity, ms: 0, timer: 0, stale: true};
+  // The box of the drawn positions (for the fog), updated with them
+  let bounds = {cx: 0, cy: 0, cz: 0, radius: 0};
   let edges = {count: 0, ends: gl.createBuffer(), colors: gl.createBuffer(), width: settings.linkWidth};
   // Nodes and links drawn again on top (see flags.js)
   let top = {
@@ -164,7 +197,9 @@ export default function createView(scene, options = {}) {
     camera = createCamera(scene, options.camera);
     input = createInput(canvas, {
       // A press of a mouse or pen picks the node it highlighted, if it is still within reach
-      pick: (x, y, p) => pick(x, y, {pointerType: p.pointerType, width: p.width, sticky: p.pointerType === 'touch' ? null : hoveredNode()}),
+      // A press is decided the same way for every pointer: no bonus for the hovered node, which
+      // would make a mouse grab where a finger pans (in a crowd, see drag.js)
+      pick: (x, y, p) => pick(x, y, {pointerType: p.pointerType, width: p.width}),
       emit: (name, e) => events.emit(name, e),
       hasListeners: name => events.has(name),
       scenePoint,
@@ -182,7 +217,10 @@ export default function createView(scene, options = {}) {
     setLayout,
     setNodeColor,
     setLinkColor,
+    setNodeMinSize,
+    setDrawing,
     setStyles,
+    getStyles: () => ({...styles}),
     invalidate,
     refresh,
     use,
@@ -221,6 +259,20 @@ export default function createView(scene, options = {}) {
     scene.renderFrame();
   }
 
+  /**
+   * New drawing settings, any of `nodeSize`, `linkWidth`, `nodeRoom`, `fog`, `blend` (as in the
+   * options): what they change is built again at the next frame
+   */
+  function setDrawing(drawing) {
+    ['nodeSize', 'linkWidth', 'nodeRoom', 'fog', 'blend'].forEach(name => {
+      if (drawing[name] !== undefined) settings[name] = drawing[name];
+    });
+    if (drawing.nodeSize !== undefined) nodesDirty = true;
+    if (drawing.linkWidth !== undefined) edgesDirty = true;
+    rooms.stale = true;
+    scene.renderFrame();
+  }
+
   function setNodeColor(color) {
     settings.nodeColor = color;
     nodesDirty = true;
@@ -230,6 +282,12 @@ export default function createView(scene, options = {}) {
   function setLinkColor(color) {
     settings.linkColor = color;
     edgesDirty = true;
+    scene.renderFrame();
+  }
+
+  /** Smallest diameter of a node in CSS pixels (0: none) */
+  function setNodeMinSize(pixels) {
+    settings.nodeMinSize = pixels || 0;
     scene.renderFrame();
   }
 
@@ -358,6 +416,14 @@ export default function createView(scene, options = {}) {
         frameHooks.add(fn);
         cleanups.push(() => frameHooks.delete(fn));
       },
+      /**
+       * `fn()` runs when what covers the canvas may have changed (a click, a key, a resize, a
+       * scroll, the end of a transition): a module that avoids covers (labels) looks again
+       */
+      onVisibleAreaChange(fn) {
+        if (!visibility) return;
+        cleanups.push(visibility.onChange(fn));
+      },
       /** `fn()` runs after every camera move */
       onCamera(fn) {
         cameraHooks.add(fn);
@@ -410,9 +476,11 @@ export default function createView(scene, options = {}) {
    * `pointerType` ('mouse', 'pen', 'touch') and `width` (contact width) set the reach; `reach`
    * sets it in pixels; `sticky` (a node) gets a few more pixels.
    *
-   * Returns {node, row, distance, inside, clear, gap, x, y, radius}: `distance` from the disc's
-   * edge in pixels, the disc on the canvas. `clear`: the point is on the disc, or the next nearest
-   * node is at least half the reach farther (`gap` pixels). Where nodes crowd, a pick is not clear.
+   * Returns {node, row, distance, inside, covers, clear, gap, x, y, radius}: `distance` from the
+   * disc's edge in pixels, the disc on the canvas. `clear`: the point is on this disc and no
+   * other, or the next nearest node is at least half the reach farther (`gap` pixels). Where nodes
+   * crowd or overlap, a pick is not clear. The same for every pointer: hovering (`sticky`) helps a
+   * node win, but doesn't make it clear.
    */
   function pick(x, y, pickOptions = {}) {
     let state = pickState();
@@ -423,15 +491,8 @@ export default function createView(scene, options = {}) {
     let hit = pickNode(state, x, y, distance, stickyRow, stickyRow >= 0 ? STICKY : 0, margin);
     if (!hit) return null;
     hit.node = nodeData.nodes[hit.row];
-    hit.clear = hit.inside || hit.gap >= margin;
+    hit.clear = (hit.inside && hit.covers === 1) || hit.gap >= margin;
     return hit.node ? hit : null;
-  }
-
-  // The hovered node, if one is
-  function hoveredNode() {
-    if (!flags.count(HOVERED)) return null;
-    let ids = flags.ids(HOVERED);
-    return ids.length === 1 ? graph.getNode(ids[0]) : null;
   }
 
   function reachFor(pointerType, width) {
@@ -630,18 +691,23 @@ export default function createView(scene, options = {}) {
     gl.depthMask(true);
     gl.clear(gl.DEPTH_BUFFER_BIT);
     let mvp = element.modelViewProjection;
+    let add = settings.blend === 'add';
+    if (add) gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     edgeProgram.draw(edges, positions, mvp, drawContext, style, 0);
+    // Nodes cover the links under them, also in additive light (no spokes inside a disc)
+    if (add) gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     nodeProgram.draw(nodes, positions, mvp, drawContext, style, 0);
     top.edges.width = edges.width;
     edgeProgram.draw(top.edges, positions, mvp, drawContext, style, 1);
-    nodeProgram.draw(top.nodes, positions, mvp, drawContext, style, 1);
     if (layers.length) {
       let frame = {gl, instancing, positions, mvp, drawContext, style, time: performance.now()};
       layers.forEach(layer => layer.draw(frame));
     }
+    // Highlighted nodes last, over the labels too: a found or selected node is never under a label
+    nodeProgram.draw(top.nodes, positions, mvp, drawContext, style, 1);
     // A frame hook (or an app listener it called) changed something after it was read, or a
     // layer animates: the scene ignores renderFrame() inside a frame, so ask again once it's over
-    if (structureDirty || nodesDirty || edgesDirty || positionsDirty || flagsDirty || animating) {
+    if (structureDirty || nodesDirty || edgesDirty || positionsDirty || flagsDirty || cameraMoved || animating) {
       animating = false;
       Promise.resolve().then(() => scene.renderFrame());
     }
@@ -651,18 +717,24 @@ export default function createView(scene, options = {}) {
     let structureChanged = structureDirty;
     build();
     if (edgesDirty) buildEdges();
-    if (frameHooks.size) {
-      let change = {positions: positionsDirty, camera: cameraMoved, structure: structureChanged};
-      frameHooks.forEach(fn => fn(change));
-    }
+    let change = {positions: positionsDirty, camera: cameraMoved, structure: structureChanged};
+    let moved = cameraMoved;
+    // A hook may move the camera (a fit that follows the layout): that move belongs to the next
+    // frame, so it is cleared before the hooks run, not after
     cameraMoved = false;
+    if (frameHooks.size) frameHooks.forEach(fn => fn(change));
     if (flagsDirty) writeFlags();
     if (positionsDirty) {
       packPositions(layout.simulator.store.pos, layout.simulator.store.D, Math.min(layout.simulator.store.n, nodes.count), positions.data);
       positions.hasDepth = layout.simulator.store.D >= 3;
+      if (positions.hasDepth && settings.fog < 1) updateBounds();
       textureDirty = true;
       positionsDirty = false;
+      rooms.stale = true;
     }
+    // Rooms depend on the zoom too: the smallest size is in pixels
+    if (moved) rooms.stale = true;
+    if (settings.nodeRoom > 0 && rooms.stale) measureRooms();
     if (textureDirty) uploadTexture();
   }
 
@@ -700,11 +772,86 @@ export default function createView(scene, options = {}) {
     setBufferData(gl, nodes.sizes, built.sizes);
     setBufferData(gl, nodes.colors, built.colors);
     nodes.count = count;
+    nodes.rooms = null;
+    let smallest = Infinity;
+    for (let i = 0; i < count; ++i) if (built.sizes[i] > 0 && built.sizes[i] < smallest) smallest = built.sizes[i];
+    built.minSize = Number.isFinite(smallest) ? smallest : 1;
+    rooms.stale = true;
     nodeData = built;
     ensureTexture(count);
     nodesDirty = false;
     // Nodes drawn on top copy their sizes and colors
     flagsDirty = true;
+  }
+
+  // Measures every node's room (room.js) at most every 400 ms, or less often when it takes long,
+  // and once more after the drawing stops moving
+  function measureRooms() {
+    let now = performance.now();
+    let wait = Math.max(400, 20 * rooms.ms) - (now - rooms.at);
+    if (wait > 0 && nodes.rooms) {
+      if (!rooms.timer) rooms.timer = setTimeout(() => { rooms.timer = 0; scene.renderFrame(); }, wait);
+      return;
+    }
+    rooms.stale = false;
+    rooms.at = now;
+    let n = Math.min(nodes.count, nodeData.sizes.length);
+    if (!n) return;
+    if (rooms.data.length < n) {
+      rooms.data = new Float32Array(n);
+      rooms.reach = new Float32Array(n);
+    }
+    // A node is drawn at least nodeMinSize pixels wide: in scene units at the middle of the drawing
+    updateBounds();
+    updateProjector();
+    let at = {x: 0, y: 0, w: 1};
+    let ppu = projector.toScreen(bounds.cx, bounds.cy, bounds.cz, at) ? projector.pixelsPerUnit(at.w) : 0;
+    let smallest = ppu > 0 ? (settings.nodeMinSize || 0) / ppu : 0;
+    let share = settings.nodeRoom, sizes = nodeData.sizes, radius = rooms.reach;
+    let base = nodeData.minSize || 1;
+    for (let i = 0; i < n; ++i) radius[i] = Math.max(sizes[i], smallest * Math.sqrt(Math.max(sizes[i] / base, 1))) / share;
+    computeRooms(positions.data, n, sizes, radius, positions.hasDepth, rooms.data, rooms.cache);
+    for (let i = 0; i < n; ++i) rooms.data[i] *= share;
+    setBufferData(gl, roomBuffer, rooms.data.subarray(0, n));
+    nodes.rooms = roomBuffer;
+    rooms.ms = performance.now() - now;
+  }
+
+  // The box around the drawn positions: its middle and half its diagonal
+  function updateBounds() {
+    let data = positions.data, n = Math.min(nodes.count, layout ? layout.simulator.store.n : 0);
+    let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (let i = 0, o = 0; i < n; ++i, o += 4) {
+      let x = data[o], y = data[o + 1], z = data[o + 2];
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      if (z < minZ) minZ = z;
+      if (z > maxZ) maxZ = z;
+    }
+    if (!(maxX >= minX)) return;
+    bounds.cx = (minX + maxX) / 2;
+    bounds.cy = (minY + maxY) / 2;
+    bounds.cz = (minZ + maxZ) / 2;
+    bounds.radius = 0.5 * Math.hypot(maxX - minX, maxY - minY, maxZ - minZ);
+  }
+
+  // Fog runs from the nearest to the farthest point of the drawing's box, as the camera sees it
+  function updateFog() {
+    let fog = style.fog;
+    if (!positions.hasDepth || !(settings.fog < 1) || !(bounds.radius > 0)) {
+      fog[0] = 0;
+      fog[1] = 1;
+      fog[2] = 1;
+      return;
+    }
+    updateProjector();
+    let at = {x: 0, y: 0, w: 1};
+    if (!projector.toScreen(bounds.cx, bounds.cy, bounds.cz, at)) return;
+    fog[0] = at.w - bounds.radius;
+    fog[1] = at.w + bounds.radius;
+    fog[2] = settings.fog;
   }
 
   function buildEdges() {
@@ -799,14 +946,25 @@ export default function createView(scene, options = {}) {
     style.pointedSize[1] = styles.pointedMinSize * ratio;
     style.selectedSize[0] = styles.selectedScale;
     style.selectedSize[1] = styles.selectedMinSize * ratio;
+    style.minSize = (settings.nodeMinSize || 0) * ratio;
+    style.baseSize = nodeData.minSize || 1;
     style.litAlpha = styles.litLinkAlpha;
+    toRGBA(styles.litLinkColor || 0, style.litColor);
+    toRGBA(styles.pointedRing || 0, style.pointedRing);
+    toRGBA(styles.selectedRing || 0, style.selectedRing);
+    toRGBA(styles.focusedRing || 0, style.focusedRing);
+    toRGBA(styles.ringHalo || 0, style.ringHalo);
+    style.ringSize[0] = (styles.ringGap || 0) * ratio;
+    style.ringSize[1] = (styles.ringWidth || 0) * ratio;
+    updateFog();
     style.dimAlpha = flags.count(SELECTED) ? styles.dimAlpha : 1;
   }
 
   function disposeGL() {
     nodeProgram.dispose();
     edgeProgram.dispose();
-    [nodes.rows, nodes.sizes, nodes.colors, edges.ends, edges.colors,
+    clearTimeout(rooms.timer);
+    [nodes.rows, nodes.sizes, nodes.colors, roomBuffer, edges.ends, edges.colors,
       top.nodes.rows, top.nodes.sizes, top.nodes.colors, top.edges.ends, top.edges.colors
     ].forEach(buffer => gl.deleteBuffer(buffer));
     if (positions.texture) gl.deleteTexture(positions.texture);
@@ -818,6 +976,7 @@ export default function createView(scene, options = {}) {
     modules.slice().reverse().forEach(record => record.result ? record.result.dispose() : release(record));
     if (input) input.dispose();
     if (camera) camera.dispose();
+    if (visibility) visibility.dispose();
     if (canvas.style) canvas.style.cursor = savedCursor;
     scene.off('transform', onTransform);
     graph.off('changed', onGraphChanged);
@@ -875,5 +1034,9 @@ export {default as inspectNodes, describeNode} from './modules/inspect.js';
 export {default as navigateNodes, nearestInDirection, neighboursOf} from './modules/navigate.js';
 export {default as searchNodes, buildSearchIndex, findNodes} from './modules/search.js';
 export {default as labelNodes} from './modules/labels.js';
+export {default as pulseNodes} from './modules/pulse.js';
+export {default as styleNodes, PALETTE, OTHER, colorsOf, sizeByLinks, readable, parseColor} from './modules/style.js';
+export {default as fitLayout, layoutBounds} from './modules/fit.js';
+export {largestOpenRect} from './visible.js';
 export {placeLabels} from './labels/place.js';
 export {computeImportance, rankRows} from './labels/importance.js';

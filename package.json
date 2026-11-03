@@ -36,7 +36,7 @@
     "ngraphjs"
   ],
   "author": "Andrei Kashcha",
-  "license": "BSD-3-Clause",
+  "license": "MIT",
   "bugs": {
     "url": "https://github.com/anvaka/ngraph.forcelayout/issues"
   },
