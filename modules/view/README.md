@@ -215,6 +215,7 @@ that lets clicks through, or `occlusion: false`.
 | `longpress` | 500 ms without moving | |
 | `contextmenu` | a right click, on release | |
 | `hover` | the hovered node changed (hover module) | `previous` |
+| `rest` | the pointer came to rest on the hovered node, or moved on (node null) (hover module) | `previous` |
 | `dragstart`, `drag`, `dragend` | a node drag (drag module) | `nodes`, `cancelled` on `dragend` |
 | `select` | the selection is about to change (select module) | `nodes`, `added`, `removed` |
 
@@ -224,10 +225,17 @@ also have `scene` (the point of the scene on the plane z = 0), `button` and `hit
 
 ### Picking
 
-`view.pick(x, y, {pointerType, width, reach, sticky})` returns the node under a canvas point, or
-null, as `{node, row, distance, inside, clear, gap, x, y, radius}`: `distance` in pixels from the
-disc's edge (0 inside it), and the disc on the canvas. `clear` says the pick is unambiguous: the
-point is on the disc, or the next nearest node is at least half the reach farther (`gap` pixels).
+`view.pick(x, y, {pointerType, width, reach, sticky, labels})` returns the node under a canvas
+point, or null, as `{node, row, distance, inside, clear, gap, x, y, radius, label}`: `distance` in
+pixels from the disc's edge (0 inside it), and the disc on the canvas. `clear` says the pick is
+unambiguous: the point is on the disc, or the next nearest node is at least half the reach farther
+(`gap` pixels).
+
+With the labels module, a label's text is part of its node, as on a map: a point on a label picks
+its node (`label: true`), unless it is inside a disc (a disc shows through the text). A label in
+front (the pointed node's, see labels) wins over discs too. Such a pick is not `clear`: a press on
+a label moves the camera, a tap picks its node, a long press grabs it. `labels: false` looks at
+the discs only.
 
 It works as a bubble cursor with a capped reach. A point inside a node's disc picks that node
 (overlaps go to the node drawn last in 2D, the nearest one in 3D). Otherwise the node whose disc
@@ -333,8 +341,17 @@ node labels that stay put while the layout moves.
   rest at 12 px). At most `max` labels (default: one per 3,500 square pixels, 30 to 400).
 * **Stable.** Placement runs again only every 250 ms (`every`) while the layout or the camera
   moves, and once more when they stop. Labels placed last time go first, on the side of their
-  node they had. Hovered, focused, dragged and selected nodes are always labelled, then the
-  selection's neighbours. Labels fade in and out over 300 ms (`fade`), in the shader.
+  node they had. Selected nodes are always labelled, then the selection's neighbours. Labels fade
+  in and out over 300 ms (`fade`), in the shader.
+* **Hover never moves a label.** As on a map, where hover changes how things look and never where
+  labels go (MapLibre's `feature-state` drives paint properties only), pointing places nothing
+  again. The node the pointer rests on (the hover module's `rest`), the focused node and dragged
+  ones have their label in front: drawn last, in the top tier, where their own label is, or else
+  on the side that covers the fewest others. The labels under it stay where they are, behind it,
+  and are there again when the pointer moves on. A pointer passing over nodes on its way to a
+  label lights them up and changes nothing else.
+* **Labels are targets.** Pointing at or tapping a label's text is pointing at its node (see
+  [Picking](#picking)), so the label you reach for is the one you get.
 * **Out of the way.** No label goes where something covers the canvas (see "What the user
   sees" above), and nodes that are equally important get the same text size: on a grid, where
   every node is alike, labels spread over the whole drawing and none looks more important.
@@ -347,15 +364,22 @@ node labels that stay put while the layout moves.
   (`halo`, `haloWidth`) so it reads over nodes and links. Labels of dimmed nodes dim too.
 
 API: `update(options)`, `refresh()` (read the labels again), `get()` (the labelled nodes),
-`stats()`.
+`boxes()` (the labels on the canvas now, in drawing order: `{node, x, y, width, height, alpha,
+front}`), `stats()`.
 
 ### hover
 
-`view.use(hoverNodes, {holdStill})`: the node under a mouse or pen gets `HOVERED` and the cursor
-shows what a press would do there (grab, a box's crosshair, or a pointer over a node a tap would
-pick). Fires `hover`. Touch never hovers. The node is picked again after every frame in which the
-layout or the camera moved, since nodes move under a still pointer. `holdStill: true` pins the
-hovered node (it changes the physics, so it is off). API: `get()`.
+`view.use(hoverNodes, {holdStill, rest})`: the node under a mouse or pen (or its label) gets
+`HOVERED` and the cursor shows what a press would do there (grab, a box's crosshair, or a pointer
+over a node a tap would pick). Fires `hover`. Touch never hovers. The node is picked again after
+every frame in which the layout or the camera moved, since nodes move under a still pointer.
+`holdStill: true` pins the hovered node (it changes the physics, so it is off).
+
+Hover lights a node up at once; what it adds to the picture waits until the pointer rests on the
+node: it moved less than 6 px in 100 ms (`rest: {distance, time}`; `rest: false` rests at once),
+the rule of [hoverIntent](https://briancherne.github.io/jquery-hoverIntent/). Then `rest` fires,
+and the labels module brings the node's label in front and the inspect module opens its tooltip.
+A pointer on its way to a label opens nothing over it. API: `get()`, `resting()`.
 
 ### drag
 
@@ -386,7 +410,8 @@ before a change is kept. API: `get()`, `set(nodesOrIds)`, `clear()`, `has(nodeOr
 
 `view.use(inspectNodes, {content, hover, tap, style, className})`: a tooltip with the node's id,
 its number of links and the fields of `node.data` (`describeNode()`). Hovering a node shows it
-while the pointer stays on the node or on the tooltip; a tap (mouse, pen or finger) keeps it open
+once the pointer rests on the node (see hover), while the pointer stays on the node or on the
+tooltip, beside the node but never over its label; a tap (mouse, pen or finger) keeps it open
 until a tap elsewhere or Escape. It follows its node as the layout and the camera move, beside the
 node and inside the canvas. The wheel over it zooms the drawing, as it would without the tooltip,
 unless the tooltip has more to scroll. `content(node)` returns text (never parsed as HTML), an element, or

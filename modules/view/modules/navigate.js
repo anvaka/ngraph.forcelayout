@@ -46,10 +46,10 @@ const STEP = 10, FINE_STEP = 1;
 
 // Pointer gestures: the same for a mouse, a pen and a finger (only the reach differs)
 const GESTURES = [
-  ['Drag', 'a node moves it; the background pans'],
+  ['Drag', 'a node moves it; a label or the background pans'],
   ['Pinch or wheel', 'zoom'],
   ['Double tap', 'zoom in; a two-finger tap zooms out'],
-  ['Tap a node', 'its details and neighbours; tap the background to clear'],
+  ['Tap a node or its label', 'its details and neighbours; tap the background to clear'],
   ['Long press', 'on a node: grab it where nodes crowd; on the background: drag a box to select'],
   ['Twist, or right drag', 'rotate (3D)']
 ];

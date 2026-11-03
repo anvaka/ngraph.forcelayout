@@ -7,12 +7,25 @@
 // Touch never hovers. A pointer move picks once per animation frame, and the node is picked again
 // after every frame in which the layout or the camera moved, since nodes move under a still
 // pointer. Nothing is hovered while something is being dragged. e.preventDefault() on 'hover'
-// keeps the node from lighting up.
+// keeps the node from lighting up. A label's text counts as its node (see the labels module).
+//
+// Resting: hover lights a node up at once, as the pointer passes; what hover adds to the picture
+// (the node's label in front, its tooltip) waits until the pointer rests on the node: it moved
+// less than `rest.distance` pixels in `rest.time` ms (hoverIntent's rule). Then 'rest' fires with
+// the node (and with null when the pointer moves on). So a pointer on its way to a label doesn't
+// open labels and cards over it as it crosses other nodes.
+//
+//   view.on('rest', e => e.node && console.log('resting on', e.node.id));
 //
 // Options:
 // - `holdStill` (false): pin the hovered node, so it doesn't drift away from the pointer. Off by
 //   default because it changes the layout's physics.
+// - `rest` ({distance: 6, time: 100}): how still a pointer rests; false: it rests at once.
+//
+// Other modules read it as ctx.get('hover'): {get(), resting()}.
 import {HOVERED} from '../flags.js';
+
+const REST = {distance: 6, time: 100};
 
 export default {
   name: 'hover',
@@ -22,29 +35,68 @@ export default {
     let hovered = null;
     let frame = 0;
     let held = null; // {node, wasPinned}
+    let rest = options.rest === false ? null : Object.assign({}, REST, options.rest || {});
+    // The node the pointer rests on, where the pointer was when the stillness check started, and
+    // the check's timer
+    let resting = null;
+    let restFrom = null;
+    let restTimer = 0;
 
     ctx.input.add({
       name: 'hover',
       priority: 0,
       hover(newPoint) {
         point = newPoint;
+        if (!point) setResting(null);
+        else watchRest();
         if (!frame) frame = requestAnimationFrame(onFrame);
       }
     });
     ctx.onFrame(change => {
       if (point && (change.positions || change.camera || change.structure)) update();
     });
-
-    return {
+    let api = {
       /** The hovered node, or null */
       get: () => hovered ? hovered.node : null,
+      /** The node the pointer rests on, or null */
+      resting: () => resting,
       dispose() {
         if (frame) cancelAnimationFrame(frame);
         frame = 0;
+        clearTimeout(restTimer);
+        restTimer = 0;
         point = null;
         set(null);
       }
     };
+    ctx.provide('hover', api);
+    return api;
+
+    // Checks every `rest.time` ms while the pointer moves whether it stayed within `rest.distance`
+    function watchRest() {
+      if (restTimer) return;
+      restFrom = {x: point.x, y: point.y};
+      if (!rest) {
+        checkRest();
+        return;
+      }
+      restTimer = setTimeout(checkRest, rest.time);
+    }
+
+    function checkRest() {
+      restTimer = 0;
+      if (!point) return;
+      let still = !rest || Math.hypot(point.x - restFrom.x, point.y - restFrom.y) < rest.distance;
+      if (still) setResting(hovered ? hovered.node : null);
+      else watchRest();
+    }
+
+    function setResting(node) {
+      if (resting === node) return;
+      let previous = resting;
+      resting = node;
+      ctx.emit('rest', {node, previous, id: node ? node.id : undefined});
+    }
 
     function onFrame() {
       frame = 0;
@@ -71,6 +123,8 @@ export default {
       let node = hit ? hit.node : null;
       hovered = hit;
       if (previous === node) return;
+      // Another node: it rests once the pointer has been still on it
+      if (resting && resting !== node) setResting(null);
       if (previous) {
         ctx.flags.set(previous.id, HOVERED, false);
         letGo();
@@ -86,6 +140,7 @@ export default {
         ctx.flags.set(node.id, HOVERED, true);
         if (options.holdStill) hold(node);
       }
+      if (node && point) watchRest();
     }
 
     // What a press would do here: the cursor of the module that would take it (a drag's grab),

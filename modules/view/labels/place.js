@@ -57,6 +57,50 @@ export function placeLabels(candidates, options) {
   return placed;
 }
 
+/**
+ * The side for a label drawn in front of the others (a pointed node's): the one whose box covers
+ * the least of `others` ([{x, y, width, height}]), inside the canvas and not `blocked` if it can.
+ * `c`: {x, y, radius, width, height}; `options`: gap, width, height (the canvas), blocked.
+ * Ties go to the first side in ANCHORS.
+ */
+export function frontSide(c, others, options = {}) {
+  let gap = options.gap !== undefined ? options.gap : 3;
+  let box = {x: 0, y: 0, width: 0, height: 0};
+  let best = ANCHORS[0], bestCost = Infinity;
+  for (let k = 0; k < ANCHORS.length; ++k) {
+    boxBeside(c, ANCHORS[k], gap, box);
+    let cost = 0;
+    let outside = options.width > 0 && (box.x < 0 || box.y < 0 || box.x + box.width > options.width || box.y + box.height > options.height);
+    if (outside || (options.blocked && options.blocked(box))) cost += 1e12;
+    for (let i = 0; i < others.length; ++i) {
+      let o = others[i];
+      let w = Math.min(box.x + box.width, o.x + o.width) - Math.max(box.x, o.x);
+      let h = Math.min(box.y + box.height, o.y + o.height) - Math.max(box.y, o.y);
+      if (w > 0 && h > 0) cost += w * h;
+    }
+    if (cost < bestCost) {
+      bestCost = cost;
+      best = ANCHORS[k];
+    }
+  }
+  return best;
+}
+
+/**
+ * The label under a point: the last of `boxes` (in drawing order, so the one on top) that holds
+ * (x, y), as {node, x, y, radius, front} (its node's disc, and whether it is a label in front), or
+ * null. `boxes`: [{node, x, y, width, height, disc: {x, y, radius}, front}].
+ */
+export function labelAt(boxes, x, y) {
+  for (let i = boxes.length - 1; i >= 0; --i) {
+    let b = boxes[i];
+    if (x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height) {
+      return {node: b.node, x: b.disc ? b.disc.x : x, y: b.disc ? b.disc.y : y, radius: b.disc ? b.disc.radius : 0, front: !!b.front};
+    }
+  }
+  return null;
+}
+
 /** The box (top left corner and size) of a label on `anchor` side of its node, into `out` */
 export function boxBeside(c, anchor, gap, out) {
   let w = c.width, h = c.height, r = c.radius + gap;

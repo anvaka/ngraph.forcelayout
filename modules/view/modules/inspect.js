@@ -4,8 +4,9 @@
 //   view.use(inspectNodes);    // a tap (mouse, pen or finger) keeps one open
 //   view.use(inspectNodes, {content: node => node.data.title});
 //
-// Hovering a node shows its tooltip while the pointer stays on the node or on the tooltip (so its
-// text can be read and selected). Keyboard focus (the navigate module) shows it too, while the
+// Hovering a node shows its tooltip once the pointer rests on it (the hover module's 'rest': a
+// pointer on its way elsewhere opens no cards over what it reaches for), while the pointer stays
+// on the node or on the tooltip (so its text can be read and selected). Keyboard focus (the navigate module) shows it too, while the
 // node has focus. A tap on a node, or Enter on a focused one, keeps the tooltip open until a tap
 // elsewhere or Escape; that is how touch shows it. The tooltip follows its node as the layout and the camera
 // move, beside the node rather than over it, inside the canvas.
@@ -109,7 +110,10 @@ export default {
     let hoverNode = null;
     let lingering = 0;
 
-    if (options.hover !== false) ctx.on('hover', onHover);
+    if (options.hover !== false) {
+      ctx.on('hover', onHover);
+      ctx.on('rest', onRest);
+    }
     ctx.on('focus', e => {
       if (shown && shown.pinned) return;
       if (e.node) show(e.node, false, 'focus');
@@ -159,13 +163,22 @@ export default {
       hoverNode = e.node;
       if (shown && shown.pinned) return;
       clearTimeout(lingering);
-      if (e.node) {
+      let hover = ctx.get('hover');
+      // A hover module that knows when the pointer rests: the card waits for that (onRest)
+      if (e.node && !(hover && hover.resting)) {
         show(e.node, false, 'hover');
-      } else if (shown && shown.source === 'hover') {
+      } else if (shown && shown.source === 'hover' && shown.node !== e.node) {
+        // Another node's card goes, a moment later: the pointer may be on its way to the card
         lingering = setTimeout(() => {
-          if (!overCard && !hoverNode && shown && shown.source === 'hover') hide();
+          if (!overCard && shown && shown.source === 'hover' && shown.node !== hoverNode) hide();
         }, LINGER);
       }
+    }
+
+    function onRest(e) {
+      if (!e.node || e.node !== hoverNode || (shown && shown.pinned)) return;
+      clearTimeout(lingering);
+      show(e.node, false, 'hover');
     }
 
     function show(node, pinned, source) {
@@ -246,14 +259,18 @@ export default {
       let area = ctx.visibleArea ? ctx.visibleArea() : null;
       if (area && (area.allHidden || area.width !== rect.width || area.height !== rect.height)) area = null;
       let points = neighbourPoints(shown.node);
-      // The view's other overlays (a search box, the keys card) stay uncovered too
+      // The view's other overlays (a search box, the keys card) stay uncovered too, and so does
+      // the node's own label: the pointer may rest on it
       let others = overlayBoxes(rect, card);
+      let labels = ctx.get('labelTargets');
+      let own = labels ? labels.boxOf(shown.node) : null;
+      let avoid = own ? others.concat([own]) : others;
       let sizes = cardSizes(rect, narrow);
       let best = null;
       // A card that had to shrink stays small until what shows changes (see onVisibleAreaChange)
       for (let i = Math.min(shown.size || 0, sizes.length - 1); i < sizes.length && !best; ++i) {
         setSize(sizes[i]);
-        best = bestBox(at, rect, area, points, others, narrow);
+        best = bestBox(at, rect, area, points, avoid, narrow);
         shown.size = i;
       }
       if (!best && others.length) {
@@ -416,7 +433,7 @@ export default {
       card.addEventListener('pointerenter', () => { overCard = true; clearTimeout(lingering); });
       card.addEventListener('pointerleave', () => {
         overCard = false;
-        if (shown && shown.source === 'hover' && !hoverNode) hide();
+        if (shown && shown.source === 'hover' && shown.node !== hoverNode) hide();
       });
       document.body.appendChild(card);
     }

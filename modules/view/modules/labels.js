@@ -15,8 +15,13 @@
 //   sooner when the zoom changed a lot (a search glide, a double tap), so the screen isn't left
 //   with the labels of nodes that flew off it.
 // - Labels placed last time go first, on the side of their node they had, so they don't jump.
-// - Hovered, focused, dragged and selected nodes are always labelled, then the selection's
-//   neighbours.
+// - Selected nodes are always labelled, then the selection's neighbours.
+// - Hover never places again (as on a map, hover changes how things look, never where labels
+//   go). The node the pointer rests on (see the hover module), the focused node and dragged ones
+//   get their label in front: drawn last, larger (the top tier), where their label is, or else on
+//   the side that covers the fewest labels. Labels under it stay where they are, behind it.
+// - A label's text is part of its node: the view's pick() takes a point on a label as its node
+//   (so the label you reach for is what you hover and tap).
 // - Labels make way for what covers the canvas (a settings panel, a toolbar): the view measures
 //   what is visible (see visible.js and the view's `occlusion` option), and no label goes there.
 // - Labels fade in and out (300 ms) in the shader.
@@ -39,10 +44,12 @@
 //   `gap` (3 px between the node and its label), `every` (250 ms), `fade` (300 ms), `maxLength` (40).
 //
 // API: update(options) (new options; importance, text and look are read again), refresh() (labels
-// read again), get() (the labelled nodes), stats() ({labels, placements, lastMs, maxMs}), dispose().
+// read again), get() (the labelled nodes), boxes() (the labels on the canvas now: [{node, x, y,
+// width, height, alpha, front}], CSS pixels, in drawing order), stats() ({labels, placements,
+// lastMs, maxMs}), dispose().
 import {createLabelAtlas} from '../labels/atlas.js';
 import {createLabelProgram, STRIDE} from '../labels/program.js';
-import {placeLabels, ANCHOR_INDEX} from '../labels/place.js';
+import {placeLabels, boxBeside, frontSide, labelAt, ANCHOR_INDEX} from '../labels/place.js';
 import {computeImportance, rankRows} from '../labels/importance.js';
 import {HOVERED, SELECTED, DRAGGED, FOCUSED} from '../flags.js';
 
@@ -73,6 +80,8 @@ const LOOK_AT = 12;
 // jiggles nodes by a few pixels, and without this the labels packed tightest blink out and
 // back, or jump to another side, as their neighbours move
 const SLACK = 6;
+// A label that comes in front (a pointed node's) starts its fade in at this alpha
+const FRONT_FROM = 0.6;
 // The zoom changed by this factor since the last placement: place again without waiting for
 // `every`, but not more often than every ZOOM_GAP ms
 const ZOOM_STEP = 1.5, ZOOM_GAP = 50;
@@ -90,8 +99,10 @@ export default {
     let ranked = null;
     // What is on screen or fading out: node id -> label
     let shown = new Map();
-    // Rows whose label is in the top tier for now (pointed nodes), from the last placement
-    let emphasis = new Set();
+    // Labels in front (pointed nodes) need to be worked out again at the next frame
+    let frontDirty = true;
+    // The labels' boxes on the canvas, as last measured (null: measure again)
+    let boxCache = null;
     // Label sizes (CSS pixels) by tier and text
     let sizes = new Map();
     // Nodes' diameters by row (scene units), from the last placement
@@ -104,6 +115,8 @@ export default {
 
     let pending = true;
     let last = -Infinity;
+    // The canvas at the last placement (CSS pixels)
+    let canvasSize = {width: 0, height: 0};
     // The camera's distance to what it looks at, at the last placement
     let lastDistance = 0;
     let timer = 0;
@@ -123,8 +136,22 @@ export default {
         atlas.dispose();
       }
     });
-    // What is labelled for sure changes with these: place again at the next frame
-    ['hover', 'select', 'focus', 'dragstart', 'dragend'].forEach(name => ctx.on(name, soon));
+    // What is labelled for sure changes with the selection: place again at the next frame
+    ctx.on('select', soon);
+    // Pointed nodes change which labels are in front, without placing again
+    ['hover', 'rest', 'focus', 'dragstart', 'dragend'].forEach(name => ctx.on(name, () => {
+      frontDirty = true;
+      ctx.requestFrame();
+    }));
+    // The view's pick() asks here first: a point on a label's text is its node
+    ctx.provide('labelTargets', {
+      at: (x, y) => labelAt(currentBoxes(), x, y),
+      /** The box of `node`'s label on the canvas now ({x, y, width, height}), or null */
+      boxOf(node) {
+        let found = currentBoxes().find(b => b.node === node);
+        return found ? {x: found.x, y: found.y, width: found.width, height: found.height} : null;
+      }
+    });
     // A panel opened or closed: place again, as often as while the camera moves
     let coversChanged = false;
     if (ctx.onVisibleAreaChange) {
@@ -153,6 +180,11 @@ export default {
         return nodes;
       },
       stats: () => Object.assign({}, stats),
+      boxes() {
+        let time = (performance.now() - epoch) / 1000;
+        return currentBoxes().map(b => ({node: b.node, x: b.x, y: b.y, width: b.width, height: b.height,
+          alpha: alphaAt(b.label, time, settings.fade / 1000), front: !!b.label.front}));
+      },
       dispose() {
         clearTimeout(timer);
         graph.off('changed', onGraphChanged);
@@ -182,14 +214,22 @@ export default {
         ranked = null;
         pending = true;
       }
+      if (change.positions || change.camera || change.structure) boxCache = null;
       let now = performance.now();
       if (pending) {
         place(now);
-      } else if (change.positions || change.camera || coversChanged) {
-        coversChanged = false;
-        // Moving: place again every `every` ms, and once more after it stops
-        if (now - last >= settings.every || (now - last >= ZOOM_GAP && zoomedFar())) place(now);
-        else schedule(settings.every - (now - last));
+      } else {
+        if (change.positions || change.camera || coversChanged) {
+          coversChanged = false;
+          // Moving: place again every `every` ms, and once more after it stops
+          if (now - last >= settings.every || (now - last >= ZOOM_GAP && zoomedFar())) place(now);
+          else schedule(settings.every - (now - last));
+        }
+        // A node was pointed or let go: only the labels in front change
+        if (frontDirty) {
+          updateFront(now);
+          fill();
+        }
       }
       if (fading(now)) ctx.animate();
     }
@@ -237,6 +277,8 @@ export default {
         width: screen.width, height: screen.height, gap: settings.gap, padding: 3, slack: SLACK, max,
         blocked: coveredTest(ctx.visibleArea())
       });
+      canvasSize.width = screen.width;
+      canvasSize.height = screen.height;
       apply(placed, screen, now);
       let ms = performance.now() - now;
       stats.labels = placed.length;
@@ -245,12 +287,12 @@ export default {
       stats.maxMs = Math.max(stats.maxMs, ms);
     }
 
-    // Who gets a label, in order: forced (pointed and selected), the selection's neighbours,
-    // labels placed last time (young ones first), then everyone by importance
+    // Who gets a label, in order: forced (selected), the selection's neighbours, labels placed last
+    // time (young ones first), then everyone by importance. Pointed nodes take no part: their
+    // labels are in front (see updateFront)
     function candidates(screen, max) {
       let list = [];
       let taken = new Set();
-      emphasis.clear();
       let add = (node, forced) => {
         if (!node || taken.has(node.id)) return;
         if (!textOf(node)) return;
@@ -258,18 +300,9 @@ export default {
         let row = body ? body.index : -1;
         if (row < 0 || row >= screen.x.length || !screen.onScreen[row]) return;
         taken.add(node.id);
-        let flags = ctx.flags.get(node.id);
-        let pointedNode = (flags & (HOVERED | FOCUSED | DRAGGED)) !== 0;
-        // The label of a hovered, found or focused node is in the top tier, so it reads among the
-        // labels around it
-        let tier = pointedNode ? 0 : ranked.tier[row];
-        if (pointedNode) emphasis.add(row);
+        let tier = ranked.tier[row];
         let size = sizeOf(node, tier);
-        let radius = screen.radius[row];
-        // Pointed and selected nodes are drawn larger, maybe with a ring (see the view's styles)
-        let styles = ctx.view.getStyles ? ctx.view.getStyles() : {};
-        if (pointedNode) radius = Math.max(radius * (styles.pointedScale || 1.5), (styles.pointedMinSize || 8) / 2) + ringOf(styles, styles.pointedRing);
-        else if (flags & SELECTED) radius = Math.max(radius * (styles.selectedScale || 1.25), (styles.selectedMinSize || 6) / 2) + ringOf(styles, styles.selectedRing);
+        let radius = drawnRadius(node, screen.radius[row], false);
         let previous = shown.get(node.id);
         list.push({
           row, node, tier, x: screen.x[row], y: screen.y[row], radius,
@@ -278,8 +311,6 @@ export default {
           forced
         });
       };
-      let pointed = ctx.flags.ids(HOVERED).concat(ctx.flags.ids(FOCUSED), ctx.flags.ids(DRAGGED));
-      pointed.forEach(id => add(graph.getNode(id), true));
       let selected = ctx.flags.ids(SELECTED);
       selected.slice(0, FORCED_SELECTED).forEach(id => add(graph.getNode(id), true));
       let neighbours = 0;
@@ -292,7 +323,8 @@ export default {
       }
       let now = performance.now();
       let before = [];
-      shown.forEach(label => { if (label.to > 0) before.push(label); });
+      // Labels only in front (a pointed node's) were not placed: they don't go first
+      shown.forEach(label => { if (label.to > 0 && !label.frontOnly) before.push(label); });
       before.sort((a, b) => {
         let youngA = now - a.placedAt < YOUNG, youngB = now - b.placedAt < YOUNG;
         if (youngA !== youngB) return youngA ? -1 : 1;
@@ -316,11 +348,8 @@ export default {
       let keep = new Set();
       placed.forEach(p => {
         let node = screen.nodes[p.row];
-        let tier = emphasis.has(p.row) ? 0 : ranked.tier[p.row];
         keep.add(node.id);
         let label = shown.get(node.id);
-        let text = textOf(node);
-        let key = tier + '|' + text;
         if (!label) {
           label = {node, from: 0, to: 0, start: time, placedAt: now};
           shown.set(node.id, label);
@@ -333,15 +362,16 @@ export default {
           label.placedAt = now;
         }
         label.anchor = p.anchor;
-        label.tier = tier;
-        if (label.key !== key || !label.entry) {
-          label.key = key;
-          label.text = text;
-          label.entry = null;
-        }
+        label.frontOnly = false;
+        setTier(label, label.front ? 0 : ranked.tier[p.row]);
       });
       shown.forEach((label, id) => {
         if (keep.has(id)) return;
+        // In front stays, also where no label of its own fits now
+        if (label.front) {
+          label.frontOnly = true;
+          return;
+        }
         if (label.to > 0) {
           label.from = alphaAt(label, time, settings.fade / 1000);
           label.to = 0;
@@ -350,16 +380,127 @@ export default {
           shown.delete(id);
         }
       });
+      updateFront(now);
       fill();
     }
 
-    // The buffer the shader reads: one entry per label shown or fading out
+    // Labels in front: the pointed nodes' (resting hover, focus, drag), largest, drawn last, where
+    // their own label is or on the side that covers the fewest others. Nothing is placed again.
+    function updateFront(now) {
+      frontDirty = false;
+      let time = (now - epoch) / 1000;
+      let hover = ctx.get('hover');
+      let rests = hover && hover.resting ? hover.resting() : null;
+      let ids = new Set(ctx.flags.ids(FOCUSED).concat(ctx.flags.ids(DRAGGED)));
+      // Without the hover module's resting, a hovered node is pointed at once
+      ctx.flags.ids(HOVERED).forEach(id => { if (!hover || !hover.resting || (rests && rests.id === id)) ids.add(id); });
+      shown.forEach((label, id) => {
+        if (!label.front || ids.has(id)) return;
+        label.front = false;
+        if (label.frontOnly) {
+          label.from = alphaAt(label, time, settings.fade / 1000);
+          label.to = 0;
+          label.start = time;
+        } else {
+          setTier(label, ranked ? ranked.tier[rowOf(label.node)] : 0);
+        }
+      });
+      if (!ranked) return;
+      let others = null;
+      ids.forEach(id => {
+        let node = graph.getNode(id);
+        if (!node || !textOf(node) || !ctx.layout.getBody(id)) return;
+        let label = shown.get(id);
+        if (!label) {
+          label = {node, from: 0, to: 0, start: time, placedAt: now};
+          shown.set(id, label);
+        }
+        let placedHere = label.to > 0 && !label.frontOnly;
+        if (!placedHere) {
+          if (label.to === 0 || !label.front) {
+            // Most of the way in already: it answers the pointer
+            label.from = Math.max(alphaAt(label, time, settings.fade / 1000), FRONT_FROM);
+            label.to = 1;
+            label.start = time;
+          }
+          // A label that wasn't on the canvas takes the side that covers the fewest others, and
+          // keeps it while it stays in front
+          if (!label.front || !label.anchor) {
+            if (!others) others = currentBoxes().filter(b => !b.label.front);
+            let disc = ctx.discsOf([node])[0];
+            let size = sizeOf(node, 0);
+            label.anchor = disc ? frontSide({x: disc.x, y: disc.y, radius: drawnRadius(node, disc.radius, true),
+              width: size.width, height: size.height}, others, {
+              gap: settings.gap, width: canvasSize.width, height: canvasSize.height,
+              blocked: coveredTest(ctx.visibleArea())
+            }) : 'right';
+          }
+          label.frontOnly = true;
+        }
+        label.front = true;
+        setTier(label, 0);
+      });
+      boxCache = null;
+    }
+
+    // A label's text size (tier); its image is drawn again when that changes
+    function setTier(label, tier) {
+      let text = textOf(label.node);
+      let key = tier + '|' + text;
+      label.tier = tier;
+      if (label.key !== key || !label.entry) {
+        label.key = key;
+        label.text = text;
+        label.entry = null;
+      }
+    }
+
+    // The node's disc as its label makes room for it: selected nodes are larger, maybe with a
+    // ring (see the view's styles), and so are pointed ones, for a label in front (as the shader)
+    function drawnRadius(node, radius, front) {
+      let flags = ctx.flags.get(node.id);
+      let styles = ctx.view.getStyles ? ctx.view.getStyles() : {};
+      if (front && (flags & (HOVERED | FOCUSED | DRAGGED))) return Math.max(radius * (styles.pointedScale || 1.5), (styles.pointedMinSize || 8) / 2) + ringOf(styles, styles.pointedRing);
+      if (flags & SELECTED) return Math.max(radius * (styles.selectedScale || 1.25), (styles.selectedMinSize || 6) / 2) + ringOf(styles, styles.selectedRing);
+      return radius;
+    }
+
+    // Labels in the order they are drawn: those in front last
+    function drawOrder() {
+      let back = [], front = [];
+      shown.forEach(label => (label.front ? front : back).push(label));
+      return back.concat(front);
+    }
+
+    // Where the labels are on the canvas now (they follow their nodes), in drawing order: the
+    // ones shown or fading in, with an image. Measured again after the nodes or the camera moved.
+    function currentBoxes() {
+      if (boxCache) return boxCache;
+      let list = drawOrder().filter(label => label.to > 0 && label.anchor && ctx.layout.getBody(label.node.id));
+      let discs = list.length ? ctx.discsOf(list.map(label => label.node)) : [];
+      let box = {x: 0, y: 0, width: 0, height: 0};
+      boxCache = [];
+      list.forEach((label, i) => {
+        let disc = discs[i];
+        if (!disc) return;
+        let size = sizeOf(label.node, label.tier);
+        boxBeside({x: disc.x, y: disc.y, radius: drawnRadius(label.node, disc.radius, !!label.front), width: size.width, height: size.height},
+          label.anchor, settings.gap, box);
+        boxCache.push({label, node: label.node, x: box.x, y: box.y, width: box.width, height: box.height,
+          disc: {x: disc.x, y: disc.y, radius: disc.radius}, front: !!label.front});
+      });
+      return boxCache;
+    }
+
+    // The buffer the shader reads: one entry per label shown or fading out, those in front last
     function fill() {
       shown.forEach((label, id) => { if (!ctx.layout.getBody(id)) shown.delete(id); });
       drawImages();
       if (data.length < shown.size * STRIDE) data = new Float32Array(Math.max(shown.size, 2 * data.length / STRIDE) * STRIDE);
       count = 0;
-      shown.forEach((label, id) => {
+      boxCache = null;
+      drawOrder().forEach(label => {
+        let id = label.node.id;
         // No image: even an empty atlas could not hold every label; this one waits
         if (!label.entry || label.generation !== atlas.generation) return;
         let body = ctx.layout.getBody(id);
@@ -367,7 +508,7 @@ export default {
         data[o] = body.index;
         data[o + 1] = nodeSizes && body.index < nodeSizes.length ? nodeSizes[body.index] : 1;
         data[o + 2] = ANCHOR_INDEX[label.anchor] || 0;
-        data[o + 3] = 0;
+        data[o + 3] = label.front ? 1 : 0;
         data[o + 4] = e.width / ratio;
         data[o + 5] = e.height / ratio;
         data[o + 6] = e.x / atlas.width;

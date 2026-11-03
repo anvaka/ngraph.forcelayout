@@ -776,6 +776,89 @@ test('placeLabels: in order, beside the node, never overlapping unless forced', 
   });
 });
 
+test('frontSide: the side that covers the fewest labels, inside the canvas; labelAt: the one on top', function (t) {
+  return place.then(function (m) {
+    var c = {x: 200, y: 150, radius: 5, width: 60, height: 16};
+    var options = {gap: 3, width: 400, height: 300};
+    t.equal(m.frontSide(c, [], options), 'right', 'nothing around: the first side');
+    // A label to the right of the node: the left is free
+    var right = {x: 210, y: 142, width: 50, height: 16};
+    t.equal(m.frontSide(c, [right], options), 'left');
+    // Labels left and right, a small one above: above covers least
+    var left = {x: 140, y: 142, width: 50, height: 16};
+    var above = {x: 195, y: 126, width: 10, height: 10};
+    var below = {x: 170, y: 160, width: 60, height: 16};
+    t.equal(m.frontSide(c, [right, left, above, below], options), 'above');
+    // At the right edge of the canvas the right side is out
+    t.equal(m.frontSide({x: 390, y: 150, radius: 5, width: 60, height: 16}, [], options), 'left', 'inside the canvas');
+    t.equal(m.frontSide(c, [], Object.assign({blocked: function (box) { return box.x > 200; }}, options)), 'left', 'not under a cover');
+
+    var node = function (id) { return {id: id}; };
+    var boxes = [
+      {node: node('a'), x: 100, y: 100, width: 60, height: 16, disc: {x: 95, y: 108, radius: 2}},
+      {node: node('b'), x: 140, y: 104, width: 60, height: 16, disc: {x: 135, y: 112, radius: 2}, front: true}
+    ];
+    t.equal(m.labelAt(boxes, 120, 108).node.id, 'a', 'on one label');
+    var top = m.labelAt(boxes, 150, 110);
+    t.same([top.node.id, top.front, top.x, top.y], ['b', true, 135, 112], 'where two overlap, the one drawn last, with its node\'s disc');
+    t.equal(m.labelAt(boxes, 300, 300), null, 'off every label');
+  });
+});
+
+test('hover: rests once the pointer is still on a node, not while it passes over nodes', function (t) {
+  return Promise.all([import('../modules/view/modules/hover.js'), flags]).then(function (loaded) {
+    var hoverModule = loaded[0].default, f = loaded[1];
+    var frames = [];
+    global.requestAnimationFrame = function (fn) { frames.push(fn); return frames.length; };
+    global.cancelAnimationFrame = function () {};
+    var events = [], handler = null, provided = {};
+    var nodes = {a: {id: 'a'}, b: {id: 'b'}};
+    var ctx = {
+      input: {add: function (h) { handler = h; }, dragging: function () { return false; }, claimant: function () { return null; }},
+      onFrame: function () {},
+      // Node a left of x = 100, b right of it
+      pick: function (x) { return {node: x < 100 ? nodes.a : nodes.b, row: 0}; },
+      flags: f.createFlags(function () {}),
+      setCursor: function () {},
+      emit: function (name, fields) { events.push([name, fields.node ? fields.node.id : null]); return {defaultPrevented: false}; },
+      provide: function (name, value) { provided[name] = value; }
+    };
+    var api = hoverModule.attach(ctx, {rest: {distance: 6, time: 30}});
+    var move = function (x) {
+      handler.hover({x: x, y: 50, pointerType: 'mouse'});
+      while (frames.length) frames.shift()();
+    };
+    var wait = function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); };
+    t.equal(provided.hover, api, 'other modules find it as ctx.get(\'hover\')');
+    // Passing: a over to b, 20 px every 10 ms
+    move(60);
+    return wait(10).then(function () {
+      move(80); return wait(10);
+    }).then(function () {
+      move(110); return wait(10);
+    }).then(function () {
+      move(130); return wait(10);
+    }).then(function () {
+      t.same(events.filter(function (e) { return e[0] === 'rest'; }), [], 'no rest while it moves');
+      t.equal(api.get().id, 'b', 'but the hover follows at once');
+      return wait(50);
+    }).then(function () {
+      t.equal(api.resting().id, 'b', 'still on b: it rests there');
+      t.same(events[events.length - 1], ['rest', 'b']);
+      move(132);
+      t.equal(api.resting().id, 'b', 'a small move keeps the rest');
+      move(50);
+      t.equal(api.resting(), null, 'another node: no rest until it is still again');
+      t.same(events.slice(-2), [['rest', null], ['hover', 'a']]);
+      handler.hover(null);
+      t.equal(api.resting(), null);
+      api.dispose();
+      delete global.requestAnimationFrame;
+      delete global.cancelAnimationFrame;
+    });
+  });
+});
+
 test('importance: degree, a data field, a function, pagerank', function (t) {
   return importance.then(function (m) {
     var graph = createGraph();

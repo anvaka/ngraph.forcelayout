@@ -23,7 +23,8 @@ const VERTEX = `
   uniform vec2 rings;
   ${POSITION_OF}
   attribute vec2 corner; // per vertex, 0..1
-  attribute vec4 node;   // row, diameter in scene units, side (0 right, 1 left, 2 above, 3 below)
+  // row, diameter in scene units, side (0 right, 1 left, 2 above, 3 below), 1 for a label in front
+  attribute vec4 node;
   attribute vec2 box;    // width, height in CSS pixels
   attribute vec4 uv;     // the image in the atlas: left, top, right, bottom
   attribute vec3 fade;   // start (seconds), alpha at the start, alpha at the end
@@ -43,8 +44,11 @@ const VERTEX = `
     float diameter = node.y * scale;
     float flags = position.w;
     if (hasFlag(flags, 2.0) > 0.5) diameter = max(diameter * selectedSize.x, selectedSize.y);
-    if (isPointed(flags) > 0.5) diameter = max(diameter * pointedSize.x, pointedSize.y);
-    float ring = isPointed(flags) > 0.5 && rings.x > 0.0 ? rings.x : hasFlag(flags, 2.0) > 0.5 ? rings.y : 0.0;
+    // A pointed node is drawn larger; its label makes room only once it is in front, so a pointer
+    // passing over nodes doesn't nudge their labels
+    float pointed = isPointed(flags) * step(0.5, node.w);
+    if (pointed > 0.5) diameter = max(diameter * pointedSize.x, pointedSize.y);
+    float ring = pointed > 0.5 && rings.x > 0.0 ? rings.x : hasFlag(flags, 2.0) > 0.5 ? rings.y : 0.0;
     float r = 0.5 * diameter + ring + gap * pixelRatio;
 
     vec2 size = box * pixelRatio;
