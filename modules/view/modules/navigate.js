@@ -481,7 +481,11 @@ export default {
       // At the top of what shows, not under a panel, and clear of buttons along the bottom
       let area = ctx.visibleArea && ctx.visibleArea();
       let free = area && area.largestRect();
-      if (free) help.style.maxHeight = Math.max(120, free.height - 24 - 56) + 'px';
+      if (free) {
+        // narrow enough to fit what shows with a margin (a phone is barely wider than the card)
+        help.style.maxWidth = Math.max(200, Math.min(360, free.width - 40)) + 'px';
+        help.style.maxHeight = Math.max(120, free.height - 24 - 56) + 'px';
+      }
       placeOverCanvas(help, canvas, area, 'top');
       say('Keys: ' + keys.map(([name, what]) => `${name}: ${what}`).join('. ') + '. Gestures: ' +
         GESTURES.map(([gesture, what]) => `${gesture}: ${what}`).join('. ') + '.');

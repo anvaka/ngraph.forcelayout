@@ -434,10 +434,19 @@ export default {
       let target = e.target;
       if (!target || !/^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName)) return;
       let vv = window.visualViewport;
+      // Scroll the field's scrolling boxes (Settings, the panel) just enough to bring it above the
+      // keyboard: scrollIntoView would centre it in the whole window, under the keyboard
       let reveal = () => {
-        let bottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
-        let box = target.getBoundingClientRect();
-        if (box.bottom > bottom - 8 || box.top < 0) target.scrollIntoView({block: 'center'});
+        let bottom = (vv ? vv.offsetTop + vv.height : window.innerHeight) - 12;
+        let need = target.getBoundingClientRect().bottom - bottom;
+        for (let el = target.parentElement; el && need > 0; el = el.parentElement) {
+          let style = getComputedStyle(el);
+          if (!/auto|scroll/.test(style.overflowY) || el.scrollHeight <= el.clientHeight) continue;
+          let room = el.scrollHeight - el.clientHeight - el.scrollTop;
+          let by = Math.min(need, room);
+          el.scrollTop += by;
+          need -= by;
+        }
       };
       if (vv) vv.addEventListener('resize', reveal, {once: true});
       setTimeout(reveal, 350);

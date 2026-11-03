@@ -374,7 +374,10 @@ export default {
       }
       let rect = canvas.getBoundingClientRect();
       let area = ctx.visibleArea && ctx.visibleArea();
-      let free = (area && area.largestRect()) || {x: 0, y: 0, width: rect.width, height: rect.height};
+      let open = area && area.largestRect();
+      // Nothing of the canvas shows (Settings and a soft keyboard cover it): keep the camera
+      if (area && area.anyHidden && !open) return;
+      let free = open || {x: 0, y: 0, width: rect.width, height: rect.height};
       usedFree = free;
       let labels = !!(ctx.view.getModule && ctx.view.getModule('labels'));
       let room = labels && settings.labelRoom ? settings.labelRoom : {x: 0, y: 0};
