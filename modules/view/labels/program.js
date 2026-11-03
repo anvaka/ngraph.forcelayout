@@ -19,6 +19,8 @@ const VERTEX = `
   uniform float dimAlpha;
   uniform vec2 pointedSize;
   uniform vec2 selectedSize;
+  // Device pixels a ring adds around pointed and selected nodes (0: no ring)
+  uniform vec2 rings;
   ${POSITION_OF}
   attribute vec2 corner; // per vertex, 0..1
   attribute vec4 node;   // row, diameter in scene units, side (0 right, 1 left, 2 above, 3 below)
@@ -42,7 +44,8 @@ const VERTEX = `
     float flags = position.w;
     if (hasFlag(flags, 2.0) > 0.5) diameter = max(diameter * selectedSize.x, selectedSize.y);
     if (isPointed(flags) > 0.5) diameter = max(diameter * pointedSize.x, pointedSize.y);
-    float r = 0.5 * diameter + gap * pixelRatio;
+    float ring = isPointed(flags) > 0.5 && rings.x > 0.0 ? rings.x : hasFlag(flags, 2.0) > 0.5 ? rings.y : 0.0;
+    float r = 0.5 * diameter + ring + gap * pixelRatio;
 
     vec2 size = box * pixelRatio;
     vec2 origin;
@@ -86,7 +89,7 @@ const QUAD = new Float32Array([0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0]);
 export function createLabelProgram(gl, instancing) {
   let info = createProgram(gl, VERTEX, FRAGMENT, ['corner', 'node', 'box', 'uv', 'fade'], [
     'modelViewProjection', 'positions', 'positionsSize', 'resolution', 'pixelRatio', 'gap', 'time',
-    'fadeDuration', 'dimAlpha', 'pointedSize', 'selectedSize', 'atlas', 'textColor', 'haloColor'
+    'fadeDuration', 'dimAlpha', 'pointedSize', 'selectedSize', 'rings', 'atlas', 'textColor', 'haloColor'
   ]);
   let quad = createBuffer(gl, QUAD);
   let instances = gl.createBuffer();
@@ -128,6 +131,8 @@ export function createLabelProgram(gl, instancing) {
       gl.uniform1f(u.dimAlpha, style.dimAlpha);
       gl.uniform2fv(u.pointedSize, style.pointedSize);
       gl.uniform2fv(u.selectedSize, style.selectedSize);
+      let ring = style.ringSize ? style.ringSize[0] + style.ringSize[1] : 0;
+      gl.uniform2f(u.rings, style.pointedRing && style.pointedRing[3] > 0 ? ring : 0, style.selectedRing && style.selectedRing[3] > 0 ? ring : 0);
       gl.uniform4fv(u.textColor, look.textColor);
       gl.uniform4fv(u.haloColor, look.haloColor);
 

@@ -83,12 +83,14 @@ export default {
       update();
     }
 
-    function close(backToCanvas) {
+    // `byPointer`: the pick was a click or a tap, so the canvas takes focus without the keyboard's
+    // focus ring (browsers that ignore focusVisible decide themselves)
+    function close(backToCanvas, byPointer) {
       if (!box || box.root.style.display === 'none') return;
       box.root.style.display = 'none';
       box.input.setAttribute('aria-expanded', 'false');
       box.input.removeAttribute('aria-activedescendant');
-      if (backToCanvas && canvas.focus) canvas.focus({preventScroll: true});
+      if (backToCanvas && canvas.focus) canvas.focus(byPointer ? {preventScroll: true, focusVisible: false} : {preventScroll: true});
     }
 
     function createBox() {
@@ -130,7 +132,7 @@ export default {
       list.addEventListener('pointerdown', e => e.preventDefault());
       list.addEventListener('click', e => {
         let option = e.target.closest('[role=option]');
-        if (option) pick(+option.dataset.index);
+        if (option) pick(+option.dataset.index, true);
       });
       box = {root, input, list, status, matches: [], active: -1};
     }
@@ -203,11 +205,11 @@ export default {
       }
     }
 
-    function pick(i) {
+    function pick(i, byPointer) {
       let match = box.matches[i];
       if (!match) return;
       let query = box.input.value;
-      close(true);
+      close(true, byPointer);
       let node = match.node;
       let focus = ctx.get('focus');
       if (focus) {

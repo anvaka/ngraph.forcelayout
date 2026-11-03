@@ -85,6 +85,8 @@ export default {
     let ranked = null;
     // What is on screen or fading out: node id -> label
     let shown = new Map();
+    // Rows whose label is in the top tier for now (pointed nodes), from the last placement
+    let emphasis = new Set();
     // Label sizes (CSS pixels) by tier and text
     let sizes = new Map();
     // Nodes' diameters by row (scene units), from the last placement
@@ -227,6 +229,7 @@ export default {
     function candidates(screen, max) {
       let list = [];
       let taken = new Set();
+      emphasis.clear();
       let add = (node, forced) => {
         if (!node || taken.has(node.id)) return;
         if (!textOf(node)) return;
@@ -234,13 +237,18 @@ export default {
         let row = body ? body.index : -1;
         if (row < 0 || row >= screen.x.length || !screen.onScreen[row]) return;
         taken.add(node.id);
-        let tier = ranked.tier[row];
-        let size = sizeOf(node, tier);
         let flags = ctx.flags.get(node.id);
+        let pointedNode = (flags & (HOVERED | FOCUSED | DRAGGED)) !== 0;
+        // The label of a hovered, found or focused node is in the top tier, so it reads among the
+        // labels around it
+        let tier = pointedNode ? 0 : ranked.tier[row];
+        if (pointedNode) emphasis.add(row);
+        let size = sizeOf(node, tier);
         let radius = screen.radius[row];
-        // Pointed and selected nodes are drawn larger (see the view's styles)
-        if (flags & (HOVERED | FOCUSED | DRAGGED)) radius = Math.max(radius * 1.5, 4);
-        else if (flags & SELECTED) radius = Math.max(radius * 1.25, 3);
+        // Pointed and selected nodes are drawn larger, maybe with a ring (see the view's styles)
+        let styles = ctx.view.getStyles ? ctx.view.getStyles() : {};
+        if (pointedNode) radius = Math.max(radius * (styles.pointedScale || 1.5), (styles.pointedMinSize || 8) / 2) + ringOf(styles, styles.pointedRing);
+        else if (flags & SELECTED) radius = Math.max(radius * (styles.selectedScale || 1.25), (styles.selectedMinSize || 6) / 2) + ringOf(styles, styles.selectedRing);
         let previous = shown.get(node.id);
         list.push({
           row, node, tier, x: screen.x[row], y: screen.y[row], radius,
@@ -287,7 +295,7 @@ export default {
       let keep = new Set();
       placed.forEach(p => {
         let node = screen.nodes[p.row];
-        let tier = ranked.tier[p.row];
+        let tier = emphasis.has(p.row) ? 0 : ranked.tier[p.row];
         keep.add(node.id);
         let label = shown.get(node.id);
         let text = textOf(node);
@@ -473,6 +481,11 @@ function coveredTest(area) {
 function alphaAt(label, time, fade) {
   let t = Math.min(1, Math.max(0, (time - label.start) / fade));
   return label.from + (label.to - label.from) * t;
+}
+
+// Pixels a ring adds around a node (the view's styles: halo and ring), or 0 without a ring
+function ringOf(styles, ring) {
+  return ring ? (styles.ringGap || 0) + (styles.ringWidth || 0) : 0;
 }
 
 function merge(options) {

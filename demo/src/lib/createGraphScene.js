@@ -6,7 +6,7 @@ import findLargestComponent from './findLargestComponent';
 // Add-ons from modules/ in this repository (see vite.config.js), not part of ngraph.forcelayout
 import placeNodes from 'ngraph.forcelayout.pivot';
 import {createWebGPUBackend, runOnGpu} from 'ngraph.forcelayout.gpu';
-import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes, navigateNodes, searchNodes, labelNodes, fitLayout} from 'ngraph.forcelayout.view';
+import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes, navigateNodes, searchNodes, labelNodes, fitLayout, pulseNodes} from 'ngraph.forcelayout.view';
 import createGraph from 'ngraph.graph';
 import {stepsForFrame} from './deviceDefaults';
 import look, {hasNames} from './look.js';
@@ -133,6 +133,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     view.use(inspectNodes, look.inspect);
     view.use(navigateNodes);
     view.use(searchNodes);
+    // A node search goes to sends out two fading rings, so the eye finds it in a big drawing
+    view.use(pulseNodes);
     view.use(labelNodes, labelOptions(graph));
     drawing = attachDrawing(view, graph, colors);
     window.view = view;
