@@ -7,8 +7,11 @@ import { execSync } from 'node:child_process';
 
 const libraryRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 
-// The commit this demo is built from: the copied code installs exactly it (Settings as code)
+// The commit this demo is built from: the copied code installs exactly it (Settings as code).
+// DEMO_COMMIT wins: a pull request's CI checks out a merge commit that a plain clone doesn't
+// have, so the preview workflow passes the pull request's own head.
 function commitOf(dir) {
+  if (process.env.DEMO_COMMIT) return process.env.DEMO_COMMIT.slice(0, 7);
   try {
     return execSync('git rev-parse --short HEAD', {cwd: dir, stdio: ['ignore', 'pipe', 'ignore']}).toString().trim();
   } catch (e) {

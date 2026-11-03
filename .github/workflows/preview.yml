@@ -45,6 +45,10 @@ jobs:
       - run: npm run build
         if: github.event.action != 'closed'
         working-directory: demo
+        env:
+          # The checkout is a merge commit a plain clone doesn't have; the page's install line
+          # and copied code name the pull request's own head (see demo/vite.config.js)
+          DEMO_COMMIT: ${{ github.event.pull_request.head.sha }}
 
       - name: Deploy / update / remove preview
         uses: rossjrw/pr-preview-action@v1
