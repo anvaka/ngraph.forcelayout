@@ -25,15 +25,18 @@ const planePoint = [0, 0, 0], stepX = [0, 0, 0], stepY = [0, 0, 0];
  * which a node still counts. Row `sticky` (the hovered node, or -1) gets `bonus` more pixels.
  * Nodes up to `margin` pixels beyond the reach are looked at too, to measure the gap.
  *
- * Returns {row, distance, inside, x, y, radius, gap} or null: `distance` is in pixels from the
- * disc's edge (0 inside), `x`, `y` and `radius` are the disc on the canvas, and `gap` is how many
- * pixels farther the next nearest node is (Infinity: none within reach + margin).
+ * Returns {row, distance, inside, covers, x, y, radius, gap} or null: `distance` is in pixels
+ * from the disc's edge (0 inside), `covers` how many discs the point is inside, `x`, `y` and
+ * `radius` are the disc on the canvas, and `gap` is how many pixels farther the next nearest node
+ * is (Infinity: none within reach + margin). The gap ignores the bonus: being hovered helps a
+ * node win, not look clearly nearer, so a press decides the same for a mouse that hovers and a
+ * finger that doesn't. It is negative when the bonus won over a nearer node.
  */
 export function pickNode(state, sx, sy, reach, sticky = -1, bonus = 0, margin = 0) {
   let best = {
-    row: -1, inside: false, score: Infinity, distance: 0, x: 0, y: 0, w: 0, radius: 0, own: 0,
-    // The two lowest scores seen (distance from the edge, less the bonus), for the gap
-    low1: Infinity, low1Row: -1, low2: Infinity
+    row: -1, inside: false, covers: 0, score: Infinity, distance: 0, x: 0, y: 0, w: 0, radius: 0,
+    // The two nearest disc edges seen (no bonus), for the gap
+    near1: Infinity, near1Row: -1, near2: Infinity
   };
   let around = reach + bonus + margin;
   let flat = state.D < 3;
@@ -41,10 +44,10 @@ export function pickNode(state, sx, sy, reach, sticky = -1, bonus = 0, margin = 
     scanAll(state, sx, sy, reach, around, sticky, bonus, best, !flat);
   }
   if (best.row < 0) return null;
-  let next = best.low1Row === best.row ? best.low2 : best.low1;
+  let next = best.near1Row === best.row ? best.near2 : best.near1;
   return {
-    row: best.row, distance: best.distance, inside: best.inside,
-    x: best.x, y: best.y, radius: best.radius, gap: next - best.own
+    row: best.row, distance: best.distance, inside: best.inside, covers: best.covers,
+    x: best.x, y: best.y, radius: best.radius, gap: next - best.distance
   };
 }
 
@@ -143,15 +146,17 @@ function scanAll(state, sx, sy, reach, around, sticky, bonus, best, depth) {
 // Keeps the better of `best` and the row at `onScreen`
 function rank(best, row, radius, sx, sy, reach, sticky, bonus, depth) {
   let distance = Math.hypot(onScreen.x - sx, onScreen.y - sy) - radius;
-  let own = Math.max(distance, 0) - (row === sticky ? bonus : 0);
-  if (own < best.low1) {
-    best.low2 = best.low1;
-    best.low1 = own;
-    best.low1Row = row;
-  } else if (own < best.low2) {
-    best.low2 = own;
+  let edge = Math.max(distance, 0);
+  let own = edge - (row === sticky ? bonus : 0);
+  if (edge < best.near1) {
+    best.near2 = best.near1;
+    best.near1 = edge;
+    best.near1Row = row;
+  } else if (edge < best.near2) {
+    best.near2 = edge;
   }
   if (distance <= 0) {
+    best.covers += 1;
     if (best.inside) {
       // Inside several discs: the hovered one, then the one on top
       if (best.row === sticky) return;
@@ -159,14 +164,12 @@ function rank(best, row, radius, sx, sy, reach, sticky, bonus, depth) {
     }
     best.inside = true;
     best.score = -Infinity;
-    best.own = own;
     keep(best, row, 0, radius);
     return;
   }
   if (best.inside) return;
   if (own > reach || own >= best.score) return;
   best.score = own;
-  best.own = own;
   keep(best, row, distance, radius);
 }
 

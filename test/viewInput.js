@@ -104,10 +104,20 @@ test('pickNode says how clearly the nearest node wins', function (t) {
     t.ok(Math.abs(hit.gap - 12) < 1e-6, 'the other edge is 12 px farther');
     var lone = state(p, [0, 0, 40, 0], 2, [2, 2]);
     t.equal(mods[1].pickNode(lone, 410, 300, 16, -1, 0, 8).gap, Infinity, 'nothing else within reach and margin');
-    // The hovered node gets its bonus in the gap too
+    // The hovered node wins a tie, but its bonus doesn't count in the gap: a mouse that hovers
+    // and a finger that doesn't must decide a press the same way
     hit = mods[1].pickNode(s, 406, 300, 16, 0, 4, 8);
-    t.equal(hit.row, 0);
-    t.equal(hit.gap, 4);
+    t.equal(hit.row, 0, 'the hovered node wins');
+    t.equal(hit.gap, 0, 'but not clearly');
+    hit = mods[1].pickNode(s, 407, 300, 16, 0, 4, 8);
+    t.equal(hit.row, 0, 'it wins over a nearer node too');
+    t.ok(hit.gap < 0, 'with a negative gap');
+    // Inside two overlapping discs
+    var overlap = state(p, [0, 0, 0.5, 0], 2, [4, 4]);
+    hit = mods[1].pickNode(overlap, 400, 300, 16, -1, 0, 8);
+    t.equal(hit.covers, 2, 'the point is inside both');
+    t.equal(hit.gap, 0);
+    t.equal(mods[1].pickNode(s, 397, 300, 16, -1, 0, 8).covers, 1, 'one disc');
   });
 });
 

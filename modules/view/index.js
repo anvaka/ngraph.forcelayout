@@ -410,9 +410,11 @@ export default function createView(scene, options = {}) {
    * `pointerType` ('mouse', 'pen', 'touch') and `width` (contact width) set the reach; `reach`
    * sets it in pixels; `sticky` (a node) gets a few more pixels.
    *
-   * Returns {node, row, distance, inside, clear, gap, x, y, radius}: `distance` from the disc's
-   * edge in pixels, the disc on the canvas. `clear`: the point is on the disc, or the next nearest
-   * node is at least half the reach farther (`gap` pixels). Where nodes crowd, a pick is not clear.
+   * Returns {node, row, distance, inside, covers, clear, gap, x, y, radius}: `distance` from the
+   * disc's edge in pixels, the disc on the canvas. `clear`: the point is on this disc and no
+   * other, or the next nearest node is at least half the reach farther (`gap` pixels). Where nodes
+   * crowd or overlap, a pick is not clear. The same for every pointer: hovering (`sticky`) helps a
+   * node win, but doesn't make it clear.
    */
   function pick(x, y, pickOptions = {}) {
     let state = pickState();
@@ -423,7 +425,7 @@ export default function createView(scene, options = {}) {
     let hit = pickNode(state, x, y, distance, stickyRow, stickyRow >= 0 ? STICKY : 0, margin);
     if (!hit) return null;
     hit.node = nodeData.nodes[hit.row];
-    hit.clear = hit.inside || hit.gap >= margin;
+    hit.clear = (hit.inside && hit.covers === 1) || hit.gap >= margin;
     return hit.node ? hit : null;
   }
 
