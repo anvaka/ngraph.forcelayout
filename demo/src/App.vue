@@ -15,7 +15,7 @@
         <button type='button' class='install' @click='copyInstall' :title='installNote || "Copy the install command"'
           :aria-label='"Copy the install command: " + installLine'><code>{{copied ? 'copied' : installLine}}</code></button>
       </div>
-      <p class='pitch' v-if='showPitch'>{{pitch}}</p>
+      <p class='pitch' v-if='showPitch'><span class='long'>{{pitch}}</span><span class='short'>{{pitchShort}}</span></p>
     </div>
     <div class='layout-box'>
       <div class='buttons graph-row'>
@@ -57,7 +57,7 @@
       <div class='stats stats-row'>
         <div v-if='loading' role='status'>Loading {{graphTitle(selectedGraph)}}…</div>
         <div v-else-if='stats' class='stats-text'>
-          <div>{{stats.nodes.toLocaleString()}} nodes · {{stats.links.toLocaleString()}} links<span v-if='stats.placement'> · {{stats.placement}} start</span></div>
+          <div>{{stats.nodes.toLocaleString()}} nodes · {{stats.links.toLocaleString()}} links<span class='placement' v-if='stats.placement'> · {{stats.placement}} start</span></div>
           <div :title='speedTitle'>{{speedLine}}</div>
           <div v-if='stats.gpuReasons' class='off-gpu'>Runs on the CPU: {{stats.gpuReasons}}.</div>
           <div v-if='fileError' class='off-gpu file-error' role='alert'>{{fileError}}</div>
@@ -78,8 +78,10 @@
         <button @click='settingsOpen = !settingsOpen' class='toggle-settings' :aria-expanded='settingsOpen ? "true" : "false"' aria-controls='settings'>Settings<span v-if='!settingsOpen && changedCount'> · {{changedCount}} changed</span><span aria-hidden='true'> {{settingsOpen ? '▴' : '▾'}}</span></button>
       </div>
       <div class='about-line' v-if='info && !loading'>
-        <p class='about-text' v-if='info.about' :class='{open: aboutTextOpen}' @click='aboutTextOpen = !aboutTextOpen'>{{info.about}}</p>
+        <p class='about-text' id='about-text' v-if='info.about' :class='{open: aboutTextOpen, "with-legend": legend.length > 0}' @click='aboutTextOpen = !aboutTextOpen'>{{info.about}}</p>
         <div class='legend' v-if='legend.length'>
+          <button type='button' class='about-toggle' v-if='info.about' @click='aboutTextOpen = !aboutTextOpen'
+            :aria-expanded='aboutTextOpen ? "true" : "false"' aria-controls='about-text' aria-label='About this graph'>ⓘ</button>
           <span class='legend-name'>Colour: {{info.colorBy}}</span>
           <span class='legend-chip' v-for='item in legend' :key='item.label'><span class='swatch' aria-hidden='true' :style='{background: item.color}'></span>{{item.label}}</span>
           <span class='legend-more' v-if='legendMore'>+{{legendMore}}</span>
@@ -134,7 +136,7 @@
 import createGraphScene from './lib/createGraphScene';
 import {graphGroups, graphTitle} from './lib/getAvailableGraphs';
 import graphInfo from './lib/graphInfo';
-import {libraryDefaultLabel, libraryDefaultsLabel, pitch, installLine, installNote} from './lib/release';
+import {libraryDefaultLabel, libraryDefaultsLabel, pitch, pitchShort, installLine, installNote} from './lib/release';
 import loadDroppedGraph from './lib/loadDroppedGraph';
 import CodeSettings from './components/CodeSettings.vue';
 import './styles/layout.css';
@@ -612,6 +614,7 @@ export default {
       installNote,
       showPitch: true,
       pitch,
+      pitchShort,
       graphGroups,
       libraryDefaultLabel,
       libraryDefaultsLabel,
