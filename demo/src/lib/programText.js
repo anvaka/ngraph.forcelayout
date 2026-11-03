@@ -7,6 +7,7 @@
 // lines: [lines], helpers: [lines]}: `helpers` go at the end of the program.
 import {hasNames, styleOptions} from './look.js';
 import {labelledGraphs} from './loadLabelledGraph.js';
+import {COMMIT} from './release.js';
 
 const SUITESPARSE = 'https://s3.amazonaws.com/yasiv_uf/out/';
 
@@ -202,9 +203,6 @@ function firstUrl(text) {
   return match ? match[0] : '';
 }
 
-// The commit the demo was built from (vite.config.js), or '' (tests, a build outside git)
-// eslint-disable-next-line no-undef
-export const COMMIT = typeof __DEMO_COMMIT__ === 'string' ? __DEMO_COMMIT__ : '';
 
 /**
  * The install lines: npm packages, and the add-ons from a clone of the repository, inside the
@@ -217,8 +215,7 @@ export function installLines(parts, installLine, repo, released) {
     part.packages.forEach(p => { if (!packages.includes(p)) packages.push(p); });
     part.addons.forEach(a => { if (!addons.includes(a)) addons.push(a); });
   });
-  let library = !released && COMMIT ? `npm i anvaka/ngraph.forcelayout#${COMMIT}` : installLine;
-  let lines = [`// ${library} ${packages.join(' ')}`];
+  let lines = [`// ${installLine} ${packages.join(' ')}`];
   if (addons.length) {
     lines.push(`// add-ons, not on npm: in this project's folder, git clone ${repo}` +
       (!released && COMMIT ? ` && git -C ngraph.forcelayout checkout ${COMMIT}` : ''),

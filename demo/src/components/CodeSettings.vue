@@ -81,8 +81,8 @@
 </template>
 
 <script>
-import {graphProgram, drawingProgram, installLines, COMMIT} from '../lib/programText.js';
-import {RELEASED} from '../lib/release.js';
+import {graphProgram, drawingProgram, installLines} from '../lib/programText.js';
+import {RELEASED, COMMIT} from '../lib/release.js';
 
 // The library's defaults on main (lib/createPhysicsSimulator.js): changed values are lit, and
 // only they are copied
@@ -222,9 +222,12 @@ export default {
     // The program as it reads, for Copy: only the changed options, and the add-ons that are on
     code() {
       let gpu = this.backend === 'webgpu', pivot = this.placement === 'pivot';
-      let changed = OPTIONS.filter(option => this.isChanged(option) && !(gpu && (option.key === 'theta' || option.key === 'nbody')))
-        .map(option => `  ${option.key}: ${option.choices ? `'${this.settings[option.key]}'` : this.settings[option.key]},`);
-      let steps = this.stepsPerFrame === 0 ? Math.max(1, this.autoNow || 1) : this.stepsPerFrame;
+      // Every changed option, theta and nbody too: the GPU ignores them, but the CPU fallback uses them
+      let changed = OPTIONS.filter(option => this.isChanged(option))
+        .map(option => `  ${option.key}: ${option.choices ? `'${this.settings[option.key]}'` : this.settings[option.key]},` +
+          (gpu && (option.key === 'theta' || option.key === 'nbody') ? ' // for the CPU (the GPU ignores it)' : ''));
+      let auto = this.stepsPerFrame === 0;
+      let steps = auto ? Math.max(1, this.autoNow || 1) : this.stepsPerFrame;
       let parts = this.program();
       let lines = [...parts.head, ''];
       lines.push(changed.length ? `const layout = createLayout(graph, {\n${changed.join('\n')}\n});` : `const layout = createLayout(graph);`);
@@ -238,9 +241,14 @@ export default {
       lines.push(`let settled = false; // it stops when the layout settles, and wakes when you drag a node`,
         `layout.on('stable', isStable => { settled = isStable; if (!isStable) requestAnimationFrame(frame); });`,
         `function frame() {`, `  if (settled) return;`);
-      let auto = this.stepsPerFrame === 0 ? ` // ${steps}: what "auto" picked here (as many as fit in ${this.frameBudget} ms)` : '';
-      if (gpu) lines.push(`  if (gpu) gpu.step(${steps});${auto}`, `  else for (let i = 0; i < ${steps}; ++i) layout.step();`);
-      else lines.push(`  for (let i = 0; i < ${steps}; ++i) layout.step();${auto}`);
+      // "auto": as many steps as fit in the frame budget, up to 10 (the demo's rule); the GPU line
+      // says what it picked here
+      let budget = this.frameBudget || 8;
+      let cpuLoop = auto
+        ? `for (let i = 0, t = performance.now(); i < 10 && performance.now() - t < ${budget}; ++i) layout.step(); // auto: what fits in ${budget} ms`
+        : `for (let i = 0; i < ${steps}; ++i) layout.step();`;
+      if (gpu) lines.push(`  if (gpu) gpu.step(${steps});${auto ? ` // ${steps}: what "auto" picked here` : ''}`, `  else ${cpuLoop}`);
+      else lines.push(`  ${cpuLoop}`);
       lines.push(`  requestAnimationFrame(frame); // the view draws every step`, `}`, `frame();`);
       lines.push(...parts.helpers);
       return lines.join('\n');

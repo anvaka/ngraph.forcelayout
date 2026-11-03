@@ -327,11 +327,15 @@ body.drag-over::after {
   align-items: center;
   margin-bottom: 10px;
 }
-/* The way out at the end of Settings (the button that opened them is at the top) */
+/* The way out of Settings (the button that opened them is at the top): it stays in sight at the
+   bottom of the Settings box while it scrolls */
 .settings-done {
   display: block;
+  position: sticky;
+  bottom: 4px;
   margin: 12px 0 4px auto;
   min-width: 88px;
+  box-shadow: 0 0 0 6px var(--panel, rgb(12, 41, 82));
 }
 .code-actions button.link {
   padding: 0;
@@ -569,9 +573,9 @@ body.drag-over::after {
   }
 }
 
-/* A phone on its side: the data credit sits at the canvas's bottom left, as in portrait, so the
-   folded panel is the graph's name alone */
-@media (min-width: 501px) and (max-height: 500px) {
+/* A phone on its side and a touch tablet: the data credit sits at the canvas's bottom left, as on
+   a phone in portrait, so the folded panel is the graph's name alone */
+@media (min-width: 501px) and (max-height: 500px), (min-width: 501px) and (pointer: coarse) {
   .about-line .credit {
     position: fixed;
     left: 8px;

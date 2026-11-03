@@ -432,11 +432,12 @@ box first opens. Fires `search` ({node, query}). API: `open(text)`, `close()`, `
 
 ### fit
 
-`view.use(fitLayout, {padding, labelRoom, maxScale, ease, bulk, bulkSlack, tilt, key, orient})`:
+`view.use(fitLayout, {padding, labelRoom, maxScale, ease, bulk, bulkSlack, tilt, key, orient, minRoom})`:
 the camera keeps the whole drawing in view, inside the part of the canvas that nothing covers
 (see [What the user sees](#what-the-user-sees)), until the user moves it. The drawing's bulk is
 framed (a few far pieces don't shrink the rest), labels get room at the sides, a 3D layout is
-tilted once, and a settled 2D drawing turns to the screen's long side. It snaps under
+tilted once, and a settled 2D drawing turns to the screen's long side. A free area smaller than
+`minRoom` (120 px) each way, such as the strip above a soft keyboard, doesn't move the camera. It snaps under
 `prefers-reduced-motion`. API: `fit()` (back to the whole drawing, following again; also the `0`
 key), `follow(on)`, `following()`, `on(fn)` (`fn(following)`), `zoomTo(node, {linkPixels,
 duration})` (bring a node close: its links about `linkPixels` long, 40).

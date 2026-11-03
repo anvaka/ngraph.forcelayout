@@ -4,11 +4,17 @@
 // with this page's library is on npm; every line below follows.
 export const RELEASED = false;
 
-// Works as written: from npm once released, until then main from GitHub
-export const installLine = RELEASED ? 'npm i ngraph.forcelayout' : 'npm i anvaka/ngraph.forcelayout';
+// The commit the demo was built from (vite.config.js), or '' (tests, a build outside git)
+// eslint-disable-next-line no-undef
+export const COMMIT = typeof __DEMO_COMMIT__ === 'string' ? __DEMO_COMMIT__ : '';
+
+// Works as written: from npm once released, until then the commit that built this page, from
+// GitHub. The title and the copied code use this same line.
+export const installLine = RELEASED ? 'npm i ngraph.forcelayout'
+  : COMMIT ? `npm i anvaka/ngraph.forcelayout#${COMMIT}` : 'npm i anvaka/ngraph.forcelayout';
 export const installNote = RELEASED
   ? ''
-  : 'Installs main from GitHub: npm’s 3.3.1 (2022) has no dual tree, FIRE or maxVelocity. The add-ons are in modules/ of the repository.';
+  : 'Installs the commit that drew this page from GitHub: npm’s 3.3.1 (2022) has no dual tree, FIRE or maxVelocity. The add-ons are in modules/ of the repository.';
 
 // How Settings name the library's own defaults
 export const libraryDefaultLabel = RELEASED ? 'library default' : 'library default on main';

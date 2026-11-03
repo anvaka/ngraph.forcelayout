@@ -39,6 +39,9 @@ const DEFAULTS = {
   tilt: {theta: 0.6, phi: 0.5},
   // the key on the canvas that fits again (null: none)
   key: '0',
+  // pixels the free area needs each way before the fit moves into it (a strip above a soft
+  // keyboard isn't room for the drawing)
+  minRoom: 120,
   // 2D: turn the view to the free area's long side when the layout settles, if the drawing then
   // shows at least this much larger by area (false: never turn)
   orient: 1.25,
@@ -394,8 +397,9 @@ export default {
       let rect = canvas.getBoundingClientRect();
       let area = ctx.visibleArea && ctx.visibleArea();
       let open = area && area.largestRect();
-      // Nothing of the canvas shows (Settings and a soft keyboard cover it): keep the camera
-      if (area && area.anyHidden && !open) return;
+      // Nothing, or only a sliver, of the canvas shows (Settings and a soft keyboard cover it):
+      // keep the camera until there is room again
+      if (area && area.anyHidden && (!open || open.height < settings.minRoom || open.width < settings.minRoom)) return;
       let free = open || {x: 0, y: 0, width: rect.width, height: rect.height};
       usedFree = free;
       let labels = !!(ctx.view.getModule && ctx.view.getModule('labels'));
