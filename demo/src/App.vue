@@ -96,7 +96,7 @@
       <span class='fold-chevron' v-if='panelFolded' aria-hidden='true'>▾</span>
       <span class='grip' aria-hidden='true'></span>
     </button>
-    <div class='content sheet' id='settings' v-if='settingsOpen' ref='sheet' :style='sheetStyle'>
+    <div class='content sheet' id='settings' v-if='settingsOpen' ref='sheet'>
       <code-settings :settings='layoutSettings' :steps-per-frame='stepsPerFrame' :auto-now='stats ? stats.stepsPerFrame : 0'
         :frame-budget='device.frameBudget' :placement='placement' :backend='backend' :gpu-available='gpuAvailable !== false'
         :gpu-message='gpuMessage' :install-line='installLine' :install-note='installNote' :library-default-label='libraryDefaultLabel'
@@ -303,13 +303,6 @@ export default {
       return parts.join(' ');
     },
     // The legend's first entries (the most common values), and how many more there are
-    // With the keyboard up the sheet takes at most half of what is left under the panel, so some
-    // of the graph stays in view while one types
-    sheetStyle() {
-      if (!this.keyboardInset) return null;
-      let left = Math.max(0, window.innerHeight - this.keyboardInset - this.panelHeight);
-      return {bottom: this.keyboardInset + 'px', maxHeight: Math.max(120, Math.round(left / 2)) + 'px'};
-    },
     // Settings that differ from what the page starts with (the button says so while closed)
     changedCount() {
       let physics = PHYSICS.filter(key => this.layoutSettings[key] !== DEFAULTS[key]).length;
@@ -457,17 +450,6 @@ export default {
       loadDroppedGraph(e.target.files);
     },
 
-    // On a phone the settings are a sheet at the bottom; the keyboard covers the bottom of the
-    // window without making it shorter, so the sheet sits on top of the keyboard while one types
-    onViewport() {
-      let vv = window.visualViewport;
-      if (!vv) return;
-      let covered = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-      this.keyboardInset = covered > 40 ? covered : 0;
-      let app = document.getElementById('app');
-      this.panelHeight = app ? app.getBoundingClientRect().height : 0;
-    },
-
     deviceValue(key) {
       return key === 'nbody' ? this.layoutSettings.nbody : this[key];
     },
@@ -555,6 +537,14 @@ export default {
     }
   },
   watch: {
+    // Opening Settings shows them: the panel scrolls back to its top, where they now begin
+    settingsOpen(open) {
+      if (!open) return;
+      this.$nextTick(() => {
+        let app = document.getElementById('app');
+        if (app) app.scrollTop = 0;
+      });
+    },
     layoutSettings: {
       deep: true,
       handler(newValue) {
@@ -653,8 +643,6 @@ export default {
       gpuNote: '',
       copied: false,
       pickerKey: '',
-      keyboardInset: 0,
-      panelHeight: 0,
       installLine,
       installNote,
       showPitch: true,
@@ -710,10 +698,6 @@ export default {
     this.loadNewGraph(this.selectedGraph);
     bus.on('load-graph', this.onGraphLoaded);
     bus.on('file-graph', this.onFileGraph);
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', this.onViewport);
-      window.visualViewport.addEventListener('scroll', this.onViewport);
-    }
     bus.on('file-error', this.onFileError);
     ['pointerdown', 'wheel', 'keydown'].forEach(name => canvas.addEventListener(name, this.hidePitch, {once: true, passive: true}));
     if (!this.picked.backend) {
@@ -734,10 +718,6 @@ export default {
   },
 
   beforeUnmount() {
-    if (window.visualViewport) {
-      window.visualViewport.removeEventListener('resize', this.onViewport);
-      window.visualViewport.removeEventListener('scroll', this.onViewport);
-    }
     clearInterval(this.statsTimer);
     clearTimeout(this.paramsTimer);
     if (this.scene) {
