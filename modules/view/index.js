@@ -495,7 +495,7 @@ export default function createView(scene, options = {}) {
    * discs only (a label module makes each label's text pick its node).
    *
    * Returns {node, row, distance, inside, covers, clear, gap, x, y, radius, label}: `label` is true
-   * when the point is on the node's label and on no disc (then `clear` is false: a press there
+   * when the point is on the node's label and not right on a disc (then `clear` is false: a press there
    * moves the camera, a tap picks the node, a long press grabs it). `distance` from the
    * disc's edge in pixels, the disc on the canvas. `clear`: the point is on this disc and no
    * other, or the next nearest node is at least half the reach farther (`gap` pixels). Where nodes
@@ -509,12 +509,14 @@ export default function createView(scene, options = {}) {
     let margin = distance / 2;
     let stickyRow = pickOptions.sticky ? rowOf(pickOptions.sticky.id) : -1;
     let hit = pickNode(state, x, y, distance, stickyRow, stickyRow >= 0 ? STICKY : 0, margin);
-    // A label is part of its node: a point on a label's text picks that node, unless it is on a
-    // disc (which shows through the text). A label in front (the pointed node's) is above
-    // everything. Not clear: a press on a label moves the camera, as on a map
+    // A label is part of its node: a point on a label's text picks that node, unless it is right
+    // on a disc that shows through the text (the inner half of it: a dot under a letter doesn't
+    // take the word). A label in front (the pointed node's) is above everything. Not clear: a
+    // press on a label moves the camera, as on a map
     let labels = pickOptions.labels === false ? null : services.get('labelTargets');
     let labelled = labels ? labels.at(x, y) : null;
-    if (labelled && (labelled.front || !(hit && hit.inside))) {
+    let onDisc = hit && hit.inside && Math.hypot(x - hit.x, y - hit.y) <= Math.max(1.5, hit.radius * 0.5);
+    if (labelled && (labelled.front || !onDisc)) {
       let row = rowOf(labelled.node.id);
       if (row >= 0 && nodeData.nodes[row]) {
         return {node: nodeData.nodes[row], row, distance: 0, inside: true, covers: 1, clear: false, gap: 0,

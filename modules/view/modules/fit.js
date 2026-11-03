@@ -16,9 +16,15 @@
 //   projected corners of the layout's box, so perspective is accounted for.
 // - It frames the bulk of the nodes: a few far pieces don't shrink the rest to a dot (`bulk`).
 // - With labels on, it leaves room for them beside the outermost nodes (`labelRoom`).
+// - What shows of the canvas changes (a panel opens or closes): it refits into the new free area,
+//   except when that only grew a little and the drawing wouldn't get bigger in it (a line of a
+//   phone's panel folding away): moving it a few pixels would only place every label again.
 // - In 2D, once the layout settles, it turns the view so the drawing's long side runs along the
 //   long side of what shows (`orient`), when that shows it clearly larger: a wide drawing on a
 //   tall phone screen stands up. Force layouts have no up, so turning the view loses nothing.
+
+// Pixels the middle of the free area may move, as it grows, before the drawing follows it
+const SMALL_SHIFT = 32;
 
 const DEFAULTS = {
   // pixels between the drawing and the edges of what shows
@@ -243,12 +249,35 @@ export default {
       let change = Math.abs(free.x - usedFree.x) + Math.abs(free.y - usedFree.y) +
         Math.abs(free.width - usedFree.width) + Math.abs(free.height - usedFree.height);
       if (change > 16) {
+        // A little more room and no bigger drawing (a line of a phone's panel folded away): the
+        // camera stays, rather than move the drawing a few pixels and place every label again
+        if (grewALittle(free)) {
+          usedFree = free;
+          return;
+        }
         easing = true;
         ctx.requestFrame();
         // the free area's shape changed: a settled drawing may turn to its new long side
         let layout = ctx.layout;
         if (settings.orient && layout && layout.getStability && layout.getStability().stable) setTimeout(() => { if (following) orient(); }, 450);
       }
+    }
+
+    // The free area grew around the one the fit used, its middle moved less than SMALL_SHIFT
+    // pixels, and the drawing would grow less than 5% in it
+    function grewALittle(free) {
+      let old = usedFree;
+      let around = free.x <= old.x + 1 && free.y <= old.y + 1 && free.x + free.width >= old.x + old.width - 1 &&
+        free.y + free.height >= old.y + old.height - 1;
+      if (!around) return false;
+      let shift = Math.hypot(free.x + free.width / 2 - old.x - old.width / 2, free.y + free.height / 2 - old.y - old.height / 2);
+      if (shift > SMALL_SHIFT) return false;
+      let layout = ctx.layout;
+      let bounds = layout && layoutBounds(layout, settings.bulk, settings.bulkSlack);
+      let screen = bounds && projectBox(bounds);
+      if (!screen || !(screen.width > 0) || !(screen.height > 0)) return false;
+      let fits = r => Math.min(r.width / screen.width, r.height / screen.height);
+      return fits(free) < 1.05 * fits(old);
     }
 
     // A pan or pinch can leave the camera gliding (inertia): stop it before this module moves it

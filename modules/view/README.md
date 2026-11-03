@@ -231,8 +231,9 @@ unambiguous: the point is on the disc, or the next nearest node is at least half
 (`gap` pixels).
 
 With the labels module, a label's text is part of its node, as on a map: a point on a label picks
-its node (`label: true`), unless it is inside a disc (a disc shows through the text). A label in
-front (the pointed node's, see labels) wins over discs too. Such a pick is not `clear`: a press on
+its node (`label: true`), unless it is on the inner half of a disc that shows through the text (a
+dot under a letter doesn't take the word). A label in front (the pointed node's, see labels) wins
+over discs too. Such a pick is not `clear`: a press on
 a label moves the camera, a tap picks its node, a long press grabs it. `labels: false` looks at
 the discs only.
 
@@ -345,9 +346,9 @@ node labels that stay put while the layout moves.
 * **Hover never moves a label.** As on a map, where hover changes how things look and never where
   labels go (MapLibre's `feature-state` drives paint properties only), pointing places nothing
   again. The hovered node (the pointer rests on it, see hover), the focused node and dragged ones
-  have their label in front: drawn last, where their own label is and at its size (a focused
-  node's in the top tier), or else on the side that covers the fewest others, on a plate of the
-  halo's color. The labels under it stay where they are, behind it, and show again when it goes.
+  have their label in front: drawn last, on a plate of the halo's color (it hides its own lit
+  links too), where their own label is and at its size (a focused node's in the top tier), or else
+  on the side that covers the fewest others, big names last. The labels under it stay where they are, behind it, and show again when it goes.
 * **Labels are targets.** Pointing at or tapping a label's text is pointing at its node (see
   [Picking](#picking)), so the label you reach for is the one you get.
 * **Out of the way.** No label goes where something covers the canvas (see "What the user
@@ -468,7 +469,9 @@ the camera keeps the whole drawing in view, inside the part of the canvas that n
 (see [What the user sees](#what-the-user-sees)), until the user moves it. The drawing's bulk is
 framed (a few far pieces don't shrink the rest), labels get room at the sides, a 3D layout is
 tilted once, and a settled 2D drawing turns to the screen's long side. A free area smaller than
-`minRoom` (120 px) each way, such as the strip above a soft keyboard, doesn't move the camera. It snaps under
+`minRoom` (120 px) each way, such as the strip above a soft keyboard, doesn't move the camera, and
+neither does a free area that grows a little without making the drawing bigger (a line of a
+phone's panel folding away), so the labels stay where they are. It snaps under
 `prefers-reduced-motion`. API: `fit()` (back to the whole drawing, following again; also the `0`
 key), `follow(on)`, `following()`, `on(fn)` (`fn(following)`), `zoomTo(node, {linkPixels,
 duration})` (bring a node close: its links about `linkPixels` long, 40).
