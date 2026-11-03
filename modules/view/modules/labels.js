@@ -36,16 +36,20 @@
 // Options:
 // - `importance` ('degree'): 'degree', 'pagerank', a field name of node.data, or `node => number`.
 // - `max`: labels at most (besides forced ones). Default: one per `area` (14,000) square pixels of
-//   canvas, between 20 and 150, so about as many at every zoom.
-// - `padding` (8): pixels kept free around each label, so a dense part of the drawing reads as
-//   labels with the drawing between them, not a wall of text.
-// - `spacing` (null): {x, y} pixels the nodes of two labels must be apart, as an ellipse, for a
-//   sparser and more even spread (a label on screen needs only 0.7 of it to stay).
+//   canvas, between 30 and 150, so about as many at every zoom.
+// - `padding` ('auto'): pixels kept free around each label, so a dense part of the drawing reads
+//   as labels with the drawing between them, not a wall of text. 'auto': 8 on a desktop, less on
+//   a small screen (the canvas's shorter side / 110, at least 4), where names are fewer already.
+// - `spacing` ('auto'): {x, y} pixels the nodes of two labels must be apart, as an ellipse (a
+//   label on screen needs only 0.7 of it to stay). 'auto' grows it with how many nodes each label
+//   stands for: none up to 20 nodes a label (small graphs keep their names), up to {x: 90, y: 36}
+//   from 200 (a dense graph at fit shows a few names over its drawing), less on a small screen.
+//   null: none.
 // - `tiers`: text sizes by rank, [{count, share, min, size, weight, tone}] from the most important;
 //   a node ranked below `count` and below `share` of all nodes (but at least `min`) takes that
 //   tier. Default: the top 20 at 16 px semibold, the next to 200 at 13 px, the rest at 12 px.
 //   `tone` (0 to 1) dims a tier's text toward the halo: small labels recede and the drawing's
-//   colors lead (the default tones are 1, 0.85, 0.68); pointed and selected nodes' labels are
+//   colors lead (the default tones are 1, 0.85, 0.75); pointed and selected nodes' labels are
 //   always at full brightness.
 // - `text`: `node => string`, the label's text (default: the view's `labelOf`). Return '' for
 //   nodes that should have no label, e.g. nodes that have only an id.
@@ -71,16 +75,16 @@ const DEFAULTS = {
   tiers: [
     {count: 20, share: 0.05, min: 3, size: 16, weight: 600, tone: 1},
     {count: 200, share: 0.3, min: 10, size: 13, weight: 500, tone: 0.85},
-    {share: 1, min: 0, size: 12, weight: 400, tone: 0.68}
+    {share: 1, min: 0, size: 12, weight: 400, tone: 0.75}
   ],
   // How far apart the nodes of two labels must be ({x, y} CSS pixels, an ellipse), for a sparser,
   // more even spread than padding gives. Off by default
-  spacing: null,
+  spacing: 'auto',
   // One label per this many square CSS pixels of canvas at most (20 to 150): about as many at
   // every zoom, so zooming in brings other names, not more of them
   area: 14000,
   // Pixels kept free around each label: room to breathe, so dense parts aren't a wall of text
-  padding: 8,
+  padding: 'auto',
   font: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
   color: 0xffffffff,
   halo: 0x0c2952e6,
@@ -299,13 +303,14 @@ export default {
       }
       nodeSizes = screen.sizes;
       if (!ranked || ranked.count !== screen.x.length) ranked = rank(screen.x.length);
-      let max = settings.max || Math.round(Math.min(150, Math.max(20, screen.width * screen.height / settings.area)));
+      let max = settings.max || Math.round(Math.min(150, Math.max(30, screen.width * screen.height / settings.area)));
 
       let covered = coveredTest(ctx.visibleArea());
+      let spacing = spacingFor(settings.spacing, screen, max);
       let fadingOut = fadingBoxes(screen, now);
       let placed = placeLabels(candidates(screen, max), {
-        width: screen.width, height: screen.height, gap: settings.gap, padding: settings.padding, slack: SLACK, max,
-        spacing: settings.spacing,
+        width: screen.width, height: screen.height, gap: settings.gap, padding: paddingFor(settings.padding, screen), slack: SLACK, max,
+        spacing,
         // No new name prints over one still fading out
         blocked: fadingOut.length ? box => (covered && covered(box)) || overlapsAny(box, fadingOut) : covered
       });
@@ -357,9 +362,15 @@ export default {
       // biggest names arrive at once and stay while the layout runs
       let topCount = 0;
       while (topCount < ranked.order.length && ranked.tier[ranked.order[topCount]] === 0) topCount += 1;
-      for (let i = 0; i < topCount; ++i) {
-        let row = ranked.order[i];
-        if (screen.onScreen[row]) add(screen.nodes[row], false);
+      // (those shown last time first, so two landmarks of one cluster don't take turns)
+      for (let pass = 0; pass < 2; ++pass) {
+        for (let i = 0; i < topCount; ++i) {
+          let row = ranked.order[i];
+          if (!screen.onScreen[row]) continue;
+          let label = shown.get(screen.nodes[row].id);
+          let wasShown = !!(label && label.to > 0 && !label.frontOnly);
+          if (wasShown === (pass === 0)) add(screen.nodes[row], false);
+        }
       }
       let now = performance.now();
       let before = [];
@@ -440,7 +451,8 @@ export default {
         if (!label.front || ids.has(id)) return;
         label.front = false;
         if (label.frontOnly) {
-          label.from = alphaAt(label, time, settings.fade / 1000);
+          // Gone at once: it would fade under the next pointed node's plate
+          label.from = 0;
           label.to = 0;
           label.start = time;
         } else {
@@ -709,6 +721,27 @@ function coveredTest(area) {
     }
     return false;
   };
+}
+
+// 'auto': labels spread out in proportion to how many nodes each one stands for. Where a label
+// stands for a handful of nodes (London, Mammals), they pack as they fit; where it stands for
+// hundreds (a 74k-node graph at fit), the nodes of two labels keep up to {x: 90, y: 36} pixels
+// apart, so the picture shows the drawing with a few names over it, not a carpet of names.
+function paddingFor(padding, screen) {
+  if (padding !== 'auto') return padding;
+  return Math.round(Math.min(8, Math.max(4, Math.min(screen.width, screen.height) / 110)));
+}
+
+function spacingFor(spacing, screen, max) {
+  if (spacing !== 'auto') return spacing;
+  let on = 0;
+  for (let i = 0; i < screen.onScreen.length; ++i) on += screen.onScreen[i];
+  let perLabel = on / Math.max(1, max);
+  // 0 up to 20 nodes a label, 1 from 200
+  let f = Math.min(1, Math.max(0, Math.log10(Math.max(perLabel, 1)) - 1.3));
+  // ...and with the screen: a phone's names are fewer already
+  f *= Math.min(1, Math.min(screen.width, screen.height) / 700);
+  return f > 0 ? {x: 90 * f, y: 36 * f} : null;
 }
 
 function overlapsAny(box, list) {
