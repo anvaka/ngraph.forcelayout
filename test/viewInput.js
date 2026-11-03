@@ -833,6 +833,6 @@ test('createVisibility: a function can say what is hidden; the area is measured 
     t.equal(visibility.area(), first, 'the same area right after');
     t.equal(calls, measured, 'no new hit tests');
     visibility.forget();
-    t.notEqual(visibility.area(), first, 'measured again once forgotten');
+    t.not(visibility.area(), first, 'measured again once forgotten');
   });
 });
