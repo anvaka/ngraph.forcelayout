@@ -313,11 +313,22 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
 }
 .about-line p { margin: 0; }
 .about-line .about-text { color: var(--text-2); }
-.about-line .legend { padding: 0; margin-top: 6px; }
+.about-line .legend { padding: 0; margin-top: 6px; align-items: center; }
 .about-line .credit { padding: 0; margin-top: 6px; }
 .legend .legend-name { color: var(--text-3); white-space: nowrap; }
 .legend .legend-chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; color: var(--text-2); }
-.legend .legend-more { color: var(--text-3); }
+.legend .legend-more { color: var(--text-3); white-space: nowrap; }
+/* LegendRow's measuring copy of the chips: laid out, never seen, takes no room */
+.legend .legend-measure {
+  position: absolute;
+  display: flex;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+.legend .legend-measure > * { flex: none; }
 .legend .swatch, .about-line .swatch {
   flex: none;
   width: 8px;
@@ -402,7 +413,9 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
 }
 .block .col:first-child { flex: 1; color: var(--text); }
 .block .col:nth-child(2) { flex: 0 0 132px; position: relative; }
-.block.inactive .col { opacity: 0.45; }
+/* An option the run doesn't use: the control dims (it is inactive); its name stays readable */
+.block.inactive .col:first-child { color: var(--text-3); }
+.block.inactive .col:nth-child(2) { opacity: 0.45; }
 .block input[type='number'],
 .block input[type='text'] {
   width: 100%;
@@ -498,6 +511,16 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
   background: var(--accent-field);
   border-bottom-color: var(--accent);
 }
+/* An option the run doesn't use: only its value dims (text-3, no field: still 5.3:1, and still
+   editable); its name and the reason ("// not used on WebGPU") keep their normal colors */
+.code .unused { opacity: 1; }
+.code .unused .value, .code .unused select {
+  color: var(--text-3);
+  background: transparent;
+  border-bottom-color: var(--line-strong);
+}
+/* ...and a changed value that is unused keeps its accent underline */
+.code .unused.changed .value, .code .unused.changed select { border-bottom-color: var(--accent); }
 .code .toggle.off span:not(.comment) { color: var(--text-3); text-decoration: line-through; text-decoration-color: var(--line-strong); }
 .code .help { color: var(--text-3); }
 .code-actions {
