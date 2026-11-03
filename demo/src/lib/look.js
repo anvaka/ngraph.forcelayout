@@ -76,16 +76,23 @@ export function degreeOf(node) {
   return links.size !== undefined ? links.size : links.length;
 }
 
-/** A graph has names when at least half of its nodes (of the first 200) have a label or a name */
+/**
+ * A graph has names when at least half of its nodes (of the first 200) have a label, a name, or
+ * an id that is a word rather than a number (a DOT file's `Alice -- Bob`)
+ */
 export function hasNames(graph) {
   let named = 0, seen = 0;
   graph.forEachNode(node => {
     seen += 1;
     let data = node.data;
-    if (data && (isName(data.label) || isName(data.name))) named += 1;
+    if ((data && (isName(data.label) || isName(data.name))) || isWord(node.id)) named += 1;
     return seen >= 200;
   });
   return seen > 0 && named >= seen / 2;
+}
+
+function isWord(id) {
+  return typeof id === 'string' && id.length > 0 && !/^[-+]?\d+(\.\d+)?$/.test(id.trim());
 }
 
 function isName(value) {
