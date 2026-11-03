@@ -10,20 +10,26 @@
       </button>
     </div>
     <div class='title-row'>
-      <h2><a href='https://github.com/anvaka/ngraph.forcelayout#readme'>ngraph.forcelayout</a></h2>
+      <div class='name-line'>
+        <h2><a href='https://github.com/anvaka/ngraph.forcelayout#readme'>ngraph.forcelayout</a></h2>
+        <button type='button' class='install' @click='copyInstall' :title='installNote || "Copy the install command"'
+          :aria-label='"Copy the install command: " + installLine'><code>{{copied ? 'copied' : installLine}}</code></button>
+      </div>
       <p class='pitch' v-if='showPitch'>{{pitch}}</p>
     </div>
     <div class='layout-box'>
       <div class='buttons graph-row'>
         <label class='graph-picker'>
           <span class='visually-hidden'>Graph</span>
-          <select v-model='graphChoice' ref='graphSelect'>
+          <select v-model='graphChoice' ref='graphSelect' @keydown='pickerKey = $event.key' @pointerdown='pickerKey = ""'>
             <option v-if='fileName' value='__file__'>{{fileName}}</option>
+            <option value='__open__'>Your graph: open a .dot or .json file…</option>
             <optgroup v-for='group in graphGroups' :key='group.label' :label='group.label'>
               <option v-for='graph in group.graphs' :key='graph' :value='graph'>{{graphTitle(graph)}}</option>
             </optgroup>
           </select>
         </label>
+        <input type='file' ref='fileInput' class='visually-hidden' accept='.dot,.gv,.json' tabindex='-1' aria-hidden='true' @change='onFilePicked'>
         <button @click='toggleLayoutRun' class='btn'>{{isRunning ? 'Pause' : 'Run'}}</button>
         <button @click='restart' class='btn restart' title='Start over from initial positions'>Reset</button>
       </div>
@@ -55,8 +61,21 @@
           <div :title='speedTitle'>{{speedLine}}</div>
           <div v-if='stats.gpuReasons' class='off-gpu'>Runs on the CPU: {{stats.gpuReasons}}.</div>
           <div v-if='fileError' class='off-gpu file-error' role='alert'>{{fileError}}</div>
+          <div v-if='gpuNote' class='off-gpu' role='status'>{{gpuNote}}</div>
         </div>
-        <button @click='settingsOpen = !settingsOpen' class='toggle-settings' :aria-expanded='settingsOpen ? "true" : "false"'>Settings<span v-if='!settingsOpen && changedCount'> · {{changedCount}} changed</span><span aria-hidden='true'> {{settingsOpen ? '▴' : '▾'}}</span></button>
+      </div>
+      <div class='controls-row'>
+        <div class='switch' role='group' aria-label='Dimensions'>
+          <button type='button' :aria-pressed='layoutSettings.dimensions === 2 ? "true" : "false"' @click='setDimensions(2)'>2D</button>
+          <button type='button' :aria-pressed='layoutSettings.dimensions === 3 ? "true" : "false"' @click='setDimensions(3)'>3D</button>
+        </div>
+        <div class='switch' role='group' aria-label='Run the layout on'>
+          <button type='button' :aria-pressed='backend === "cpu" ? "true" : "false"' @click='backend = "cpu"'
+            title='The library itself, on the CPU'>CPU</button>
+          <button type='button' :aria-pressed='backend === "webgpu" ? "true" : "false"' :aria-disabled='gpuAvailable === false ? "true" : null'
+            @click='pickGpu' title='The WebGPU add-on (modules/gpu)'>GPU</button>
+        </div>
+        <button @click='settingsOpen = !settingsOpen' class='toggle-settings' :aria-expanded='settingsOpen ? "true" : "false"' aria-controls='settings'>Settings<span v-if='!settingsOpen && changedCount'> · {{changedCount}} changed</span><span aria-hidden='true'> {{settingsOpen ? '▴' : '▾'}}</span></button>
       </div>
       <div class='about-line' v-if='info && !loading'>
         <p class='about-text' v-if='info.about' :class='{open: aboutTextOpen}' @click='aboutTextOpen = !aboutTextOpen'>{{info.about}}</p>
@@ -68,9 +87,14 @@
         <div class='credit' v-if='info.credit'>Data: <a :href='info.credit.href' target='_blank' rel='noopener'>{{info.credit.text}}</a></div>
       </div>
     </div>
-    <div class='content' v-if='settingsOpen'>
+    <div class='content sheet' id='settings' v-if='settingsOpen' ref='sheet' :style='sheetStyle'>
+      <code-settings :settings='layoutSettings' :steps-per-frame='stepsPerFrame' :auto-now='stats ? stats.stepsPerFrame : 0'
+        :frame-budget='device.frameBudget' :placement='placement' :backend='backend' :gpu-available='gpuAvailable !== false'
+        :gpu-message='gpuMessage' :install-line='installLine' :install-note='installNote' :library-default-label='libraryDefaultLabel'
+        @set='setSetting' @reset='resetSettings' @speedups='useDeviceDefaults'></code-settings>
+
       <template v-if='prototypes.length && !prototype'>
-        <div class='section first'>
+        <div class='section'>
           Layout ideas
           <small><a href='https://github.com/anvaka/ngraph.forcelayout/tree/main/demo/src/prototypes'>experiments, not part of the library</a></small>
         </div>
@@ -79,91 +103,7 @@
           Picking an idea restarts the layout from the same start as <b>none</b>, and puts it at
           the top of the panel; its <b>on</b> box turns it off and on again, so you can compare the two.
         </input-select>
-        <div class='section'>Layout <small><a href='#' @click.prevent='resetSettings' title='Every setting back to what this page starts with'>reset all settings</a></small></div>
       </template>
-      <input-value label='Time step' v-model='layoutSettings.timeStep'>
-      This is integration time step value. The higher it is, the faster nodes will move, but setting it too high
-      can result in lots of jitter and instability.
-      </input-value>
-      <input-value label='Gravity' v-model='layoutSettings.gravity'>
-        This coefficient defines how strongly each node repels each other.
-      </input-value>
-      <input-value label='Ideal spring length' v-model='layoutSettings.springLength'>
-         What is the ideal length of each spring?
-      </input-value>
-      <input-value label='Spring coefficient' v-model='layoutSettings.springCoefficient'>
-        Higher values makes the spring force stronger, pushing edges closer to the ideal spring length.
-      </input-value>
-      <input-value label='Drag coefficient' v-model='layoutSettings.dragCoefficient'
-        :disabled='usesFire' :note="usesFire ? 'Not used by the fire integrator.' : ''">
-        This coefficient introduces "resistance" from environment. When it is close to 0 the forces
-        will have a lot of freedom, nothing will be stopping them, and that can result in a very
-        unstable simulation.
-      </input-value>
-      <input-value label='Theta' v-model='layoutSettings.theta'
-        :disabled='onGpu' :note="onGpu ? 'Not used on WebGPU.' : ''">
-        This coefficient influences when we apply long distance forces approximation. When this value is
-        close to 0, the simulation compares forces between every single node (giving O(n^2), slow performance).
-        Recommended value is 0.8.
-      </input-value>
-
-      <input-value label='Dimensions' v-model='layoutSettings.dimensions' step=1>
-      Defines number of dimensions of the space where layout is performed. For visualization purpose
-      2 or 3 dimensions are normally enough. Note: Memory consumptions grows exponentially with number
-      of dimensions.
-      </input-value>
-
-      <div class='section'>
-        Speed-ups
-        <small>
-          <a href='#' @click.prevent='useDeviceDefaults' title='The speed-ups picked for this device'>this device</a> |
-          <a href='#' @click.prevent='useLibraryDefaults' :title='"The " + libraryDefaultsLabel + " for the speed-ups (the physics stay)"'>{{libraryDefaultsLabel}}</a>
-        </small>
-      </div>
-      <div class='device-note' v-if='deviceSummary'>{{deviceSummary}}</div>
-      <input-value label='Max velocity' v-model='layoutSettings.maxVelocity'>
-        Maximum distance a node can travel in one unit of time (each step moves a node by at most
-        time step * max velocity). Library default is 4. Set it to 1 to get the layouts of versions
-        before v3.4, which settle more slowly.
-      </input-value>
-      <input-select label='Integrator' v-model='layoutSettings.integrator' :options='integratorOptions'>
-        How forces move nodes. <b>euler</b> is the classic integration slowed down by drag.
-        <b>fire</b> (Fast Inertial Relaxation Engine) ignores drag: the whole system keeps its momentum
-        while it moves "downhill", and stops dead when it overshoots. Usually reaches a good layout in
-        fewer steps, especially on trees and grids.
-      </input-select>
-      <input-select label='Repulsion' v-model='layoutSettings.nbody' :options='nbodyOptions'
-        :disabled='onGpu' :note="onGpu ? 'Not used on WebGPU: exact pairs up to 1,024 nodes, a grid pyramid beyond.' : ''">
-        How node repulsion is computed. <b>quad tree</b> is Barnes-Hut: each node walks the tree.
-        <b>dual tree</b> lets pairs of tree cells interact with each other, which is 5-10x faster on large
-        graphs with the same accuracy. Both use theta.
-      </input-select>
-      <input-value label='Steps per frame' v-model='stepsPerFrame' step=1 :note='stepsNote'>
-        How many layout steps to run before each frame is rendered. Fast layouts can do many steps per frame.
-        <b>0</b> is auto: as many steps as fit in {{device.frameBudget}} ms of each frame, up to {{maxAutoSteps}}.
-      </input-value>
-
-      <div class='section'>
-        Add-ons
-        <small><a href='https://github.com/anvaka/ngraph.forcelayout/tree/main/modules'>not part of the library</a></small>
-      </div>
-      <input-select label='Start from' v-model='placement' :options='placementOptions'>
-        Initial positions of nodes. <b>pivot MDS</b> places nodes so that distances follow graph distances
-        (or uses a radial tree when it fits better), so the layout only needs to polish it.
-        Changing this restarts the layout.
-        This is a separate module, <code>modules/pivot</code> in this repository; ngraph.forcelayout itself
-        places each node at random near its already placed neighbours.
-      </input-select>
-      <input-select label='Run on' v-model='backend' :options='backendOptions' :note='gpuMessage'>
-        <b>WebGPU</b> runs the layout's own simulation on the GPU when it can run all of it (for now
-        the built in physics with any repulsion law, node formulas and sums, in any number of
-        dimensions); otherwise the layout stays on the CPU and the note under the stats says why.
-        Repulsion is exact over all pairs up to 1,024 nodes; larger layouts use a grid pyramid
-        instead of a tree (in 2D and 3D), so Theta and Repulsion settings do not apply. It is hundreds of times faster on large graphs, so raise
-        Steps per frame (e.g. 20) to see it: with one step per frame, drawing the graph is the
-        bottleneck. This is a separate module, <code>modules/gpu</code> in this repository;
-        ngraph.forcelayout itself always runs on the CPU.
-      </input-select>
 
       <template v-if='prototype'>
         <div class='section'>
@@ -194,7 +134,9 @@
 import createGraphScene from './lib/createGraphScene';
 import {graphGroups, graphTitle} from './lib/getAvailableGraphs';
 import graphInfo from './lib/graphInfo';
-import {libraryDefaultLabel, libraryDefaultsLabel, pitch} from './lib/release';
+import {libraryDefaultLabel, libraryDefaultsLabel, pitch, installLine, installNote} from './lib/release';
+import loadDroppedGraph from './lib/loadDroppedGraph';
+import CodeSettings from './components/CodeSettings.vue';
 import './styles/layout.css';
 import loadGraph from './lib/loadGraph';
 import bus from './lib/bus';
@@ -274,6 +216,7 @@ export default {
   components: {
     InputValue,
     InputSelect,
+    CodeSettings,
     HelpIcon
   },
   computed: {
@@ -298,6 +241,15 @@ export default {
         return this.fileName ? '__file__' : this.selectedGraph;
       },
       set(value) {
+        if (value === '__open__') {
+          // Arrow keys change a closed select on some systems: only a click or Enter opens the dialog
+          if (!/^Arrow|^Page|^Home$|^End$/.test(this.pickerKey || '')) {
+            this.$refs.fileInput.value = '';
+            this.$refs.fileInput.click();
+          }
+          this.$nextTick(() => { this.$refs.graphSelect.value = this.graphChoice; });
+          return;
+        }
         if (value === '__file__') return;
         this.fileName = '';
         this.fileError = '';
@@ -341,6 +293,10 @@ export default {
     legendMore() {
       let list = (this.info && this.info.legend) || [];
       return Math.max(0, list.length - this.legend.length);
+    },
+    // The sheet moves up by what the soft keyboard covers
+    sheetStyle() {
+      return this.keyboardInset ? {bottom: this.keyboardInset + 'px', maxHeight: `calc(100dvh - ${this.keyboardInset}px - 140px)`} : null;
     },
     // Settings that differ from what the page starts with (the button says so while closed)
     changedCount() {
@@ -423,6 +379,51 @@ export default {
     },
 
     graphTitle,
+
+    // A value from the code: a layout option, or the demo's own (placement, backend, steps)
+    setSetting(key, value) {
+      if (key in this.layoutSettings) this.layoutSettings[key] = value;
+      else if (key === 'backend' && value === 'webgpu') this.pickGpu();
+      else this[key] = value;
+    },
+
+    setDimensions(dimensions) {
+      this.layoutSettings.dimensions = dimensions;
+    },
+
+    // GPU, or say why not where a finger can read it (a title shows only on hover)
+    pickGpu() {
+      if (this.gpuAvailable === false) {
+        this.gpuNote = 'This browser has no WebGPU, so the layout runs on the CPU.';
+        clearTimeout(this.gpuNoteTimer);
+        this.gpuNoteTimer = setTimeout(() => { this.gpuNote = ''; }, 6000);
+        return;
+      }
+      this.backend = 'webgpu';
+    },
+
+    copyInstall() {
+      let done = () => {
+        this.copied = true;
+        clearTimeout(this.copiedTimer);
+        this.copiedTimer = setTimeout(() => { this.copied = false; }, 1500);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(installLine).then(done, () => {});
+    },
+
+    onFilePicked(e) {
+      this.fileError = '';
+      loadDroppedGraph(e.target.files);
+    },
+
+    // On a phone the settings are a sheet at the bottom; the keyboard covers the bottom of the
+    // window without making it shorter, so the sheet sits on top of the keyboard while one types
+    onViewport() {
+      let vv = window.visualViewport;
+      if (!vv) return;
+      let covered = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      this.keyboardInset = covered > 40 ? covered : 0;
+    },
 
     deviceValue(key) {
       return key === 'nbody' ? this.layoutSettings.nbody : this[key];
@@ -603,6 +604,12 @@ export default {
       fileName: '',
       fileError: '',
       helpOpen: false,
+      gpuNote: '',
+      copied: false,
+      pickerKey: '',
+      keyboardInset: 0,
+      installLine,
+      installNote,
       showPitch: true,
       pitch,
       graphGroups,
@@ -654,6 +661,10 @@ export default {
     this.loadNewGraph(this.selectedGraph);
     bus.on('load-graph', this.onGraphLoaded);
     bus.on('file-graph', this.onFileGraph);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', this.onViewport);
+      window.visualViewport.addEventListener('scroll', this.onViewport);
+    }
     bus.on('file-error', this.onFileError);
     ['pointerdown', 'wheel', 'keydown'].forEach(name => canvas.addEventListener(name, this.hidePitch, {once: true, passive: true}));
     if (!this.picked.backend) {
@@ -674,6 +685,10 @@ export default {
   },
 
   beforeUnmount() {
+    if (window.visualViewport) {
+      window.visualViewport.removeEventListener('resize', this.onViewport);
+      window.visualViewport.removeEventListener('scroll', this.onViewport);
+    }
     clearInterval(this.statsTimer);
     clearTimeout(this.paramsTimer);
     if (this.scene) {
