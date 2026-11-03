@@ -19,8 +19,9 @@
 // - Between placements each label follows its node on the GPU (see labels/program.js), so a
 //   running layout costs the CPU nothing per frame for labels.
 //
-// The text is the view's `labelOf(node)`, cut to `maxLength` characters, drawn once per label
-// with the canvas 2D API (any script works) into an atlas at the device's pixel ratio.
+// The text is the view's `labelOf(node)` (or `text(node)`), cut to `maxLength` characters, drawn
+// once per label with the canvas 2D API (any script works) into an atlas at the device's pixel
+// ratio. A node whose text is empty gets no label.
 //
 // Options:
 // - `importance` ('degree'): 'degree', 'pagerank', a field name of node.data, or `node => number`.
@@ -28,6 +29,8 @@
 //   between 30 and 400.
 // - `tiers`: text sizes by rank, [{share, min, size, weight}] from the most important; a node
 //   whose rank is below `share` of all nodes (and at least `min`) takes that tier.
+// - `text`: `node => string`, the label's text (default: the view's `labelOf`). Return '' for
+//   nodes that should have no label, e.g. nodes that have only an id.
 // - `font` (system-ui and friends), `color` (0xffffffff), `halo` (0x0c2952e6), `haloWidth` (2 px),
 //   `gap` (3 px between the node and its label), `every` (250 ms), `fade` (300 ms), `maxLength` (40).
 //
@@ -210,6 +213,7 @@ export default {
       let taken = new Set();
       let add = (node, forced) => {
         if (!node || taken.has(node.id)) return;
+        if (!textOf(node)) return;
         let body = ctx.layout.getBody(node.id);
         let row = body ? body.index : -1;
         if (row < 0 || row >= screen.x.length || !screen.onScreen[row]) return;
@@ -370,7 +374,8 @@ export default {
     }
 
     function textOf(node) {
-      let text = ctx.labelOf(node);
+      let text = settings.text ? settings.text(node) : ctx.labelOf(node);
+      if (!text) return '';
       let max = settings.maxLength;
       return text.length > max ? text.slice(0, max - 1) + '…' : text;
     }

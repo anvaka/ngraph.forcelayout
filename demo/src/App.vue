@@ -63,7 +63,7 @@
         <div class='legend' v-if='legend.length'>
           <button type='button' class='about-toggle' v-if='info.about' @click='aboutTextOpen = !aboutTextOpen'
             :aria-expanded='aboutTextOpen ? "true" : "false"' aria-controls='about-text' aria-label='About this graph'>ⓘ</button>
-          <span class='legend-name'>Colour: {{info.colorBy}}</span>
+          <span class='legend-name'>Colour: {{legendData.title}}</span>
           <span class='legend-chip' v-for='item in legend' :key='item.label'><span class='swatch' aria-hidden='true' :style='{background: item.color}'></span>{{item.label}}</span>
           <span class='legend-more' v-if='legendMore'>+{{legendMore}}</span>
         </div>
@@ -336,13 +336,15 @@ export default {
       return parts.join(' ');
     },
     // The legend's first entries (the most common values), and how many more there are
+    // What the colours mean (look.js): the first values, and how many more there are
     legend() {
-      let list = (this.info && this.info.legend) || [];
+      let list = (this.legendData && this.legendData.items) || [];
       return list.slice(0, coarse ? 4 : 6);
     },
     legendMore() {
-      let list = (this.info && this.info.legend) || [];
-      return Math.max(0, list.length - this.legend.length);
+      let data = this.legendData;
+      if (!data) return 0;
+      return Math.max(0, data.items.length - this.legend.length) + (data.more ? data.more.count : 0);
     },
     // Settings that differ from what the page starts with (the button says so while closed)
     changedCount() {
@@ -507,6 +509,8 @@ export default {
     onGraphLoaded(graph) {
       this.isRunning = true;
       this.info = graphInfo(this.selectedGraph, graph, this.fileName);
+      // the scene drew the graph first (it heard 'load-graph' before the app), so its colours are known
+      this.legendData = this.scene.getLegend ? this.scene.getLegend() : null;
       this.aboutTextOpen = false;
     }
   },
@@ -601,6 +605,7 @@ export default {
       // on a phone the Settings button says how many changed instead (they would cover the graph)
       settingsOpen: !coarse && window.innerWidth > 500 && PHYSICS.concat(deviceKeys).some(key => appState.has(key)),
       info: null,
+      legendData: null,
       aboutTextOpen: false,
       fileName: '',
       fileError: '',
@@ -687,236 +692,3 @@ export default {
 
 </script>
 
-<style lang='stylus'>
-small-screen = 500px;
-
-#app {
-  position: absolute;
-  width: 400px;
-  max-height: 100dvh;
-  overflow-y: auto;
-  background: rgb(12, 41, 82);
-  border: 1px solid white;
-}
-a {
-  text-decoration: none;
-}
-.content {
-  padding: 8px;
-  border-top: 1px solid;
-}
-.row {
-  display: flex;
-  flex-direction: row;
-  align-items: baseline;
-}
-
-.row .label {
-  flex: 1;
-}
-.row .value {
-  flex: 1;
-}
-.row select {
-  width: 100%;
-}
-
-.section {
-  margin: 12px 0 4px 0;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.3);
-  small {
-    float: right;
-    font-size: 12px;
-  }
-  a {
-    color: #267fcd;
-  }
-}
-.device-note {
-  font-size: 12px;
-  opacity: 0.7;
-  margin-bottom: 4px;
-}
-.about {
-  font-size: 14px;
-  p {
-    margin: 6px 0;
-  }
-  p:first-child {
-    margin-top: 0;
-  }
-  p:last-child {
-    margin-bottom: 0;
-  }
-}
-.idea-bar {
-  label.idea-toggle {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 0 8px;
-    border-left: 1px solid;
-    font-size: 14px;
-    white-space: nowrap;
-    cursor: pointer;
-    &.inactive {
-      opacity: 0.5;
-      cursor: default;
-    }
-  }
-  a.help-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    flex-shrink: 0;
-    border-left: 1px solid;
-    &.open {
-      background: #004499;
-      svg {
-        fill: white;
-      }
-    }
-  }
-  select:disabled {
-    opacity: 0.5;
-  }
-}
-.idea-about {
-  padding: 8px;
-  background: #004499;
-  border-top: 1px solid;
-}
-.prototype {
-  font-size: 14px;
-  a {
-    color: #267fcd;
-  }
-  .off-note {
-    margin: 6px 0;
-    opacity: 0.7;
-  }
-  .try {
-    margin: 6px 0;
-    a {
-      margin-left: 6px;
-    }
-  }
-  .finish {
-    display: block;
-    margin-top: 8px;
-    padding: 6px 0;
-    text-align: center;
-    border: 1px solid #267fcd;
-  }
-}
-.buttons {
-  display: flex;
-  border-top: 1px solid;
-  a.btn {
-    border-left: 1px solid;
-  }
-  a.btn.restart {
-    width: 60%;
-  }
-}
-.graph-picker {
-  position: relative;
-  width: 100%;
-  min-width: 0;
-  select {
-    appearance: none;
-    width: 100%;
-    height: 32px;
-    padding: 0 24px 0 8px;
-    border: none;
-    border-radius: 0;
-    background: rgb(12, 41, 82);
-    color: rgb(244, 244, 244);
-    font: inherit;
-    text-overflow: ellipsis;
-  }
-  &::after {
-    content: '▾';
-    position: absolute;
-    right: 8px;
-    top: 7px;
-    pointer-events: none;
-  }
-}
-.stats {
-  display: flex;
-  align-items: center;
-  padding: 8px;
-  font-size: 12px;
-  border-top: 1px solid;
-  .number {
-    font-size: 12px;
-  }
-  .off-gpu {
-    margin-top: 2px;
-    opacity: 0.7;
-  }
-}
-.toggle-settings {
-  margin-left: auto;
-  padding: 0 8px;
-  border: 1px solid #267fcd;
-  border-radius: 4px;
-  color: #267fcd;
-  font-size: 14px;
-  line-height: 22px;
-  white-space: nowrap;
-}
-a.btn {
-  color: rgb(244, 244, 244);
-  text-decoration: none;
-  justify-content: center;
-  align-items: center;
-  height: 32px;
-  width: 100%;
-  display: flex;
-  margin: 0;
-}
-h2 {
-  margin: 8px;
-  font-size: 18px;
-  font-weight: normal;
-  a {
-    color: #267fcd;
-  }
-}
-.number {
-  color: yellow;
-  font-size: 18px;
-}
-.names {
-  position: fixed;
-  font-size: 24px;
-  top: 18px;
-  left: 50%;
-  transform: translateX(-50%);
-}
-button.fit-view {
-  position: fixed;
-  right: 16px;
-  bottom: 16px;
-  padding: 8px 14px;
-  border: 1px solid #267fcd;
-  border-radius: 18px;
-  background: rgb(12, 41, 82);
-  color: #fff;
-  font: inherit;
-  font-size: 14px;
-  cursor: pointer;
-}
-button.fit-view:hover, button.fit-view:focus-visible {
-  background: #004499;
-}
-@media (max-width: small-screen) {
-  #app {
-    width: 100%;
-  }
-}
-</style>

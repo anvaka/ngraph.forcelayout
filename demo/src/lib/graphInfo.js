@@ -26,31 +26,25 @@ const MISERABLES = {
 };
 
 /**
- * {about, credit: {text, href} | null, colorBy, legend: [{label, color, count}] | null} for the
- * graph `name` (or a file the visitor opened, `fileName`)
+ * {about, credit: {text, href} | null} for the graph `name` (or a file the visitor opened,
+ * `fileName`). What the colours mean comes from the drawing (look.js), not from here.
  */
 export default function graphInfo(name, graph, fileName) {
   let meta = (graph && graph.meta) || {};
-  if (fileName) return {about: `Your file, ${fileName}. It stays in this browser.`, credit: null, legend: null};
+  if (fileName) return {about: `Your file, ${fileName}. It stays in this browser, so a link to this page won't open it.`, credit: null};
   if (meta.about) {
-    return {
-      about: meta.about,
-      credit: creditOf(meta),
-      colorBy: meta.colorBy && meta.colorBy[0] !== '_' ? meta.colorBy : '',
-      legend: meta.legend || null
-    };
+    return {about: meta.about, credit: creditOf(meta)};
   }
-  if (name === 'Miserables') return {...MISERABLES, legend: null};
-  if (GENERATED[name]) return {about: GENERATED[name], credit: null, legend: null};
+  if (name === 'Miserables') return {...MISERABLES};
+  if (GENERATED[name]) return {about: GENERATED[name], credit: null};
   if (name.startsWith('Benchmark: ')) {
     return {
       about: 'One of the graphs the layout benchmark uses; the layout ideas were judged on them.',
-      credit: {text: 'the layout benchmark set', href: 'https://github.com/anvaka/ngraph.forcelayout/tree/main/demo/public/graphs'},
-      legend: null
+      credit: {text: 'the layout benchmark set', href: 'https://github.com/anvaka/ngraph.forcelayout/tree/main/demo/public/graphs'}
     };
   }
-  if (name.includes('/')) return {...SUITESPARSE, legend: null};
-  return {about: '', credit: null, legend: null};
+  if (name.includes('/')) return {...SUITESPARSE};
+  return {about: '', credit: null};
 }
 
 // "Data: …" from the file's license and source
