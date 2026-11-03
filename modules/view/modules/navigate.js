@@ -33,6 +33,7 @@
 //
 // API: focus(node), get(), clear(), announce(text).
 import {FOCUSED, SELECTED, DRAGGED} from '../flags.js';
+import {placeOverCanvas} from '../visible.js';
 
 const DIRECTIONS = {
   ArrowRight: {x: 1, y: 0, name: 'to the right'},
@@ -449,9 +450,8 @@ export default {
       });
       help.appendChild(table);
       document.body.appendChild(help);
-      let rect = canvas.getBoundingClientRect();
-      help.style.left = (rect.left + 12) + 'px';
-      help.style.top = Math.max(rect.top + 12, rect.bottom - help.offsetHeight - 12) + 'px';
+      // At the bottom of what shows, not under a panel
+      placeOverCanvas(help, canvas, ctx.visibleArea(), 'bottom');
       say('Keys: ' + HELP.map(([keys, what]) => `${keys}: ${what}`).join('. ') + '.');
     }
 

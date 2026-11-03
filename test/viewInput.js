@@ -840,6 +840,16 @@ test('measureArea: what covers the canvas, the nearest visible spot, the middle 
     t.ok(all.allHidden);
     t.equal(all.nearest(10, 10, 40), null, 'nothing to go by');
     t.equal(all.center(), null);
+
+    // Where a box fits: the panel covers x < 100, y < 200
+    var top = area.spot(80, 40, 12, 'top');
+    t.equal(top.y, 12, 'at the top');
+    t.ok(top.x >= 112, 'beside the panel, 12 px from it', top);
+    var bottom = area.spot(80, 40, 12, 'bottom');
+    t.same(bottom, {x: 12, y: 248}, 'at the bottom left, below the panel');
+    t.equal(area.spot(390, 40, 12), null, 'wider than the canvas');
+    t.equal(area.spot(300, 250, 12), null, 'nowhere big enough');
+    t.same(v.measureArea(400, 300, function () { return false; }, 20).spot(80, 40, 12), {x: 12, y: 12}, 'nothing covers: the corner');
   });
 });
 

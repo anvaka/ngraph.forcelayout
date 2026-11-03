@@ -76,6 +76,27 @@ export function createVisibility(canvas, covered) {
   }
 }
 
+// Pixels between an element placed over the canvas and the canvas's edges or what covers it
+const OVERLAY_MARGIN = 12;
+
+/**
+ * Puts a fixed-position element of the view (a search box, a help card) over the canvas where it
+ * shows: the first spot from the `from` edge ('top' or 'bottom') where it fits in the visible
+ * `area`, a little away from covers; the canvas's corner on that side when nothing covers the
+ * canvas or the element fits nowhere. `height`: room to keep for an element that grows (its own
+ * height when larger).
+ */
+export function placeOverCanvas(element, canvas, area, from = 'top', height = 0) {
+  let rect = canvas.getBoundingClientRect();
+  let w = element.offsetWidth, h = Math.max(element.offsetHeight, height);
+  let at = area && area.anyHidden ? area.spot(w, h, OVERLAY_MARGIN, from) : null;
+  if (!at) {
+    at = {x: OVERLAY_MARGIN, y: from === 'bottom' ? Math.max(OVERLAY_MARGIN, rect.height - h - OVERLAY_MARGIN) : OVERLAY_MARGIN};
+  }
+  element.style.left = (rect.left + at.x) + 'px';
+  element.style.top = (rect.top + at.y) + 'px';
+}
+
 // A point is covered when the topmost element there (looking through the view's own overlays)
 // is not the canvas, or when it is outside the window
 function hitTest(canvas) {
@@ -105,7 +126,8 @@ function isOverlay(element) {
  * sampled at the centre of each cell. Returns an area with:
  * - `cell`, `cols`, `rows`, `hidden` (1 per covered cell), `anyHidden`;
  * - `clearance`: per cell, how many cells away the nearest covered cell is (along either axis);
- * - `isHidden(x, y)`, `nearest(x, y, margin)`, `center()` below.
+ * - `isHidden(x, y)`, `nearest(x, y, margin)`, `center()`, `spot(width, height, margin, from)`
+ *   below.
  */
 export function measureArea(width, height, covered, cellSize) {
   let cell = cellSize || Math.max(MIN_CELL, Math.ceil(Math.sqrt(width * height / CELLS)));
@@ -166,8 +188,59 @@ export function measureArea(width, height, covered, cellSize) {
         }
       }
       return best < 0 ? null : {x: Math.min((best % cols + 0.5) * cell, width), y: Math.min((Math.floor(best / cols) + 0.5) * cell, height)};
+    },
+    /**
+     * Where a `width` × `height` box (a search box, a help card) fits in what shows, `margin`
+     * pixels inside the canvas and at least `margin` (and half a cell) from what covers it: its
+     * top left corner {x, y}, the first one found from the `from` edge ('top' or 'bottom'), left
+     * to right. Null when it fits nowhere.
+     */
+    spot(boxWidth, boxHeight, margin = 0, from = 'top') {
+      if (allHidden) return null;
+      let left = margin, right = width - margin - boxWidth;
+      let top = margin, bottom = height - margin - boxHeight;
+      if (right < left || bottom < top) return null;
+      let sums = hiddenSums();
+      let reach = Math.max(margin, cell / 2);
+      let xs = candidates(left, right), ys = candidates(top, bottom);
+      if (from === 'bottom') ys.reverse();
+      for (let j = 0; j < ys.length; ++j) {
+        for (let i = 0; i < xs.length; ++i) {
+          let x = xs[i], y = ys[j];
+          let c0 = Math.max(0, Math.floor((x - reach) / cell)), c1 = Math.min(cols - 1, Math.floor((x + boxWidth + reach) / cell));
+          let r0 = Math.max(0, Math.floor((y - reach) / cell)), r1 = Math.min(rows - 1, Math.floor((y + boxHeight + reach) / cell));
+          if (countIn(sums, c0, r0, c1, r1) === 0) return {x, y};
+        }
+      }
+      return null;
+
+      // The edge positions, then every cell boundary between them
+      function candidates(from0, to) {
+        let list = [from0];
+        for (let k = Math.ceil(from0 / cell); k * cell < to; ++k) if (k * cell > from0) list.push(k * cell);
+        if (to > from0) list.push(to);
+        return list;
+      }
     }
   };
+
+  // Hidden cells summed over every top left rectangle, so a box is counted at once
+  function hiddenSums() {
+    let sums = new Uint32Array((cols + 1) * (rows + 1));
+    for (let r = 0; r < rows; ++r) {
+      let line = 0;
+      for (let c = 0; c < cols; ++c) {
+        line += hidden[r * cols + c];
+        sums[(r + 1) * (cols + 1) + c + 1] = sums[r * (cols + 1) + c + 1] + line;
+      }
+    }
+    return sums;
+  }
+
+  function countIn(sums, c0, r0, c1, r1) {
+    let w = cols + 1;
+    return sums[(r1 + 1) * w + c1 + 1] - sums[r0 * w + c1 + 1] - sums[(r1 + 1) * w + c0] + sums[r0 * w + c0];
+  }
 
   function nearestAt(x, y, margin) {
     // Cells that are `margin` away from covered cells, all of them: `need` cells apart, the gap
