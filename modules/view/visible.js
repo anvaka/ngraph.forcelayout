@@ -144,8 +144,8 @@ function isOverlay(element) {
  * sampled at the centre of each cell. Returns an area with:
  * - `cell`, `cols`, `rows`, `hidden` (1 per covered cell), `anyHidden`;
  * - `clearance`: per cell, how many cells away the nearest covered cell is (along either axis);
- * - `isHidden(x, y)`, `nearest(x, y, margin)`, `center()`, `spot(width, height, margin, from)`
- *   below.
+ * - `isHidden(x, y)`, `nearest(x, y, margin)`, `center()`, `spot(width, height, margin, from)`,
+ *   `boxCovered(x, y, width, height, reach)` below.
  */
 export function measureArea(width, height, covered, cellSize) {
   let cell = cellSize || Math.max(MIN_CELL, Math.ceil(Math.sqrt(width * height / CELLS)));
@@ -166,6 +166,7 @@ export function measureArea(width, height, covered, cellSize) {
     }
   }
   let clearance = chebyshev(hidden, cols, rows);
+  let sumsCache = null;
 
   return {
     width, height, cell, cols, rows, hidden, clearance, anyHidden,
@@ -211,14 +212,15 @@ export function measureArea(width, height, covered, cellSize) {
      * Where a `width` × `height` box (a search box, a help card) fits in what shows, `margin`
      * pixels inside the canvas and at least `margin` (and half a cell) from what covers it: its
      * top left corner {x, y}, the first one found from the `from` edge ('top' or 'bottom'), left
-     * to right. Null when it fits nowhere.
+     * to right. `avoid`: more boxes ({x, y, width, height}, canvas pixels) to keep `margin` from,
+     * such as the view's other overlays. Null when it fits nowhere.
      */
-    spot(boxWidth, boxHeight, margin = 0, from = 'top') {
+    spot(boxWidth, boxHeight, margin = 0, from = 'top', avoid = null) {
       if (allHidden) return null;
       let left = margin, right = width - margin - boxWidth;
       let top = margin, bottom = height - margin - boxHeight;
       if (right < left || bottom < top) return null;
-      let sums = hiddenSums();
+      let sums = summed();
       let reach = Math.max(margin, cell / 2);
       let xs = candidates(left, right), ys = candidates(top, bottom);
       if (from === 'bottom') ys.reverse();
@@ -227,7 +229,10 @@ export function measureArea(width, height, covered, cellSize) {
           let x = xs[i], y = ys[j];
           let c0 = Math.max(0, Math.floor((x - reach) / cell)), c1 = Math.min(cols - 1, Math.floor((x + boxWidth + reach) / cell));
           let r0 = Math.max(0, Math.floor((y - reach) / cell)), r1 = Math.min(rows - 1, Math.floor((y + boxHeight + reach) / cell));
-          if (countIn(sums, c0, r0, c1, r1) === 0) return {x, y};
+          if (countIn(sums, c0, r0, c1, r1) !== 0) continue;
+          if (avoid && avoid.some(b => x < b.x + b.width + margin && x + boxWidth + margin > b.x &&
+            y < b.y + b.height + margin && y + boxHeight + margin > b.y)) continue;
+          return {x, y};
         }
       }
       return null;
@@ -239,8 +244,24 @@ export function measureArea(width, height, covered, cellSize) {
         if (to > from0) list.push(to);
         return list;
       }
+    },
+    /**
+     * True when something covers the canvas within `reach` pixels (half a cell by default: a
+     * cover's edge is known to that) of the box at (x, y), `boxWidth` × `boxHeight` pixels
+     */
+    boxCovered(x, y, boxWidth, boxHeight, reach = cell / 2) {
+      if (!anyHidden) return false;
+      let c0 = Math.max(0, Math.floor((x - reach) / cell)), c1 = Math.min(cols - 1, Math.floor((x + boxWidth + reach) / cell));
+      let r0 = Math.max(0, Math.floor((y - reach) / cell)), r1 = Math.min(rows - 1, Math.floor((y + boxHeight + reach) / cell));
+      if (c1 < c0 || r1 < r0) return false;
+      return countIn(summed(), c0, r0, c1, r1) > 0;
     }
   };
+
+  function summed() {
+    if (!sumsCache) sumsCache = hiddenSums();
+    return sumsCache;
+  }
 
   // Hidden cells summed over every top left rectangle, so a box is counted at once
   function hiddenSums() {
