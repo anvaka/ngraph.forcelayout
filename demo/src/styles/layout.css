@@ -402,3 +402,38 @@ body.drag-over::after {
     border-top: 1px solid var(--line, rgba(255, 255, 255, 0.35));
   }
 }
+
+/* Structure over the theme: on a desktop Settings stay in the panel (the sheet is for phones),
+   and code lines wrap with a hanging indent rather than scroll sideways (at 320 px too). Values
+   size their own text, with the theme's padding outside it. */
+@media (min-width: 501px) {
+  #settings.sheet {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    box-shadow: none;
+    border-radius: 0;
+    border-top: 1px solid var(--line, rgba(255, 255, 255, 0.2));
+    background: none;
+  }
+  #settings.sheet::before {
+    display: none;
+  }
+}
+.code-settings .code {
+  overflow-x: visible;
+}
+.code-settings .code .line {
+  white-space: pre-wrap;
+  padding-left: 2ch;
+  text-indent: -2ch;
+}
+.code-settings .code .line.indent {
+  padding-left: 4ch;
+}
+.code-settings .code .line.help {
+  padding-left: 6ch;
+}
+.code-settings .code .value {
+  box-sizing: content-box;
+}
