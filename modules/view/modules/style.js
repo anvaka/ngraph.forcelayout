@@ -28,7 +28,8 @@
 //
 // Options (defaults): colorBy, palette, linkColors, color ('#90f8fc'), background ('#0e1624'),
 // unit (1), ink (0.25), alpha ([0.05 / 255, 0.5]), crossLinks (0.6, alpha share of links between
-// categories), minSize (3.5), room (0.7), fog (0.3), rings (true), linkWidth (2).
+// categories), minSize (3.5), room (0.7), fog (0.3), rings (true), dim (0.3: the alpha of what
+// isn't selected or next to it, while something is selected), linkWidth (2).
 //
 // API: legend(), colorOf(node) (0xRRGGBBAA), linkAlpha(), nodeMinSize(), update(), dispose().
 
@@ -56,6 +57,7 @@ const DEFAULTS = {
   room: 0.7,
   fog: 0.3,
   rings: true,
+  dim: 0.3,
   linkWidth: 2
 };
 
@@ -107,7 +109,9 @@ export default {
       view.setNodeColor(colors.nodeColor);
       view.setLinkColor(colors.linkColor(alpha));
       view.setNodeMinSize(minSize);
-      let styles = {litLinkColor: 0xe6ebf2ff, litLinkAlpha: 0.7};
+      // While something is selected the rest fades to `dim`: enough to show the selection, not so
+      // much that the visitor loses where it is (the rings mark the selection already)
+      let styles = {litLinkColor: 0xe6ebf2ff, litLinkAlpha: 0.7, dimAlpha: settings.dim};
       if (settings.rings) {
         Object.assign(styles, {
           pointedColor: 0, pointedMinSize: 10, pointedRing: 0xffffffff,

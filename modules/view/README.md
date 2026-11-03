@@ -300,7 +300,8 @@ made for a dark background:
 * **Nodes at least `minSize`** (3.5) CSS pixels wide, less where they crowd, and at most `room`
   (0.7) of the distance to their nearest neighbour as big (the view's `nodeRoom`).
 * **Highlights** (`rings`, true): hovered, found and focused nodes keep their color with a white
-  ring, selected ones an amber ring; lit links in one light color.
+  ring, selected ones an amber ring; lit links in one light color. While something is selected,
+  the rest fades to `dim` (0.3), so the visitor still sees where the selection is.
 * **`background`** (`'#0e1624'`): the scene's clear color, the rings' and the labels' halo.
 * In 3D, `fog` (0.3) fades the far side of the drawing.
 
