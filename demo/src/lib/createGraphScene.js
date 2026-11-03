@@ -9,6 +9,7 @@ import {createWebGPUBackend, runOnGpu} from 'ngraph.forcelayout.gpu';
 import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes, navigateNodes, searchNodes, labelNodes} from 'ngraph.forcelayout.view';
 import createGraph from 'ngraph.graph';
 import {stepsForFrame} from './deviceDefaults';
+import look from './look.js';
 
 const NODE_COLOR = 0x90f8fcff;
 const layoutProps = ['timeStep', 'springLength', 'springCoefficient', 'dimensions', 'dragCoefficient', 'gravity', 'theta', 'maxVelocity', 'integrator', 'nbody'];
@@ -84,7 +85,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     // Let them play on console with it!
     window.graph = graph;
 
-    guide = createGuide(scene, {showGrid: true, lineColor: 0xffffff10, maxAlpha: 0x10, showCursor: false});
+    // No background grid: the drawing isn't a coordinate plot, and its axes ran through the graph
     // this is a standard force layout
     layout = createForceLayout(graph, layoutSettings);
     watchStability(layout);
@@ -398,7 +399,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     // No multisampling: the view smooths its own lines, and multisampled blending made links the
     // most expensive part of a frame (see modules/view/programs.js)
     let scene = createScene(canvas, {wglContextOptions: {antialias: false}});
-    scene.setClearColor(12/255, 41/255, 82/255, 1)
+    let [r, g, b] = look.background;
+    scene.setClearColor(r / 255, g / 255, b / 255, 1)
     return scene;
   }
   

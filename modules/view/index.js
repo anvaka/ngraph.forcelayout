@@ -41,7 +41,9 @@ const DEFAULTS = {
   linkColor: 0xffffff10,
   linkWidth: 2,
   // Size of a node's dot in scene units
-  nodeSize: node => (node.data && node.data.size) || 1
+  nodeSize: node => (node.data && node.data.size) || 1,
+  // Smallest diameter of a node in CSS pixels, at any zoom (0: nodes shrink with the zoom)
+  nodeMinSize: 0
 };
 
 // How flagged nodes and links look. "Pointed" is hovered, dragged or focused.
@@ -97,7 +99,7 @@ export default function createView(scene, options = {}) {
   let canvas = scene.getDrawContext().canvas;
 
   let settings = {...DEFAULTS};
-  ['nodeColor', 'linkColor', 'linkWidth', 'nodeSize', 'nodeLabel'].forEach(name => {
+  ['nodeColor', 'linkColor', 'linkWidth', 'nodeSize', 'nodeLabel', 'nodeMinSize'].forEach(name => {
     if (options[name] !== undefined) settings[name] = options[name];
   });
   let styles = {...STYLES, ...(options.styles || {})};
@@ -105,7 +107,7 @@ export default function createView(scene, options = {}) {
   let style = {
     pointedColor: new Float32Array(4), pointedSize: new Float32Array(2),
     selectedColor: new Float32Array(4), selectedSize: new Float32Array(2),
-    litAlpha: 1, dimAlpha: 1
+    litAlpha: 1, dimAlpha: 1, minSize: 0
   };
 
   let nodeProgram = createNodeProgram(gl, instancing);
@@ -182,6 +184,7 @@ export default function createView(scene, options = {}) {
     setLayout,
     setNodeColor,
     setLinkColor,
+    setNodeMinSize,
     setStyles,
     invalidate,
     refresh,
@@ -230,6 +233,12 @@ export default function createView(scene, options = {}) {
   function setLinkColor(color) {
     settings.linkColor = color;
     edgesDirty = true;
+    scene.renderFrame();
+  }
+
+  /** Smallest diameter of a node in CSS pixels (0: none) */
+  function setNodeMinSize(pixels) {
+    settings.nodeMinSize = pixels || 0;
     scene.renderFrame();
   }
 
@@ -799,6 +808,7 @@ export default function createView(scene, options = {}) {
     style.pointedSize[1] = styles.pointedMinSize * ratio;
     style.selectedSize[0] = styles.selectedScale;
     style.selectedSize[1] = styles.selectedMinSize * ratio;
+    style.minSize = (settings.nodeMinSize || 0) * ratio;
     style.litAlpha = styles.litLinkAlpha;
     style.dimAlpha = flags.count(SELECTED) ? styles.dimAlpha : 1;
   }

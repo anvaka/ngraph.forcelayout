@@ -50,6 +50,8 @@ const NODE_VERTEX = `
   // Alpha of nodes that are neither selected, next to a selected node, nor pointed at, while
   // something is selected (1 otherwise)
   uniform float dimAlpha;
+  // Smallest diameter of every node, in pixels (0: none)
+  uniform float minSize;
   ${POSITION_OF}
   attribute vec2 point; // corner of the quad, per vertex
   attribute float row;  // per node
@@ -67,10 +69,15 @@ const NODE_VERTEX = `
     }
     vec4 c = color.abgr;
     float diameter = size;
-    if (flags > 0.0) {
+    float scale = 1.0;
+    if (flags > 0.0 || minSize > 0.0) {
       vec4 center = modelViewProjection * vec4(position.xyz, 1.0);
       // pixels per unit of the scene here
-      float scale = 0.5 * resolution.y * length(vec3(modelViewProjection[0][1], modelViewProjection[1][1], modelViewProjection[2][1])) / max(center.w, 1e-6);
+      scale = 0.5 * resolution.y * length(vec3(modelViewProjection[0][1], modelViewProjection[1][1], modelViewProjection[2][1])) / max(center.w, 1e-6);
+      // Every node is at least minSize pixels wide, so a node's color shows at any zoom
+      diameter = max(diameter, minSize / scale);
+    }
+    if (flags > 0.0) {
       float pointed = isPointed(flags);
       float selected = hasFlag(flags, 2.0);
       if (selected > 0.5) {
@@ -190,7 +197,7 @@ const EDGE_QUAD = new Float32Array([-0.5, 0, -0.5, 1, 0.5, 1, -0.5, 0, 0.5, 1, 0
  */
 export function createNodeProgram(gl, instancing) {
   let info = createProgram(gl, NODE_VERTEX, NODE_FRAGMENT, ['point', 'row', 'size', 'color'], POSITION_UNIFORMS.concat([
-    'part', 'pass', 'resolution', 'pointedColor', 'pointedSize', 'selectedColor', 'selectedSize', 'dimAlpha'
+    'part', 'pass', 'resolution', 'pointedColor', 'pointedSize', 'selectedColor', 'selectedSize', 'dimAlpha', 'minSize'
   ]));
   let quad = createBuffer(gl, NODE_QUAD);
   let a = info.attributes, u = info.uniforms;
@@ -207,6 +214,7 @@ export function createNodeProgram(gl, instancing) {
       gl.uniform4fv(u.selectedColor, style.selectedColor);
       gl.uniform2fv(u.selectedSize, style.selectedSize);
       gl.uniform1f(u.dimAlpha, style.dimAlpha);
+      gl.uniform1f(u.minSize, style.minSize || 0);
       bindAttribute(gl, instancing, a.point, quad, 2, gl.FLOAT, false, 0);
       bindAttribute(gl, instancing, a.row, nodes.rows, 1, gl.FLOAT, false, 1);
       bindAttribute(gl, instancing, a.size, nodes.sizes, 1, gl.FLOAT, false, 1);

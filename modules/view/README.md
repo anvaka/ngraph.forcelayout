@@ -60,6 +60,8 @@ Options:
   0 (or nothing) gives the default color for that node.
 * `linkColor` (`0xffffff10`): a color, or `link => color`.
 * `nodeSize`: a number, or `node => size` in scene units. Default: `node.data.size`, or 1.
+* `nodeMinSize` (0): the smallest diameter of a node in CSS pixels, at any zoom, so nodes (and
+  their colors) stay visible when a big graph is zoomed out. Picking still uses the node's own size.
 * `linkWidth` (2): width of links in pixels.
 * `nodeLabel`: `node => text` that stands for a node in tooltips, search and announcements.
   Default: `data.label`, else `data.name`, else the id.
@@ -77,6 +79,7 @@ Methods:
 * `setLayout(layout)`: draw another layout of the same graph, e.g. after a reset or a change of
   dimensions.
 * `setNodeColor(color)`, `setLinkColor(color)`: new colors (a value or a function).
+* `setNodeMinSize(pixels)`: a new `nodeMinSize`.
 * `invalidate()`: positions changed outside of a step, e.g. after `layout.setNodePosition()` or
   code that wrote `store.pos`.
 * `refresh()`: call the color and size functions again, e.g. when the data they read changed.

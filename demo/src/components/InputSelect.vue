@@ -49,10 +49,3 @@ export default {
 }
 </script>
 
-<style lang="stylus">
-.block select {
-  width: 100%;
-  margin: 4px 0 4px 7px;
-  font-size: 14px;
-}
-</style>

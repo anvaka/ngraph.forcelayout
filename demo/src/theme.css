@@ -1,0 +1,520 @@
+/*
+  The demo's look: one set of tokens for the page, the panel and the drawing (lib/look.js reads
+  the same colors). Every panel element uses these; new elements should too.
+
+  The drawing is the brightest thing on the page and the panel the quietest: hairlines, fields
+  that look editable, tabular numbers, and one accent (the nodes' own cyan) for links, focus and
+  what is on. Colors that mean something (groups, the selection) live in the drawing only.
+
+  Contrast on --panel: --text 14:1, --text-2 7.8:1, --text-3 5.3:1, --accent 11.6:1 (all pass
+  WCAG AA for small text).
+*/
+:root {
+  --canvas: #0e1624;
+  --panel: #151e2d;
+  --panel-raised: #1b2536;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --field: rgba(255, 255, 255, 0.06);
+  --field-hover: rgba(255, 255, 255, 0.1);
+  --field-focus: rgba(127, 231, 239, 0.14);
+  --text: #e6ebf2;
+  --text-2: #a7b2c2;
+  --text-3: #8592a5;
+  --accent: #7fe7ef;
+  --accent-ink: #062228;
+  --accent-field: rgba(127, 231, 239, 0.12);
+  --help: rgba(127, 231, 239, 0.07);
+  --danger: #ff9b8f;
+  --radius: 12px;
+  --radius-field: 7px;
+  --row: 30px;
+  --gap: 12px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+
+body {
+  font-family: var(--font);
+  font-size: 14px;
+  color: var(--text);
+  background: var(--canvas);
+}
+
+/* The panel: an opaque card, so nothing of the drawing shows through its fields */
+#app {
+  position: absolute;
+  top: var(--gap);
+  left: var(--gap);
+  width: 340px;
+  max-height: calc(100dvh - 2 * var(--gap));
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  scrollbar-width: thin;
+  font-variant-numeric: tabular-nums;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { font-family: var(--mono); font-size: 12px; color: var(--text); }
+button { font: inherit; color: inherit; }
+
+/* Keyboard focus: a 2 px accent ring, never on a mouse press */
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The canvas is the first tab stop: its ring sits inside the edge of the screen */
+canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Name row */
+.title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px 8px;
+}
+h2 {
+  margin: 0;
+  padding: 12px 14px 8px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.title h2 { padding: 0; }
+h2 a { color: var(--text); }
+h2 .sub, .tagline { color: var(--text-3); font-weight: 400; }
+.tagline { font-size: 12px; line-height: 1.4; }
+
+/* The install line: a field with a copy glyph, in the mono face */
+.install {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 24px;
+  margin-left: auto;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-field);
+  background: var(--field);
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.install:hover { background: var(--field-hover); color: var(--text); }
+.install::after {
+  content: '';
+  flex: none;
+  width: 9px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  box-shadow: 2px -2px 0 -0.5px var(--panel), 2px -2px 0 1px currentColor;
+  opacity: 0.8;
+}
+
+.layout-box { padding: 0 var(--gap); }
+
+/* Control rows: fields side by side, no box around each cell */
+.buttons {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.graph-picker {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.graph-picker select,
+.block select,
+.code-settings select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: var(--row);
+  padding: 0 24px 0 10px;
+  border: none;
+  border-radius: var(--radius-field);
+  background: var(--field);
+  color: var(--text);
+  font: inherit;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+option, optgroup { background: var(--panel); color: var(--text); }
+optgroup { color: var(--text-3); font-style: normal; }
+/* The chevron of every select */
+.graph-picker::after,
+.block .col:nth-child(2):has(select)::after {
+  content: '';
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -5px;
+  border-right: 1.5px solid var(--text-2);
+  border-bottom: 1.5px solid var(--text-2);
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+.graph-picker select:hover, .block select:hover, .btn:hover, a.btn:hover { background: var(--field-hover); text-decoration: none; }
+select:disabled { opacity: 0.45; cursor: default; }
+
+/* Buttons: a quiet filled field; .btn works on <a> and <button> */
+.btn, a.btn, .code-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 64px;
+  height: var(--row);
+  padding: 0 10px;
+  border: none;
+  border-radius: var(--radius-field);
+  background: var(--field);
+  color: var(--text);
+  font: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.btn.primary { background: var(--accent); color: var(--accent-ink); }
+
+/* Two-state switches (CPU | GPU, 2D | 3D): a quiet field, the accent only on the active half */
+.backend-switch, .switch {
+  display: inline-flex;
+  flex: none;
+  padding: 2px;
+  gap: 2px;
+  border-radius: var(--radius-field);
+  background: var(--field);
+}
+.backend-switch button, .switch button {
+  height: 22px;
+  min-width: 38px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.backend-switch button:hover, .switch button:hover { color: var(--text); }
+.backend-switch button[aria-pressed='true'], .switch button[aria-pressed='true'] {
+  background: var(--accent-field);
+  color: var(--accent);
+  font-weight: 600;
+}
+.backend-switch button:disabled, .switch button:disabled { opacity: 0.4; cursor: default; }
+
+/* The idea row: quieter than the graph row, it is optional */
+.idea-bar label.idea-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  height: var(--row);
+  border-radius: var(--radius-field);
+  background: var(--field);
+  color: var(--text-2);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.idea-bar label.idea-toggle.inactive { opacity: 0.45; cursor: default; }
+.idea-bar .graph-picker select { color: var(--text-2); }
+.idea-bar .help-icon { flex: 0 0 var(--row); height: var(--row); border-radius: var(--radius-field); box-shadow: none; background: var(--field); }
+input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
+
+.about {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+.about p { margin: 6px 0; }
+.idea-about {
+  margin: 0 0 6px;
+  padding: 10px 12px;
+  border-radius: var(--radius-field);
+  background: var(--help);
+}
+
+/* Stats: the library's numbers, quiet but exact. No yellow: the number that matters is bold */
+.stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.stats .number { color: var(--text); font-weight: 600; }
+.stats .settled { color: var(--accent); }
+.stats .off-gpu { margin-top: 2px; color: var(--text-3); }
+.stats .file-error { color: var(--danger); }
+.toggle-settings {
+  margin-left: auto;
+  padding: 0 10px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  border-radius: var(--radius-field);
+  background: var(--field);
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.toggle-settings:hover { background: var(--field-hover); text-decoration: none; }
+.toggle-settings.tuned::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* What the colors mean, and where the data comes from */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  padding: 0 2px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+.legend .legend-title { width: 100%; color: var(--text-3); }
+.legend .item { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.legend .swatch {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.legend .more { color: var(--text-3); }
+.credit, .about-graph {
+  padding: 0 2px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+.credit a, .about-graph a { color: var(--text-2); text-decoration: underline; text-decoration-color: var(--line-strong); }
+
+/* Settings */
+.content {
+  padding: 4px var(--gap) var(--gap);
+  border-top: 1px solid var(--line);
+}
+.section {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 14px 0 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.section:first-child, .section.first { margin-top: 8px; padding-top: 0; border-top: none; }
+.section small {
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-3);
+}
+.device-note { margin: 0 0 6px; font-size: 12px; line-height: 1.45; color: var(--text-3); }
+
+.block .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--row);
+  margin: 2px 0;
+}
+.block .col:first-child { flex: 1; color: var(--text); }
+.block .col:nth-child(2) { flex: 0 0 132px; position: relative; }
+.block.inactive .col { opacity: 0.45; }
+.block input[type='number'],
+.block input[type='text'] {
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-field);
+  background: var(--field);
+  color: var(--text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.block input[type='number']::-webkit-inner-spin-button,
+.block input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.block input[type='number']:hover { background: var(--field-hover); }
+.block input:focus { outline: none; background: var(--field-focus); box-shadow: inset 0 0 0 1px var(--accent); }
+.block select { height: 26px; font-size: 13px; }
+.block .row.note { min-height: 0; margin: -2px 0 4px; font-size: 12px; color: var(--text-3); }
+.block .row.help {
+  display: block;
+  margin: 2px 0 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-field);
+  background: var(--help);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* Help: present, not loud */
+.help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  color: var(--text-3);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  cursor: pointer;
+}
+.help-icon svg { fill: currentColor; width: 7px; height: 11px; }
+.help-icon:hover { color: var(--text); text-decoration: none; }
+.help-icon.open, .help-icon[aria-expanded='true'] { color: var(--accent-ink); background: var(--accent); box-shadow: none; }
+
+.prototype { font-size: 13px; }
+.prototype .off-note { margin: 6px 0; color: var(--text-3); }
+.prototype .try { margin: 6px 0; color: var(--text-2); }
+.prototype .try a { margin-left: 6px; }
+.prototype .finish {
+  display: block;
+  margin-top: 8px;
+  padding: 6px 0;
+  text-align: center;
+  border-radius: var(--radius-field);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* Settings as code: syntax in text tones, so the drawing stays the most colorful thing on the
+   page; a value you changed is the accent, on a faint accent field */
+.code-settings { font-size: 13px; }
+.code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--text-2);
+  overflow-x: auto;
+}
+.code .line { white-space: pre; }
+.code .line.indent { padding-left: 2ch; }
+.code .line.blank { height: 0.9em; }
+.code .kw { color: var(--text-3); }
+.code .str { color: var(--text-2); }
+.code .comment, .code .line.comment { color: var(--text-3); }
+.code label { color: var(--text-2); cursor: pointer; }
+.code .value, .code input, .code select {
+  display: inline-block;
+  min-width: 2ch;
+  height: auto;
+  margin: 0 1px;
+  padding: 0 2px;
+  border: none;
+  border-bottom: 1px dotted var(--text-3);
+  border-radius: 3px 3px 0 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
+.code select { width: auto; padding-right: 2px; cursor: pointer; }
+.code .value:hover, .code select:hover { background: var(--field); }
+.code .value:focus, .code select:focus { outline: none; background: var(--field-focus); border-bottom-color: var(--accent); }
+.code .changed .value, .code .changed select, .code .value.changed {
+  color: var(--accent);
+  background: var(--accent-field);
+  border-bottom-color: var(--accent);
+}
+.code .unused { opacity: 0.55; }
+.code .toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.code .toggle.off span:not(.comment) { color: var(--text-3); text-decoration: line-through; text-decoration-color: var(--line-strong); }
+.code .help { color: var(--text-3); white-space: normal; padding-right: 1ch; }
+.code-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+.code-actions button { flex: none; height: 26px; font-size: 12px; }
+.code-note { margin-top: 6px; font-size: 12px; color: var(--text-3); }
+
+/* Fingers need bigger targets */
+@media (pointer: coarse) {
+  :root { --row: 36px; }
+  .block input[type='number'], .block select { height: 34px; }
+  .help-icon { flex-basis: 28px; width: 28px; height: 28px; }
+  .backend-switch button, .switch button { height: 32px; min-width: 44px; }
+  .code .value, .code select { padding: 6px 4px; margin: -6px 0; }
+}
+
+/* A phone: the panel spans the top; Settings open as a sheet from the bottom */
+@media (max-width: 500px) {
+  :root { --gap: 10px; }
+  #app {
+    top: 0;
+    left: 0;
+    width: 100%;
+    max-height: 100dvh;
+    border: none;
+    border-bottom: 1px solid var(--line);
+    border-radius: 0 0 var(--radius) var(--radius);
+  }
+  h2, .title { padding: 9px 12px 7px; font-size: 14px; }
+  .stats { padding: 4px 2px 8px; }
+}
+.sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 46dvh;
+  overflow-y: auto;
+  padding: 6px var(--gap) calc(var(--gap) + env(safe-area-inset-bottom));
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  border-radius: var(--radius) var(--radius) 0 0;
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.35);
+}
+.sheet::before {
+  content: '';
+  display: block;
+  width: 36px;
+  height: 4px;
+  margin: 2px auto 8px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
