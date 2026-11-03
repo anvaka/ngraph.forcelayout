@@ -829,7 +829,7 @@ test('createVisibility: a function can say what is hidden; the area is measured 
     calls = 0;
     var first = visibility.area();
     var measured = calls;
-    t.ok(measured > 100, 'about 1500 cells at most', measured);
+    t.ok(measured > 100, 'about 1500 cells at most');
     t.equal(visibility.area(), first, 'the same area right after');
     t.equal(calls, measured, 'no new hit tests');
     visibility.forget();
