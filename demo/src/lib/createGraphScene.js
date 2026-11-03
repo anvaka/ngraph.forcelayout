@@ -84,7 +84,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     stats.reset();
 
     fitView();
-    view = createView(scene, {graph, layout, nodeColor: nodeColorOf()});
+    let meta = graph.meta || {};
+    view = createView(scene, {graph, layout, nodeColor: nodeColorOf(), linkColor: meta.linkColor, nodeSize: meta.nodeSize});
     // Hover, drag, select and inspect nodes (modules/view). Dragging works while the layout is paused too.
     // Keyboard: Enter focuses a node, arrows move between nodes, / searches, ? lists the keys.
     view.use(hoverNodes);
@@ -93,7 +94,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     view.use(inspectNodes);
     view.use(navigateNodes);
     view.use(searchNodes);
-    view.use(labelNodes);
+    view.use(labelNodes, meta.importance ? {importance: meta.importance} : undefined);
     window.view = view;
 
     runLayout(true);
@@ -123,7 +124,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   // attach (and after its final step), not on every frame.
   function nodeColorOf() {
     let nodeColor = prototypeControl && prototypeControl.nodeColor;
-    if (!nodeColor) return NODE_COLOR;
+    // Graphs with names may color their nodes by a field (loadLabelledGraph.js)
+    if (!nodeColor) return (graph.meta && graph.meta.nodeColor) || NODE_COLOR;
     return node => nodeColor(node.id) || NODE_COLOR;
   }
 

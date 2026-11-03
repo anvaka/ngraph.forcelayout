@@ -3,6 +3,20 @@
 // and the rest are generated in loadGraph.js.
 export default function getAvailableGraphs() {
   return [
+    // Graphs with real names (demo/public/graphs/data, see loadLabelledGraph.js)
+    'London Underground',
+    'Programming languages',
+    'Map of science',
+    'Countries',
+    'Mammals (WordNet)',
+    'Chess openings',
+    'US counties',
+    'Air routes',
+    'Languages of the world',
+    'Metros of the world',
+    'English nouns (WordNet)',
+    'Tree of life',
+
     'Miserables',
     'Binary',
 
