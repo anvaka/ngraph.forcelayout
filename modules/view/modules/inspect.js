@@ -30,7 +30,9 @@ import {overlayBoxes} from '../visible.js';
 const STYLE = 'position:fixed;z-index:2147483646;max-width:280px;padding:6px 8px;border-radius:4px;' +
   'background:rgba(9,22,44,0.94);color:#e8f1ff;border:1px solid rgba(255,255,255,0.18);' +
   'font:12px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,0.45);' +
-  'pointer-events:auto;user-select:text;-webkit-user-select:text;overflow-wrap:anywhere;display:none;';
+  'pointer-events:auto;user-select:text;-webkit-user-select:text;overflow-wrap:anywhere;display:none;' +
+  // A finger may scroll a docked card, but a pinch on it must not zoom the page
+  'touch-action:pan-y;';
 // Pixels between a node and its tooltip
 const OFFSET = 14;
 // After the pointer leaves a node, how long the tooltip waits for it to reach the tooltip
