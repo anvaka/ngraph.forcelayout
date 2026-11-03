@@ -17,7 +17,7 @@
     },
     "overrides": [
         {
-            "files": ["test/gridfield.js", "test/view.js", "test/viewInput.js", "test/viewFit.js", "test/viewRoom.js"],
+            "files": ["test/gridfield.js", "test/view.js", "test/viewInput.js", "test/viewFit.js", "test/viewRoom.js", "test/viewStyle.js"],
             "parserOptions": { "ecmaVersion": 2020 }
         },
         {

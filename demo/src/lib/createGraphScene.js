@@ -22,7 +22,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   // `view` draws the graph (modules/view): it redraws when the layout steps or the camera moves
   let scene, view;
   // The drawing's rules on the view (drawing.js): link alpha and node sizes, the legend
-  let drawing = null, colors = null;
+  let drawing = null;
 
   // With WebGPU picked, the GPU runs the layout's own simulator whenever its plan says it can
   // (`gpu`); otherwise the layout stays on the CPU and `gpuReasons` says why.
@@ -107,10 +107,11 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     changeLayout(null);
     stats.reset();
 
-    // Colors, sizes and labels from the data, by the same rules for every graph (look.js)
-    let drawn = viewOptions(graph, layout, {springLength: layoutSettings.springLength});
-    colors = drawn.colors;
-    view = createView(scene, Object.assign(drawn.options, {nodeColor: nodeColorOf()}));
+    view = createView(scene, viewOptions(graph, layout).options);
+    // Colors, sizes and link alpha from the data, by the same rules for every graph: modules/view's
+    // style module with the demo's options (look.js, drawing.js)
+    drawing = attachDrawing(view, graph, {springLength: layoutSettings.springLength});
+    if (prototypeControl && prototypeControl.nodeColor) view.setNodeColor(nodeColorOf());
     // The camera keeps the whole drawing in view (modules/view fit), with room for labels when
     // the nodes have names (look.js decides, for the labels too)
     fitter = view.use(fitLayout, hasNames(graph) ? {} : {labelRoom: null});
@@ -127,7 +128,6 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     // A node search goes to sends out two fading rings, so the eye finds it in a big drawing
     view.use(pulseNodes);
     view.use(labelNodes, labelOptions(graph));
-    drawing = attachDrawing(view, graph, colors);
     window.view = view;
 
     runLayout(true);
@@ -164,7 +164,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   // attach (and after its final step), not on every frame.
   function nodeColorOf() {
     let nodeColor = prototypeControl && prototypeControl.nodeColor;
-    let own = colors ? colors.nodeColor : NODE_COLOR;
+    let own = drawing ? drawing.colorOf : NODE_COLOR;
     if (!nodeColor) return own;
     return node => nodeColor(node.id) || (typeof own === 'function' ? own(node) : own);
   }

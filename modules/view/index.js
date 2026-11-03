@@ -216,6 +216,7 @@ export default function createView(scene, options = {}) {
     setNodeColor,
     setLinkColor,
     setNodeMinSize,
+    setDrawing,
     setStyles,
     getStyles: () => ({...styles}),
     invalidate,
@@ -253,6 +254,20 @@ export default function createView(scene, options = {}) {
     layout.simulator.on('topology', onTopology);
     // Body order of the new layout may differ from the old one
     structureDirty = true;
+    scene.renderFrame();
+  }
+
+  /**
+   * New drawing settings, any of `nodeSize`, `linkWidth`, `nodeRoom`, `fog`, `blend` (as in the
+   * options): what they change is built again at the next frame
+   */
+  function setDrawing(drawing) {
+    ['nodeSize', 'linkWidth', 'nodeRoom', 'fog', 'blend'].forEach(name => {
+      if (drawing[name] !== undefined) settings[name] = drawing[name];
+    });
+    if (drawing.nodeSize !== undefined) nodesDirty = true;
+    if (drawing.linkWidth !== undefined) edgesDirty = true;
+    rooms.stale = true;
     scene.renderFrame();
   }
 
@@ -1017,6 +1032,7 @@ export {default as navigateNodes, nearestInDirection, neighboursOf} from './modu
 export {default as searchNodes, buildSearchIndex, findNodes} from './modules/search.js';
 export {default as labelNodes} from './modules/labels.js';
 export {default as pulseNodes} from './modules/pulse.js';
+export {default as styleNodes, PALETTE, OTHER, colorsOf, sizeByLinks, readable, parseColor} from './modules/style.js';
 export {default as fitLayout, layoutBounds} from './modules/fit.js';
 export {largestOpenRect} from './visible.js';
 export {placeLabels} from './labels/place.js';

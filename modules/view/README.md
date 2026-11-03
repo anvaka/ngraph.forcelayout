@@ -92,6 +92,8 @@ Methods:
   dimensions.
 * `setNodeColor(color)`, `setLinkColor(color)`: new colors (a value or a function).
 * `setNodeMinSize(pixels)`: a new `nodeMinSize`.
+* `setDrawing({nodeSize, linkWidth, nodeRoom, fog, blend})`: new drawing options.
+* `getStyles()`: the current `styles`.
 * `invalidate()`: positions changed outside of a step, e.g. after `layout.setNodePosition()` or
   code that wrote `store.pos`.
 * `refresh()`: call the color and size functions again, e.g. when the data they read changed.
@@ -274,6 +276,45 @@ category). Labels leave room for the ring.
 
 Every module works the same with a mouse, a pen and a finger; only the picking reach differs.
 Where a mouse uses a key (Shift-drag for a box), a long press does the same for every pointer.
+
+### style
+
+`view.use(styleNodes, {colorBy, palette, linkColors, background, ...})`: colors and sizes from the
+graph's data, kept readable while the layout and the camera move. One set of rules for any graph,
+made for a dark background:
+
+* **Color from a category**: `colorBy`, a field of `node.data` (or `node => value`; default
+  `group` when nodes have one). Categories take `PALETTE` (eight colors, exported) in order of
+  size, the biggest first; past it they share `OTHER`. `palette` (`{value: color}`) gives the
+  data's own colors, and values that are colors (`'#e42313'`, `'red'`) are drawn as they are. Any
+  color too dark for `background` is lightened to 3:1 against it. Links inside a category take
+  its color, links between categories stay neutral and fainter (`crossLinks`, 0.6). `linkColors`
+  (`{value: color}` for `link.data`, or `'self'` when link.data is a color) colors links from the
+  data instead. Nodes without a category are `color` (`'#90f8fc'`).
+* **Size from links**: a leaf is `unit` × 0.5 scene units wide, a node with k links
+  `unit` × 0.5 √k (`unit` 1; `sizeByLinks(unit)` is exported).
+* **Link alpha from their ink**: at most every 300 ms the links are binned on a 32 × 32 grid over
+  the drawing, and their alpha is set so the most crowded tenth of the cells gets `ink` (0.25) of
+  opacity, within `alpha` (`[0.05 / 255, 0.5]`). Below 1/255 a fixed share of the links is drawn
+  at 1/255. A 200k-link hairball keeps its texture; a sparse tree's links are bright.
+* **Nodes at least `minSize`** (3.5) CSS pixels wide, less where they crowd, and at most `room`
+  (0.7) of the distance to their nearest neighbour as big (the view's `nodeRoom`).
+* **Highlights** (`rings`, true): hovered, found and focused nodes keep their color with a white
+  ring, selected ones an amber ring; lit links in one light color.
+* **`background`** (`'#0e1624'`): the scene's clear color, the rings' and the labels' halo.
+* In 3D, `fog` (0.3) fades the far side of the drawing.
+
+API: `legend()` (`{title, items: [{color, label, count}], more}`, or null when the colors are the
+data's own or the categories are bare numbers), `colorOf(node)`, `linkAlpha()`, `nodeMinSize()`,
+`update()` (read the data again). `colorsOf(graph, options)` gives the same colors without a view.
+
+### pulse
+
+`view.use(pulseNodes, {on, color, radius, count, duration})`: rings that spread from a node and
+fade, so the eye finds it in a big drawing. By default the node search goes to pulses
+(`on: ['search']`); `start(node)` pulses any node. Two rings (`count`), 900 ms each
+(`duration`), 300 ms apart, out to 64 px (`radius`). With `prefers-reduced-motion` nothing moves:
+the node's ring (see Flags) shows where it is.
 
 ### labels
 
