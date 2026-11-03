@@ -210,6 +210,7 @@ export default {
         card.style.maxHeight = narrow ? DOCK_HEIGHT + 'px' : '';
         card.style.overflowY = narrow ? 'auto' : '';
       }
+      fadeIfMore();
       let width = card.offsetWidth, height = card.offsetHeight;
       let area = ctx.visibleArea ? ctx.visibleArea() : null;
       if (area && (area.allHidden || area.width !== rect.width || area.height !== rect.height)) area = null;
@@ -248,6 +249,18 @@ export default {
       card.style.top = (rect.top + best.box.y) + 'px';
     }
 
+    // A docked card that scrolls fades out at its bottom edge while there is more below, so the
+    // last visible line doesn't look cut
+    function fadeIfMore() {
+      if (!card) return;
+      let more = card.scrollHeight - card.clientHeight - card.scrollTop > 1;
+      let mask = more ? 'linear-gradient(to bottom, #000 calc(100% - 28px), transparent)' : '';
+      if (card.style.webkitMaskImage !== mask) {
+        card.style.webkitMaskImage = mask;
+        card.style.maskImage = mask;
+      }
+    }
+
     // Boxes of the view's other overlays on the canvas, in canvas pixels
     function overlayBoxes(rect) {
       let boxes = [];
@@ -282,6 +295,7 @@ export default {
       card.setAttribute('data-graph-overlay', '');
       card.style.cssText = STYLE + (options.style || '');
       if (options.className) card.className = options.className;
+      card.addEventListener('scroll', fadeIfMore, {passive: true});
       // The pointer can move onto the tooltip without it closing
       card.addEventListener('pointerenter', () => { overCard = true; clearTimeout(lingering); });
       card.addEventListener('pointerleave', () => {
