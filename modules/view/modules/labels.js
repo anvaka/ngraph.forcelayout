@@ -18,9 +18,10 @@
 // - Selected nodes are always labelled, then the selection's neighbours.
 // - Hover never places again (as on a map, hover changes how things look, never where labels
 //   go). The hovered node (the hover module's: the pointer rests on it), the focused node and
-//   dragged ones get their label in front: drawn last on a plate, where their own label is (at
-//   its size; a focused node's in the top tier), or else on the side that covers the fewest
-//   labels. Labels under it stay where they are, behind it, and show again when it goes.
+//   dragged ones get their label in front: drawn last, where their own label is (at its size; a
+//   focused node's in the top tier) with a solid halo, or else on the side that covers the fewest
+//   labels, on a plate. Labels under it stay where they are, behind it, and show again when it
+//   goes.
 // - A label's text is part of its node: the view's pick() takes a point on a label as its node
 //   (so the label you reach for is what you hover and tap).
 // - Labels make way for what covers the canvas (a settings panel, a toolbar): the view measures
@@ -593,10 +594,11 @@ export default {
         data[o + 2] = ANCHOR_INDEX[label.anchor] || 0;
         let tier = settings.tiers[label.tier] || settings.tiers[settings.tiers.length - 1];
         // How bright the text is: its tier's tone (the shader shows pointed and selected nodes' at
-        // full). -2: a label in front (a pointed node's), on a plate of the halo's color that hides
-        // what is under it: the labels it is over, and the node's own lit links and neighbours,
-        // which are brighter than a halo hides
-        data[o + 3] = label.front ? -2 : tier.tone === undefined ? 1 : tier.tone;
+        // full). Below 0, a label in front (a pointed node's): -1 at its own place, with a solid
+        // halo (its node's lit links stay out of the letters; a plate would hide the cluster's dots
+        // around the words); -2 over the others, on a plate of the halo's color that hides the
+        // labels under it
+        data[o + 3] = label.front ? (label.frontOnly ? -2 : -1) : tier.tone === undefined ? 1 : tier.tone;
         data[o + 4] = e.width / ratio;
         data[o + 5] = e.height / ratio;
         data[o + 6] = e.x / atlas.width;

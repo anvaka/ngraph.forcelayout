@@ -24,7 +24,8 @@ const VERTEX = `
   ${POSITION_OF}
   attribute vec2 corner; // per vertex, 0..1
   // row, diameter in scene units, side (0 right, 1 left, 2 above, 3 below), and the text's tone
-  // (0 to 1), or below 0 for a label in front: -1 at its own place, -2 over the others on a plate
+  // (0 to 1), or below 0 for a label in front: -1 at its own place (a solid halo), -2 over the
+  // others on a plate
   attribute vec4 node;
   attribute vec2 box;    // width, height in CSS pixels
   attribute vec4 uv;     // the image in the atlas: left, top, right, bottom
@@ -73,7 +74,9 @@ const VERTEX = `
     vAlpha = alpha;
     // Pointed and selected nodes' labels at full brightness; others at their tier's tone. A label
     // over the others (-2) is at full brightness on a plate (vTone -1)
-    vTone = node.w < -1.5 ? -1.0 : front > 0.5 || isPointed(flags) + hasFlag(flags, 2.0) > 0.5 ? 1.0 : node.w;
+    // A label in front at its own place (-1) has a solid halo (vTone 2): its node's lit links,
+    // brighter than the others, don't show through the letters
+    vTone = node.w < -1.5 ? -1.0 : front > 0.5 ? 2.0 : isPointed(flags) + hasFlag(flags, 2.0) > 0.5 ? 1.0 : node.w;
   }`;
 
 const FRAGMENT = `
@@ -90,11 +93,12 @@ const FRAGMENT = `
     float text = texel.r;
     // A label over the others sits on a plate: its whole box in the halo's color
     float plate = vTone < 0.0 ? 1.0 : 0.0;
-    float halo = max(texel.g * haloColor.a, plate * (1.0 - text));
+    float haloAlpha = vTone > 1.5 ? 1.0 : haloColor.a;
+    float halo = max(texel.g * haloAlpha, plate * (1.0 - text));
     float alpha = text + halo;
     if (alpha <= 0.0) discard;
     // A dimmer tone mixes the text toward the halo (the background): a grey, not a see-through
-    vec3 ink = mix(haloColor.rgb, textColor.rgb, abs(vTone));
+    vec3 ink = mix(haloColor.rgb, textColor.rgb, min(abs(vTone), 1.0));
     vec3 color = (ink * text + haloColor.rgb * halo) / alpha;
     gl_FragColor = vec4(color, alpha * textColor.a * vAlpha);
   }`;
