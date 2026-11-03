@@ -60,6 +60,20 @@ Options:
   0 (or nothing) gives the default color for that node.
 * `linkColor` (`0xffffff10`): a color, or `link => color`.
 * `nodeSize`: a number, or `node => size` in scene units. Default: `node.data.size`, or 1.
+* `nodeMinSize` (0): the smallest diameter of the smallest node in CSS pixels, at any zoom, so
+  nodes (and their colors) stay visible when a big graph is zoomed out. Bigger nodes keep their
+  order: a node four times the size of the smallest is at least twice as wide. Picking still uses
+  the node's own size.
+* `nodeRoom` (0): where nodes crowd, no node is drawn wider than this share (e.g. 0.7) of the
+  distance to its nearest neighbour that is at least as big, so the leaves around a hub or the core
+  of a hairball don't merge into a solid disc, and small nodes give way to big ones. Hovered,
+  selected and focused nodes keep their size. Rooms are measured on the CPU at most every 400 ms
+  while the drawing moves, and once after it stops (about 30 ms at 100k nodes; see `room.js`).
+* `fog` (1): in 3D, what is farther from the camera fades, down to this share of its alpha at the
+  far side of the drawing (e.g. 0.3), so depth reads. 1: no fog.
+* `blend` (`'normal'`): `'add'` lets links add their light, so where they crowd the drawing glows
+  (on a dark background; nodes still cover the links under them). Highlights and layers blend
+  normally.
 * `linkWidth` (2): width of links in pixels.
 * `nodeLabel`: `node => text` that stands for a node in tooltips, search and announcements.
   Default: `data.label`, else `data.name`, else the id.
@@ -77,6 +91,7 @@ Methods:
 * `setLayout(layout)`: draw another layout of the same graph, e.g. after a reset or a change of
   dimensions.
 * `setNodeColor(color)`, `setLinkColor(color)`: new colors (a value or a function).
+* `setNodeMinSize(pixels)`: a new `nodeMinSize`.
 * `invalidate()`: positions changed outside of a step, e.g. after `layout.setNodePosition()` or
   code that wrote `store.pos`.
 * `refresh()`: call the color and size functions again, e.g. when the data they read changed.
@@ -242,7 +257,8 @@ modules and not styled.
 
 `styles`, with their defaults: `pointedColor` (`0xffffffff`), `pointedScale` (1.5),
 `pointedMinSize` (8 CSS pixels), `selectedColor` (`0xffc24bff`), `selectedScale` (1.25),
-`selectedMinSize` (6), `litLinkAlpha` (0.8), `dimAlpha` (0.15). A color with alpha 0 keeps the
+`selectedMinSize` (6), `litLinkAlpha` (0.8), `litLinkColor` (0: lit links keep their color),
+`dimAlpha` (0.15). A color with alpha 0 keeps the
 node's own color.
 
 ## Modules

@@ -1,4 +1,4 @@
-import {createScene, createGuide} from 'w-gl';
+import {createScene} from 'w-gl';
 import bus from './bus';
 import createHighLayout from 'ngraph.hde'
 import createForceLayout from './createForceLayout';
@@ -9,6 +9,8 @@ import {createWebGPUBackend, runOnGpu} from 'ngraph.forcelayout.gpu';
 import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes, navigateNodes, searchNodes, labelNodes, fitLayout} from 'ngraph.forcelayout.view';
 import createGraph from 'ngraph.graph';
 import {stepsForFrame} from './deviceDefaults';
+import look, {hasNames} from './look.js';
+import {viewOptions, labelOptions, attachDrawing} from './drawing.js';
 
 const NODE_COLOR = 0x90f8fcff;
 const layoutProps = ['timeStep', 'springLength', 'springCoefficient', 'dimensions', 'dragCoefficient', 'gravity', 'theta', 'maxVelocity', 'integrator', 'nbody'];
@@ -18,7 +20,9 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   // and captured into closure. loadGraph will do the initialization
   let graph, layout;
   // `view` draws the graph (modules/view): it redraws when the layout steps or the camera moves
-  let scene, view, guide;
+  let scene, view;
+  // The drawing's rules on the view (drawing.js): link alpha and node sizes, the legend
+  let drawing = null, colors = null;
 
   // With WebGPU picked, the GPU runs the layout's own simulator whenever its plan says it can
   // (`gpu`); otherwise the layout stays on the CPU and `gpuReasons` says why.
@@ -69,10 +73,13 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     finishPrototype,
     restart,
     getStats,
+    getLegend,
   };
 
   function loadGraph(newGraph, desiredLayout) {
     if (scene) {
+      if (drawing) drawing.dispose();
+      drawing = null;
       view.dispose();
       view = null;
       scene.dispose();
@@ -91,7 +98,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     // Let them play on console with it!
     window.graph = graph;
 
-    guide = createGuide(scene, {showGrid: true, lineColor: 0xffffff10, maxAlpha: 0x10, showCursor: false});
+    // No background grid: the drawing isn't a coordinate plot, and its axes ran through the graph
     // this is a standard force layout
     layout = createForceLayout(graph, layoutSettings);
     watchStability(layout);
@@ -100,9 +107,13 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     changeLayout(null);
     stats.reset();
 
-    let meta = graph.meta || {};
-    view = createView(scene, {graph, layout, nodeColor: nodeColorOf(), linkColor: meta.linkColor, nodeSize: meta.nodeSize});
-    fitter = view.use(fitLayout);
+    // Colors, sizes and labels from the data, by the same rules for every graph (look.js)
+    let drawn = viewOptions(graph, layout, {springLength: layoutSettings.springLength});
+    colors = drawn.colors;
+    view = createView(scene, Object.assign(drawn.options, {nodeColor: nodeColorOf()}));
+    // The camera keeps the whole drawing in view (modules/view fit), with room for labels when
+    // the nodes have names (look.js decides, for the labels too)
+    fitter = view.use(fitLayout, hasNames(graph) ? {} : {labelRoom: null});
     fitter.on(following => followListeners.forEach(fn => fn(following)));
     followListeners.forEach(fn => fn(true));
     // Hover, drag, select and inspect nodes (modules/view). Dragging works while the layout is paused too.
@@ -110,12 +121,11 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     view.use(hoverNodes);
     view.use(dragNodes);
     view.use(selectNodes);
-    view.use(inspectNodes);
+    view.use(inspectNodes, look.inspect);
     view.use(navigateNodes);
     view.use(searchNodes);
-    // Labels only when nodes have names: a graph of numbered nodes would be covered in numbers
-    // (the tooltip, search and keyboard still name every node by its id)
-    if (hasNames(graph)) view.use(labelNodes, meta.importance ? {importance: meta.importance} : undefined);
+    view.use(labelNodes, labelOptions(graph));
+    drawing = attachDrawing(view, graph, colors);
     window.view = view;
 
     runLayout(true);
@@ -152,9 +162,14 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   // attach (and after its final step), not on every frame.
   function nodeColorOf() {
     let nodeColor = prototypeControl && prototypeControl.nodeColor;
-    // Graphs with names may color their nodes by a field (loadLabelledGraph.js)
-    if (!nodeColor) return (graph.meta && graph.meta.nodeColor) || NODE_COLOR;
-    return node => nodeColor(node.id) || NODE_COLOR;
+    let own = colors ? colors.nodeColor : NODE_COLOR;
+    if (!nodeColor) return own;
+    return node => nodeColor(node.id) || (typeof own === 'function' ? own(node) : own);
+  }
+
+  // What the colors mean: {title, items: [{color, label, count}], more} or null (look.js)
+  function getLegend() {
+    return drawing ? drawing.legend : null;
   }
 
   function setPrototype(newPrototype, params) {
@@ -398,7 +413,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     // No multisampling: the view smooths its own lines, and multisampled blending made links the
     // most expensive part of a frame (see modules/view/programs.js)
     let scene = createScene(canvas, {wglContextOptions: {antialias: false}});
-    scene.setClearColor(12/255, 41/255, 82/255, 1)
+    let [r, g, b] = look.background;
+    scene.setClearColor(r / 255, g / 255, b / 255, 1)
     // Until the fit module takes over: the scene size small graphs always had
     scene.setViewBox({left: -100.8, top: -100.8, right: 100.8, bottom: 100.8});
     return scene;
@@ -430,23 +446,11 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     if (gpu) gpu.stop();
     gpu = null;
     detachPrototype();
+    if (drawing) drawing.dispose();
     if (view) view.dispose();
     scene.dispose();
     bus.off('load-graph', loadGraph);
   }
-}
-
-// Labels only for graphs whose nodes have names: at least half of the first 200 nodes have a
-// data.label or data.name (a mostly numbered graph with a few names gets none). Ids are not names.
-function hasNames(graph) {
-  let named = 0, seen = 0;
-  graph.forEachNode(node => {
-    seen += 1;
-    let data = node.data;
-    if (data && typeof data === 'object' && (typeof data.label === 'string' || typeof data.name === 'string')) named += 1;
-    return seen >= 200;
-  });
-  return named > 0 && named >= seen / 2;
 }
 
 // Average time per layout step over the last frames; steps and frames per second over the last
