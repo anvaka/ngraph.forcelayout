@@ -16,7 +16,13 @@
 // Events: 'search' ({node, query}) when a node is picked.
 // Options: `limit` (8), `key` ('/'), `placeholder` ('Find a node').
 // API: open(text), close(), find(text) (the matching nodes), dispose().
+//
+// The box opens at the top of what shows of the canvas, beside a panel that covers part of it
+// rather than under it (see the view's visible area).
+import {placeOverCanvas} from '../visible.js';
 
+// Height kept free below the box's top for the list of matches (CSS pixels)
+const RESULTS_ROOM = 260;
 const ROOT_STYLE = 'position:fixed;z-index:2147483646;width:300px;max-width:calc(100vw - 24px);padding:6px;' +
   'border-radius:4px;background:rgba(9,22,44,0.96);border:1px solid rgba(255,255,255,0.18);' +
   'box-shadow:0 2px 10px rgba(0,0,0,0.45);font:13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;color:#e8f1ff;';
@@ -70,13 +76,9 @@ export default {
     function open(text) {
       if (!box) createBox();
       box.input.value = text || '';
-      // Top left of what shows: out from under a panel
-      let rect = canvas.getBoundingClientRect();
-      let area = ctx.visibleArea && ctx.visibleArea();
-      let free = (area && area.largestRect()) || {x: 0, y: 0};
-      box.root.style.left = (rect.left + free.x + 12) + 'px';
-      box.root.style.top = (rect.top + free.y + 12) + 'px';
       box.root.style.display = 'block';
+      // At the top of what shows, not under a panel, with room for the results below it
+      placeOverCanvas(box.root, canvas, ctx.visibleArea(), 'top', RESULTS_ROOM);
       box.input.focus({preventScroll: true});
       update();
     }

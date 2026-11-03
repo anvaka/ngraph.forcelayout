@@ -104,10 +104,20 @@ test('pickNode says how clearly the nearest node wins', function (t) {
     t.ok(Math.abs(hit.gap - 12) < 1e-6, 'the other edge is 12 px farther');
     var lone = state(p, [0, 0, 40, 0], 2, [2, 2]);
     t.equal(mods[1].pickNode(lone, 410, 300, 16, -1, 0, 8).gap, Infinity, 'nothing else within reach and margin');
-    // The hovered node gets its bonus in the gap too
+    // The hovered node wins a tie, but its bonus doesn't count in the gap: a mouse that hovers
+    // and a finger that doesn't must decide a press the same way
     hit = mods[1].pickNode(s, 406, 300, 16, 0, 4, 8);
-    t.equal(hit.row, 0);
-    t.equal(hit.gap, 4);
+    t.equal(hit.row, 0, 'the hovered node wins');
+    t.equal(hit.gap, 0, 'but not clearly');
+    hit = mods[1].pickNode(s, 407, 300, 16, 0, 4, 8);
+    t.equal(hit.row, 0, 'it wins over a nearer node too');
+    t.ok(hit.gap < 0, 'with a negative gap');
+    // Inside two overlapping discs
+    var overlap = state(p, [0, 0, 0.5, 0], 2, [4, 4]);
+    hit = mods[1].pickNode(overlap, 400, 300, 16, -1, 0, 8);
+    t.equal(hit.covers, 2, 'the point is inside both');
+    t.equal(hit.gap, 0);
+    t.equal(mods[1].pickNode(s, 397, 300, 16, -1, 0, 8).covers, 1, 'one disc');
   });
 });
 
@@ -750,6 +760,12 @@ test('placeLabels: in order, beside the node, never overlapping unless forced', 
     // At most `max` (forced ones don't count)
     placed = m.placeLabels([label(0, 50, 50, {forced: true}), label(1, 50, 150), label(2, 250, 150)], Object.assign({max: 1}, options));
     t.same(placed.map(function (p) { return p.row; }), [0, 1]);
+    // Something covers x < 150: a label goes to a side that is clear, or not at all
+    var blocked = function (box) { return box.x < 150; };
+    placed = m.placeLabels([label(0, 160, 100), label(1, 100, 200)], Object.assign({blocked: blocked}, options));
+    t.same(placed.map(function (p) { return [p.row, p.anchor]; }), [[0, 'right']], 'right of the cover, none under it');
+    placed = m.placeLabels([label(0, 100, 200, {forced: true})], Object.assign({blocked: blocked}, options));
+    t.equal(placed.length, 1, 'a forced label goes anyway');
   });
 });
 
@@ -769,7 +785,17 @@ test('importance: degree, a data field, a function, pagerank', function (t) {
     var pr = m.computeImportance(graph, rowOf, 4, 'pagerank');
     t.ok(pr[0] > pr[2] && pr[2] > pr[1], 'the hub ranks first, the leaf last');
     t.ok(Math.abs(pr[0] + pr[1] + pr[2] + pr[3] - 1) < 1e-9, 'ranks sum to 1');
-    t.same(Array.from(m.rankRows(new Float64Array([3, 1, 2, 2]))), [0, 2, 3, 1], 'most important first, ties by row');
+    var order = Array.from(m.rankRows(new Float64Array([3, 1, 2, 2])));
+    t.equal(order[0], 0, 'most important first');
+    t.equal(order[3], 1, 'least important last');
+    t.same(order.slice(1, 3).sort(), [2, 3], 'ties between');
+    t.same(Array.from(m.rankRows(new Float64Array([3, 1, 2, 2]))), order, 'the same order every time');
+    // A grid's rows come row by row: equal nodes must not come in that order, or the first
+    // rows get every label
+    var equal = Array.from(m.rankRows(new Float64Array(1000)));
+    var firstHundred = equal.slice(0, 100);
+    t.ok(Math.min.apply(null, firstHundred) < 100 && Math.max.apply(null, firstHundred) > 900, 'ties spread over all rows');
+    t.equal(new Set(equal).size, 1000, 'every row once');
     var empty = m.computeImportance(graph, rowOf, 5, 'degree');
     t.equal(empty[4], -Infinity, 'a row with no node');
   });
@@ -814,6 +840,16 @@ test('measureArea: what covers the canvas, the nearest visible spot, the middle 
     t.ok(all.allHidden);
     t.equal(all.nearest(10, 10, 40), null, 'nothing to go by');
     t.equal(all.center(), null);
+
+    // Where a box fits: the panel covers x < 100, y < 200
+    var top = area.spot(80, 40, 12, 'top');
+    t.equal(top.y, 12, 'at the top');
+    t.ok(top.x >= 112, 'beside the panel, 12 px from it', top);
+    var bottom = area.spot(80, 40, 12, 'bottom');
+    t.same(bottom, {x: 12, y: 248}, 'at the bottom left, below the panel');
+    t.equal(area.spot(390, 40, 12), null, 'wider than the canvas');
+    t.equal(area.spot(300, 250, 12), null, 'nowhere big enough');
+    t.same(v.measureArea(400, 300, function () { return false; }, 20).spot(80, 40, 12), {x: 12, y: 12}, 'nothing covers: the corner');
   });
 });
 
