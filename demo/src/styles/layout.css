@@ -285,6 +285,24 @@ body.drag-over::after {
     display: none;
   }
 }
+/* Every target at least 24 px (WCAG 2.5.8) with a mouse too: 24 px lines and values, 18 px boxes */
+@media (pointer: fine), (hover: hover) {
+  .code-settings .code {
+    line-height: 24px;
+  }
+  .code-settings .code .line {
+    min-height: 24px;
+  }
+  .code-settings .code .value {
+    min-height: 24px;
+    min-width: 24px;
+  }
+  .code-settings .code .toggle input {
+    width: 18px;
+    height: 18px;
+    margin: 3px 6px 3px 0;
+  }
+}
 /* A finger needs bigger targets: taller lines, values at least 32 px each way */
 @media (pointer: coarse) {
   .code {
