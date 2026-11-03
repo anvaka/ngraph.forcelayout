@@ -313,7 +313,7 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
 }
 .about-line p { margin: 0; }
 .about-line .about-text { color: var(--text-2); }
-.about-line .legend { padding: 0; margin-top: 6px; }
+.about-line .legend { padding: 0; margin-top: 6px; align-items: center; }
 .about-line .credit { padding: 0; margin-top: 6px; }
 .legend .legend-name { color: var(--text-3); white-space: nowrap; }
 .legend .legend-chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; color: var(--text-2); }
