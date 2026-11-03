@@ -2,8 +2,8 @@
 
 Draws a graph that an `ngraph.forcelayout` layout moves, on a [w-gl](https://github.com/anvaka/w-gl)
 scene: nodes as round dots, links as lines of a fixed width on screen. Modules add interaction on
-top: hover, drag, select, inspect (tooltips), navigate (keyboard and screen readers) and search
-come with it. Pointer modules work the same with a mouse, a pen or a finger, and the keyboard
+top: labels, hover, drag, select, inspect (tooltips), navigate (keyboard and screen readers) and
+search come with it. Pointer modules work the same with a mouse, a pen or a finger, and the keyboard
 reaches the same actions.
 
 It is built so that drawing stays cheap at hundreds of thousands of nodes:
@@ -31,12 +31,13 @@ it also rebuilds on the simulator's `'topology'` event.
 ``` js
 import {createScene} from 'w-gl';
 import createLayout from 'ngraph.forcelayout';
-import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes, navigateNodes, searchNodes} from 'ngraph.forcelayout.view';
+import createView, {labelNodes, hoverNodes, dragNodes, selectNodes, inspectNodes, navigateNodes, searchNodes} from 'ngraph.forcelayout.view';
 
 // No multisampling: the view smooths its own edges
 const scene = createScene(canvas, {wglContextOptions: {antialias: false}});
 const layout = createLayout(graph);
 const view = createView(scene, {graph, layout});
+view.use(labelNodes);
 view.use(hoverNodes);
 view.use(dragNodes);
 const selection = view.use(selectNodes);
@@ -91,7 +92,8 @@ Methods:
   `margin` (0.15 of the smaller side) away from both.
 * `visibleArea()`: the part of the canvas the user sees (see
   [What the user sees](#what-the-user-sees)).
-* `getLayout()`, `getCamera()` (w-gl's map controls that the view drives).
+* `getLayout()`, `getCamera()` (w-gl's map controls that the view drives), `getModule(name)` (the
+  API of an attached module, e.g. `getModule('labels')`).
 * `dispose()`: detach the modules, give the scene its own camera controls back, stop listening
   to the graph and the layout, and free the GPU resources.
 
@@ -248,6 +250,33 @@ node's own color.
 Every module works the same with a mouse, a pen and a finger; only the picking reach differs.
 Where a mouse uses a key (Shift-drag for a box), a long press does the same for every pointer.
 
+### labels
+
+`view.use(labelNodes, {importance, max, tiers, font, color, halo, haloWidth, gap, every, fade, maxLength})`:
+node labels that stay put while the layout moves.
+
+* **What gets a label.** Every node has a fixed importance, ranked once per graph change: its links
+  (`importance: 'degree'`, the default), `'pagerank'`, a numeric field of `node.data` (its name),
+  or `node => number`. A greedy pass places labels in that order beside their nodes, against a
+  grid on the screen, and skips any that would overlap. The most important nodes are labelled
+  first, and zooming in makes room for more, so the hierarchy comes from the ranking and the
+  zoom. The top ranks get bigger text (`tiers`: the top 1% at 15 px, the top 10% at 13 px, the
+  rest at 12 px). At most `max` labels (default: one per 3,500 square pixels, 30 to 400).
+* **Stable.** Placement runs again only every 250 ms (`every`) while the layout or the camera
+  moves, and once more when they stop. Labels placed last time go first, on the side of their
+  node they had. Hovered, focused, dragged and selected nodes are always labelled, then the
+  selection's neighbours. Labels fade in and out over 300 ms (`fade`), in the shader.
+* **Cheap.** Between placements every label follows its node on the GPU: a label is a quad that
+  keeps its node's row and its side, and the shader reads the node's position. A running layout
+  costs the CPU nothing per frame for labels. A placement takes about 1 ms on 77 nodes and 3 ms at
+  100k (the first one, which ranks every node, 20 and 60 ms).
+* **Any script.** The text is the view's `labelOf(node)` (cut to `maxLength`, 40), drawn once per
+  label with the canvas 2D API into an atlas at the device's pixel ratio, with a halo
+  (`halo`, `haloWidth`) so it reads over nodes and links. Labels of dimmed nodes dim too.
+
+API: `update(options)`, `refresh()` (read the labels again), `get()` (the labelled nodes),
+`stats()`.
+
 ### hover
 
 `view.use(hoverNodes, {holdStill})`: the node under a mouse or pen gets `HOVERED` and the cursor
@@ -353,7 +382,10 @@ view.use(pinOnDoubleTap);
 `fromScreen(x, y, through)`, `screenPositions()` (every node on the canvas, one pass), `labelOf()`,
 `reveal()`, `visibleArea()`, `emit(name, fields)`, `on(name, fn)`, `onFrame(fn)` (runs inside every frame, before
 flags go to the GPU), `onCamera(fn)`, `setCursor(value, priority)`, `provide(name, api)` and
-`get(name)` (APIs modules share: navigate provides `focus` and `announce`), and `input`:
+`get(name)` (APIs modules share: navigate provides `focus` and `announce`), `gl` and `instancing`,
+`addLayer({order, draw(frame), dispose()})` (draw after the nodes, as labels do; `frame` has the
+positions texture, `mvp`, `drawContext`, `style` and `time`), `animate()` (ask for the next frame
+too, while a fade runs), and `input`:
 
 * `input.add(handler)`: a handler is an object with any of `priority` (lower is asked first),
   `press(p)` (claim this pointer? it must not change anything: it is also asked for the cursor),
@@ -379,4 +411,7 @@ use the same copy of w-gl (the demo's `vite.config.js` dedupes it).
 
 ## Not done yet
 
-Labels, picking links, and cooperative gestures for graphs embedded in a scrolling page.
+Labels that make way for what covers the canvas (they are placed under a panel now),
+group (cluster) labels over the node labels, zoom ranges fixed once the layout settles (so
+zooming in never removes a label), clicking on label text, picking links, and cooperative
+gestures for graphs embedded in a scrolling page.

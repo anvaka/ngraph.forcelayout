@@ -6,7 +6,7 @@ import findLargestComponent from './findLargestComponent';
 // Add-ons from modules/ in this repository (see vite.config.js), not part of ngraph.forcelayout
 import placeNodes from 'ngraph.forcelayout.pivot';
 import {createWebGPUBackend, runOnGpu} from 'ngraph.forcelayout.gpu';
-import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes, navigateNodes, searchNodes} from 'ngraph.forcelayout.view';
+import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes, navigateNodes, searchNodes, labelNodes} from 'ngraph.forcelayout.view';
 import createGraph from 'ngraph.graph';
 
 const NODE_COLOR = 0x90f8fcff;
@@ -93,6 +93,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     view.use(inspectNodes);
     view.use(navigateNodes);
     view.use(searchNodes);
+    view.use(labelNodes);
     window.view = view;
 
     runLayout(true);
