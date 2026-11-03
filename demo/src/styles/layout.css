@@ -189,3 +189,12 @@ body.drag-over::after {
     text-overflow: ellipsis;
   }
 }
+
+/* On a phone, open Settings cover the graph (small) or its lower part (full): the canvas buttons
+   and the data credit step aside meanwhile */
+@media (max-width: 500px) {
+  .settings-open .canvas-tools,
+  .settings-open .about-line .credit {
+    display: none;
+  }
+}
