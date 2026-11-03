@@ -271,9 +271,10 @@ body.drag-over::after {
   margin: 0 6px 0 0;
   vertical-align: -2px;
 }
-/* The fold for the lines before the options shows only on a phone */
+/* The lines before the options (install, imports, a small graph) fold, so Settings open on the
+   options themselves */
 .code .fold {
-  display: none;
+  display: block;
   width: 100%;
   padding: 0;
   border: none;
@@ -282,13 +283,8 @@ body.drag-over::after {
   text-align: left;
   cursor: pointer;
 }
-@media (max-width: 500px) {
-  .code .fold {
-    display: block;
-  }
-  .code .preamble:not(.open) {
-    display: none;
-  }
+.code .preamble:not(.open) {
+  display: none;
 }
 /* Every target at least 24 px (WCAG 2.5.8) with a mouse too: 24 px lines and values, 18 px boxes */
 @media (pointer: fine), (hover: hover) {
@@ -453,5 +449,18 @@ body.drag-over::after {
   }
   .about-line .credit {
     max-width: calc(100vw - 132px);
+  }
+}
+
+/* Phones: while the Settings sheet is open the panel folds to its graph row and the Settings
+   button, so the graph keeps most of what the sheet leaves (2D|3D and the GPU are lines of the
+   code meanwhile) */
+@media (max-width: 500px) {
+  .settings-open .title-row,
+  .settings-open .stats-row,
+  .settings-open .about-line,
+  .settings-open .idea-bar,
+  .settings-open .controls-row .switch {
+    display: none;
   }
 }

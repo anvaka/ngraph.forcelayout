@@ -299,8 +299,12 @@ export default {
       return Math.max(0, data.items.length - this.legend.length) + (data.more ? data.more.count : 0);
     },
     // The sheet moves up by what the soft keyboard covers
+    // With the keyboard up the sheet takes at most half of what is left under the panel, so some
+    // of the graph stays in view while one types
     sheetStyle() {
-      return this.keyboardInset ? {bottom: this.keyboardInset + 'px', maxHeight: `calc(100dvh - ${this.keyboardInset}px - 140px)`} : null;
+      if (!this.keyboardInset) return null;
+      let left = Math.max(0, window.innerHeight - this.keyboardInset - this.panelHeight);
+      return {bottom: this.keyboardInset + 'px', maxHeight: Math.max(120, Math.round(left / 2)) + 'px'};
     },
     // Settings that differ from what the page starts with (the button says so while closed)
     changedCount() {
@@ -427,6 +431,8 @@ export default {
       if (!vv) return;
       let covered = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
       this.keyboardInset = covered > 40 ? covered : 0;
+      let app = document.getElementById('app');
+      this.panelHeight = app ? app.getBoundingClientRect().height : 0;
     },
 
     deviceValue(key) {
@@ -615,6 +621,7 @@ export default {
       copied: false,
       pickerKey: '',
       keyboardInset: 0,
+      panelHeight: 0,
       installLine,
       installNote,
       showPitch: true,

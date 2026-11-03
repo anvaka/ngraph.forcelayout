@@ -3,7 +3,7 @@
   <!-- The program that makes this drawing. Every value is an input named after its option; what
        you change, the layout uses at once, and Copy takes the program home. -->
   <div class='code' role='group' aria-label='Settings, written as the code that makes this layout'>
-    <!-- On a phone the lines before the options fold, so the values are what shows first -->
+    <!-- The lines before the options fold, so the values are what shows first -->
     <button type='button' class='line comment fold' :aria-expanded='preambleOpen ? "true" : "false"' aria-controls='code-preamble'
       @click='preambleOpen = !preambleOpen'>// {{preambleOpen ? '▾' : '▸'}} install, imports and a small graph</button>
     <div id='code-preamble' class='preamble' :class='{open: preambleOpen}'>
