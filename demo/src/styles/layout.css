@@ -134,14 +134,43 @@ body.drag-over::after {
   z-index: 10;
 }
 
-/* Phones: the panel stays short. One line of what the graph is (tap for all of it), one line of
-   colours, and the data credit at the canvas's bottom left, as maps credit their data. */
+.title-row .pitch .short,
+.about-line .about-toggle {
+  display: none;
+}
+.about-line .about-toggle {
+  padding: 0 4px 0 0;
+  border: none;
+  background: none;
+  color: var(--text-2, rgba(255, 255, 255, 0.8));
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Phones: the panel stays short. One line of what the graph is (tap for all of it), or, with
+   colours, one line of colours and a button for the text; the data credit sits at the canvas's
+   bottom left, as maps credit their data. */
 @media (max-width: 500px) {
+  .title-row .pitch .long,
+  .stats-row .placement {
+    display: none;
+  }
+  .title-row .pitch .short {
+    display: inline;
+  }
   .about-line {
     padding: 4px 8px 6px;
   }
   .about-line .about-text {
     -webkit-line-clamp: 1;
+  }
+  .about-line .about-text.with-legend:not(.open) {
+    display: none;
+  }
+  .about-line .about-toggle {
+    display: inline;
+    min-width: 24px;
+    min-height: 24px;
   }
   .about-line .legend {
     flex-wrap: nowrap;

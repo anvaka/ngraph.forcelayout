@@ -60,6 +60,9 @@ export default {
     let canvas = ctx.scene.getDrawContext().canvas;
     let reduced = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
     let watched = null;       // the layout whose 'stable' event this module listens to
+    let usedFree = null;      // the free area the last fit used
+    // What shows can change without a frame (a panel opens): look again now and then while following
+    let areaTimer = setInterval(checkArea, 400);
     let turning = 0;          // the animation frame of a turn
 
     ctx.onFrame(change => {
@@ -122,6 +125,7 @@ export default {
         return () => listeners.delete(fn);
       },
       dispose() {
+        clearInterval(areaTimer);
         window.removeEventListener('resize', onResize);
         if (turning) cancelAnimationFrame(turning);
         watch(null);
@@ -199,6 +203,19 @@ export default {
       let now = angles();
       cam.rotateByAngle(phi - now.phi, 0);
       cam.redraw();
+    }
+
+    function checkArea() {
+      if (!following || !usedFree || (typeof document !== 'undefined' && document.hidden)) return;
+      let area = ctx.visibleArea && ctx.visibleArea();
+      let free = area && area.largestRect();
+      if (!free) return;
+      let change = Math.abs(free.x - usedFree.x) + Math.abs(free.y - usedFree.y) +
+        Math.abs(free.width - usedFree.width) + Math.abs(free.height - usedFree.height);
+      if (change > 16) {
+        easing = true;
+        ctx.requestFrame();
+      }
     }
 
     function setFollowing(on) {
@@ -282,6 +299,7 @@ export default {
       let rect = canvas.getBoundingClientRect();
       let area = ctx.visibleArea && ctx.visibleArea();
       let free = (area && area.largestRect()) || {x: 0, y: 0, width: rect.width, height: rect.height};
+      usedFree = free;
       let labels = !!(ctx.view.getModule && ctx.view.getModule('labels'));
       let room = labels && settings.labelRoom ? settings.labelRoom : {x: 0, y: 0};
       // Room around the drawing, and beside it for labels, shrinks with a small screen
