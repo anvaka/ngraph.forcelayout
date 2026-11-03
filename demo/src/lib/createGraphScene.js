@@ -416,9 +416,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
       for (let i = 0; i < steps; ++i) layout.step();
     }
     stats.record(performance.now() - start, steps);
-    // An automatic stop would plug in here: layout.step() returns whether the layout is stable,
-    // and on WebGPU the layout fires 'stable' from the movement between readbacks. Stopping is
-    // runLayout(false) plus telling the panel (isRunning); not done yet.
+    // The loop stops by itself when the layout settles: see the 'stable' listener above
     if (fixedViewBox) {
       let rect = layout.getGraphRect();
       scene.setViewBox({
