@@ -33,6 +33,7 @@ const VERTEX = `
   varying vec2 vUv;
   varying float vAlpha;
   varying float vTone;
+  varying float vFront;
   void main() {
     vec4 position = positionOf(node.x);
     vec4 clip = modelViewProjection * vec4(position.xyz, 1.0);
@@ -74,6 +75,7 @@ const VERTEX = `
     // Pointed and selected nodes' labels at full brightness; others at their tier's tone. A label
     // over the others (-2) is at full brightness on a plate (vTone -1)
     vTone = node.w < -1.5 ? -1.0 : front > 0.5 || isPointed(flags) + hasFlag(flags, 2.0) > 0.5 ? 1.0 : node.w;
+    vFront = front;
   }`;
 
 const FRAGMENT = `
@@ -84,13 +86,17 @@ const FRAGMENT = `
   varying vec2 vUv;
   varying float vAlpha;
   varying float vTone;
+  varying float vFront;
   void main() {
     // Premultiplied: red is the text's coverage, green the halo's where the text isn't
     vec4 texel = texture2D(atlas, vUv);
     float text = texel.r;
     // A label over the others sits on a plate: its whole box in the halo's color
     float plate = vTone < 0.0 ? 1.0 : 0.0;
-    float halo = max(texel.g * haloColor.a, plate * (1.0 - text));
+    // A label in front at its own place knocks out what is under its text with a full halo (its
+    // node's lit links are brighter than a resting halo hides), and leaves the rest of the drawing
+    float haloAlpha = vFront > 0.5 ? 1.0 : haloColor.a;
+    float halo = max(texel.g * haloAlpha, plate * (1.0 - text));
     float alpha = text + halo;
     if (alpha <= 0.0) discard;
     // A dimmer tone mixes the text toward the halo (the background): a grey, not a see-through
