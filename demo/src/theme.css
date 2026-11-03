@@ -105,19 +105,25 @@ h2 .sub { color: var(--text-3); font-weight: 400; }
   min-width: 0;
   height: 24px;
   margin-left: auto;
-  padding: 0 8px;
+  padding: 0 7px;
   border: none;
   border-radius: var(--radius-field);
   background: var(--field);
   color: var(--text-2);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 24px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
 }
 .install:hover { background: var(--field-hover); color: var(--text); }
+.install code { font: inherit; }
+/* The name and the install line share a row: the line gives way (ellipsis) before it wraps */
+.title-row .name-line { flex-wrap: nowrap; min-width: 0; }
+.title-row .name-line h2 { flex: none; }
+.title-row .install { min-width: 0; flex: 0 1 auto; border: none; }
 .install::after {
   content: '';
   flex: none;
@@ -206,7 +212,7 @@ select:disabled { opacity: 0.45; cursor: default; }
   background: var(--field);
 }
 .backend-switch button, .switch button {
-  height: 22px;
+  height: 26px;
   min-width: 38px;
   padding: 0 8px;
   border: none;
@@ -274,7 +280,7 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
 .toggle-settings {
   margin-left: auto;
   padding: 0 10px;
-  height: 26px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -399,7 +405,7 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
 .block input[type='number'],
 .block input[type='text'] {
   width: 100%;
-  height: 26px;
+  height: 28px;
   padding: 0 8px;
   border: none;
   border-radius: var(--radius-field);
@@ -415,7 +421,9 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
 .block input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .block input[type='number']:hover { background: var(--field-hover); }
 .block input:focus { outline: none; background: var(--field-focus); box-shadow: inset 0 0 0 1px var(--accent); }
-.block select { height: 26px; font-size: 13px; }
+.block select { height: 28px; font-size: 13px; }
+/* A checkbox field: 24 px to hit, with the box inside */
+.block input[type='checkbox'] { width: 18px; height: 18px; margin: 3px; }
 .block .row.note { min-height: 0; margin: -2px 0 4px; font-size: 12px; color: var(--text-3); }
 .block .row.help {
   display: block;
@@ -433,9 +441,9 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 20px;
-  width: 20px;
-  height: 20px;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -499,7 +507,7 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
   margin-top: 10px;
   font-size: 12px;
 }
-.code-actions button { flex: none; height: 26px; font-size: 12px; }
+.code-actions button { flex: none; height: 28px; font-size: 12px; }
 .code-note { margin-top: 6px; font-size: 12px; color: var(--text-3); }
 
 /* Fingers need bigger targets */
@@ -530,25 +538,19 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
   .about-line .credit { margin: 0; }
   .stats { padding: 4px 2px 8px; }
 }
-.sheet {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  max-height: 46dvh;
-  overflow-y: auto;
-  padding: 6px var(--gap) calc(var(--gap) + env(safe-area-inset-bottom));
-  background: var(--panel);
-  border-top: 1px solid var(--line);
-  border-radius: var(--radius) var(--radius) 0 0;
-  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.35);
-}
-.sheet::before {
-  content: '';
-  display: block;
-  width: 36px;
-  height: 4px;
-  margin: 2px auto 8px;
-  border-radius: 2px;
-  background: var(--line-strong);
+/* Settings as a sheet from the bottom, on phones only: the graph stays in view above it */
+@media (max-width: 500px) {
+  .sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: 46dvh;
+    overflow-y: auto;
+    padding: 6px var(--gap) calc(var(--gap) + env(safe-area-inset-bottom));
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    border-radius: var(--radius) var(--radius) 0 0;
+    box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.35);
+  }
 }
