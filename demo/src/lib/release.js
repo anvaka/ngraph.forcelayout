@@ -12,5 +12,6 @@ export const installNote = RELEASED
 
 // How Settings name the library's own defaults
 export const libraryDefaultLabel = RELEASED ? 'library default' : 'library default on main';
+export const libraryDefaultsLabel = RELEASED ? 'library defaults' : 'library defaults on main';
 
 export const pitch = 'Force-directed graph layout for JavaScript. 2D, 3D, any dimension. WebGPU add-on.';

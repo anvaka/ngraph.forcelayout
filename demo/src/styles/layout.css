@@ -35,7 +35,6 @@
   right: 12px;
   bottom: 12px;
   display: flex;
-  flex-direction: row-reverse;
   align-items: center;
   gap: 8px;
   z-index: 2;

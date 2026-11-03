@@ -475,15 +475,15 @@ export default {
         });
         help.appendChild(table);
       });
-      help.style.maxHeight = 'calc(100dvh - 24px)';
       help.style.overflowY = 'auto';
       document.body.appendChild(help);
-      // Bottom left of what shows: out from under a panel
+      // Top left of what shows: out from under a panel, and clear of buttons along the bottom
       let rect = canvas.getBoundingClientRect();
       let area = ctx.visibleArea && ctx.visibleArea();
       let free = (area && area.largestRect()) || {x: 0, y: 0, width: rect.width, height: rect.height};
       help.style.left = (rect.left + free.x + 12) + 'px';
-      help.style.top = Math.max(rect.top + free.y + 12, rect.top + free.y + free.height - help.offsetHeight - 12) + 'px';
+      help.style.top = (rect.top + free.y + 12) + 'px';
+      help.style.maxHeight = Math.max(120, free.height - 24 - 56) + 'px';
       say('Keys: ' + keys.map(([name, what]) => `${name}: ${what}`).join('. ') + '. Gestures: ' +
         GESTURES.map(([gesture, what]) => `${gesture}: ${what}`).join('. ') + '.');
     }

@@ -5,6 +5,9 @@
 This is a [force directed](http://en.wikipedia.org/wiki/Force-directed_graph_drawing) graph layout algorithm, 
 that works in any dimension (2D, 3D, and above).
 
+**[Live demo](https://anvaka.github.io/ngraph.forcelayout/)**: real graphs laid out in your browser, on the CPU or
+with the WebGPU add-on. Drop in your own `.dot` or `.json` file.
+
 The library uses quad tree to speed up computation of long-distance forces.
 
 This repository is part of [ngraph family](https://github.com/anvaka/ngraph), and operates on 

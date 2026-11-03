@@ -2,12 +2,12 @@
   <div>
     <!-- First after the canvas in Tab order: the controls that act on the canvas -->
     <div class='canvas-tools' data-graph-overlay>
+      <button v-if='!following' class='tool fit-view' @click='fitView'
+        title='Show the whole graph, and follow it as the layout moves (0)'>Fit graph</button>
+      <button class='tool' @click='toggleHelp' :aria-expanded='helpOpen ? "true" : "false"' aria-label='Keys and gestures' title='Keys and gestures (?)'>?</button>
       <button class='tool' @click='openSearch' aria-label='Find a node' title='Find a node (/)'>
         <svg aria-hidden='true' viewBox='0 0 16 16' width='16' height='16'><circle cx='6.5' cy='6.5' r='4.5' fill='none' stroke='currentColor' stroke-width='1.6'/><path d='M10 10l4 4' stroke='currentColor' stroke-width='1.6' stroke-linecap='round'/></svg>
       </button>
-      <button class='tool' @click='toggleHelp' :aria-expanded='helpOpen ? "true" : "false"' aria-label='Keys and gestures' title='Keys and gestures (?)'>?</button>
-      <button v-if='!following' class='tool fit-view' @click='fitView'
-        title='Show the whole graph, and follow it as the layout moves (0)'>Fit graph</button>
     </div>
     <div class='title-row'>
       <h2><a href='https://github.com/anvaka/ngraph.forcelayout#readme'>ngraph.forcelayout</a></h2>
@@ -117,7 +117,7 @@
         Speed-ups
         <small>
           <a href='#' @click.prevent='useDeviceDefaults' title='The speed-ups picked for this device'>this device</a> |
-          <a href='#' @click.prevent='useLibraryDefaults' :title='"The " + libraryDefaultLabel + "s for the speed-ups (the physics stay)"'>{{libraryDefaultLabel}}s</a>
+          <a href='#' @click.prevent='useLibraryDefaults' :title='"The " + libraryDefaultsLabel + " for the speed-ups (the physics stay)"'>{{libraryDefaultsLabel}}</a>
         </small>
       </div>
       <div class='device-note' v-if='deviceSummary'>{{deviceSummary}}</div>
@@ -194,7 +194,7 @@
 import createGraphScene from './lib/createGraphScene';
 import {graphGroups, graphTitle} from './lib/getAvailableGraphs';
 import graphInfo from './lib/graphInfo';
-import {libraryDefaultLabel, pitch} from './lib/release';
+import {libraryDefaultLabel, libraryDefaultsLabel, pitch} from './lib/release';
 import './styles/layout.css';
 import loadGraph from './lib/loadGraph';
 import bus from './lib/bus';
@@ -607,6 +607,7 @@ export default {
       pitch,
       graphGroups,
       libraryDefaultLabel,
+      libraryDefaultsLabel,
       loading: false,
       layoutSettings: {
         timeStep: appState.get('timeStep'),

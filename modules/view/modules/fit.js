@@ -343,10 +343,13 @@ export default {
       ctx.animate();
     }
 
-    // The screen box of the layout's box corners (CSS pixels), or null when one is behind the camera
+    // The screen box (CSS pixels) of what is drawn: in 2D the layout's box; in 3D the nodes
+    // themselves (a sample of them, inside the box), since a round drawing doesn't fill the
+    // corners of its box. Null when a point is behind the camera.
     function projectBox(b) {
+      if (b.D > 2) return projectNodes(b);
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      let zs = b.D > 2 ? [b.minZ, b.maxZ] : [0];
+      let zs = [0];
       for (let i = 0; i < 2; ++i) {
         for (let j = 0; j < 2; ++j) {
           for (let k = 0; k < zs.length; ++k) {
@@ -359,6 +362,25 @@ export default {
           }
         }
       }
+      return {x: minX, y: minY, width: Math.max(maxX - minX, 1e-3), height: Math.max(maxY - minY, 1e-3)};
+    }
+
+    function projectNodes(b) {
+      let store = ctx.layout.simulator.store;
+      let {pos, D, n} = store;
+      let stride = Math.max(1, Math.floor(n / 3000));
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (let i = 0; i < n; i += stride) {
+        let x = pos[i * D], y = pos[i * D + 1], z = pos[i * D + 2];
+        if (!(x >= b.minX && x <= b.maxX && y >= b.minY && y <= b.maxY && z >= b.minZ && z <= b.maxZ)) continue;
+        let p = ctx.toScreen(x, y, z);
+        if (!p) return null;
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+      if (!(minX <= maxX)) return null;
       return {x: minX, y: minY, width: Math.max(maxX - minX, 1e-3), height: Math.max(maxY - minY, 1e-3)};
     }
   }
