@@ -253,8 +253,8 @@ view.flags.clear(SELECTED);
 `HOVERED`, `DRAGGED` and `FOCUSED` nodes are drawn larger in `pointedColor`; `SELECTED` ones in
 `selectedColor`. Links that touch any of them are lit. While anything is selected, the nodes next to
 it (`NEIGHBOR`, set by the view) stay as they are and everything else fades to `dimAlpha`. Flagged
-nodes and their links are drawn a second time after everything else, so a highlight is never
-buried under faint links. Selected nodes are drawn on top only while there are at most 1,000 of
+nodes and their links are drawn a second time after everything else (the nodes after the labels
+too), so a highlight is never buried under faint links or other nodes' labels. Selected nodes are drawn on top only while there are at most 1,000 of
 them; past that, dimming the rest already shows them. `CUSTOM_1` and `CUSTOM_2` are free for
 modules and not styled.
 
@@ -263,6 +263,12 @@ modules and not styled.
 `selectedMinSize` (6), `litLinkAlpha` (0.8), `litLinkColor` (0: lit links keep their color),
 `dimAlpha` (0.15). A color with alpha 0 keeps the
 node's own color.
+
+Rings: `pointedRing` and `selectedRing` (0: none) draw a ring around pointed and selected nodes,
+`ringWidth` (2) CSS pixels wide, with a halo of `ringHalo` (`0x000000cc`; best the background's
+color) `ringGap` (2) pixels wide between the node and its ring. A ring reads on a node of any color
+and in any crowd, so with rings the fill colors can be 0, and nodes keep their own color (their
+category). Labels leave room for the ring.
 
 ## Modules
 

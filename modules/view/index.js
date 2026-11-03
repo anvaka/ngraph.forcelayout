@@ -65,6 +65,14 @@ const STYLES = {
   selectedColor: 0xffc24bff,
   selectedScale: 1.25,
   selectedMinSize: 6,
+  // Rings around pointed and selected nodes (0: none): a halo in `ringHalo` (best the background's
+  // color) `ringGap` pixels wide, then the ring, `ringWidth` pixels. A ring reads on a node of any
+  // color, so with rings the fill colors above can be 0 (the node keeps its own color).
+  pointedRing: 0,
+  selectedRing: 0,
+  ringHalo: 0x000000cc,
+  ringGap: 2,
+  ringWidth: 2,
   // Links that touch a selected or pointed node get at least this alpha, and this color (alpha
   // 0: they keep their own)
   litLinkAlpha: 0.8,
@@ -119,6 +127,8 @@ export default function createView(scene, options = {}) {
   let style = {
     pointedColor: new Float32Array(4), pointedSize: new Float32Array(2),
     selectedColor: new Float32Array(4), selectedSize: new Float32Array(2),
+    pointedRing: new Float32Array(4), selectedRing: new Float32Array(4), ringHalo: new Float32Array(4),
+    ringSize: new Float32Array(2),
     litAlpha: 1, litColor: new Float32Array(4), dimAlpha: 1, minSize: 0, fog: new Float32Array([0, 1, 1])
   };
 
@@ -207,6 +217,7 @@ export default function createView(scene, options = {}) {
     setLinkColor,
     setNodeMinSize,
     setStyles,
+    getStyles: () => ({...styles}),
     invalidate,
     refresh,
     use,
@@ -671,11 +682,12 @@ export default function createView(scene, options = {}) {
     nodeProgram.draw(nodes, positions, mvp, drawContext, style, 0);
     top.edges.width = edges.width;
     edgeProgram.draw(top.edges, positions, mvp, drawContext, style, 1);
-    nodeProgram.draw(top.nodes, positions, mvp, drawContext, style, 1);
     if (layers.length) {
       let frame = {gl, instancing, positions, mvp, drawContext, style, time: performance.now()};
       layers.forEach(layer => layer.draw(frame));
     }
+    // Highlighted nodes last, over the labels too: a found or selected node is never under a label
+    nodeProgram.draw(top.nodes, positions, mvp, drawContext, style, 1);
     // A frame hook (or an app listener it called) changed something after it was read, or a
     // layer animates: the scene ignores renderFrame() inside a frame, so ask again once it's over
     if (structureDirty || nodesDirty || edgesDirty || positionsDirty || flagsDirty || cameraMoved || animating) {
@@ -921,6 +933,11 @@ export default function createView(scene, options = {}) {
     style.baseSize = nodeData.minSize || 1;
     style.litAlpha = styles.litLinkAlpha;
     toRGBA(styles.litLinkColor || 0, style.litColor);
+    toRGBA(styles.pointedRing || 0, style.pointedRing);
+    toRGBA(styles.selectedRing || 0, style.selectedRing);
+    toRGBA(styles.ringHalo || 0, style.ringHalo);
+    style.ringSize[0] = (styles.ringGap || 0) * ratio;
+    style.ringSize[1] = (styles.ringWidth || 0) * ratio;
     updateFog();
     style.dimAlpha = flags.count(SELECTED) ? styles.dimAlpha : 1;
   }
@@ -999,6 +1016,7 @@ export {default as inspectNodes, describeNode} from './modules/inspect.js';
 export {default as navigateNodes, nearestInDirection, neighboursOf} from './modules/navigate.js';
 export {default as searchNodes, buildSearchIndex, findNodes} from './modules/search.js';
 export {default as labelNodes} from './modules/labels.js';
+export {default as pulseNodes} from './modules/pulse.js';
 export {default as fitLayout, layoutBounds} from './modules/fit.js';
 export {largestOpenRect} from './visible.js';
 export {placeLabels} from './labels/place.js';

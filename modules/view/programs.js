@@ -57,6 +57,13 @@ const NODE_VERTEX = `
   uniform vec2 pointedSize;
   uniform vec4 selectedColor;
   uniform vec2 selectedSize;
+  // Rings around pointed and selected nodes (alpha 0: none), the halo between a node and its ring
+  // (the background's color, so the ring reads on any node color), and in pixels the halo's and
+  // the ring's widths
+  uniform vec4 pointedRing;
+  uniform vec4 selectedRing;
+  uniform vec4 ringHalo;
+  uniform vec2 ringSize;
   // Alpha of nodes that are neither selected, next to a selected node, nor pointed at, while
   // something is selected (1 otherwise)
   uniform float dimAlpha;
@@ -75,6 +82,11 @@ const NODE_VERTEX = `
 
   varying vec4 vColor;
   varying vec2 vPoint;
+  // Radii in units of the quad: where the node's disc ends and where its halo ends (the ring runs
+  // from there to the quad's edge); 0.5 for nodes without a ring
+  varying vec2 vRadii;
+  varying vec4 vRing;
+  varying vec4 vHalo;
   void main() {
     vec4 position = positionOf(row);
     float flags = position.w;
@@ -83,6 +95,7 @@ const NODE_VERTEX = `
       return;
     }
     vec4 c = color.abgr;
+    vec4 ring = vec4(0.0);
     float diameter = size;
     float scale = 1.0;
     if (flags > 0.0 || minSize > 0.0) {
@@ -106,12 +119,22 @@ const NODE_VERTEX = `
         diameter = max(diameter * pointedSize.x, pointedSize.y / scale);
       }
       if (pointed + selected + hasFlag(flags, 16.0) < 0.5) c.a *= dimAlpha;
+      ring = pointed > 0.5 && pointedRing.a > 0.0 ? pointedRing : selected > 0.5 ? selectedRing : vec4(0.0);
     } else {
       c.a *= dimAlpha;
     }
-    gl_Position = modelViewProjection * vec4(position.xyz + vec3(point * diameter, 0.), 1.0);
+    float quad = diameter;
+    vRadii = vec2(0.5);
+    if (ring.a > 0.0) {
+      // The quad grows by the halo and the ring, which keep their width in pixels at any zoom
+      quad = diameter + 2.0 * (ringSize.x + ringSize.y) / scale;
+      vRadii = vec2(0.5 * diameter / quad, 0.5 * (diameter + 2.0 * ringSize.x / scale) / quad);
+    }
+    gl_Position = modelViewProjection * vec4(position.xyz + vec3(point * quad, 0.), 1.0);
     if (flags == 0.0) c.a *= fogOf(gl_Position.w);
     vColor = c;
+    vRing = ring;
+    vHalo = vec4(ringHalo.rgb, ringHalo.a * c.a);
     vPoint = point;
   }`;
 
@@ -122,6 +145,9 @@ const NODE_FRAGMENT = `
   uniform float part;
   varying vec4 vColor;
   varying vec2 vPoint;
+  varying vec2 vRadii;
+  varying vec4 vRing;
+  varying vec4 vHalo;
   void main() {
     float dist = length(vPoint);
   #ifdef GL_OES_standard_derivatives
@@ -129,10 +155,18 @@ const NODE_FRAGMENT = `
     float pixel = fwidth(dist);
     float coverage = clamp((0.5 - dist) / pixel + 0.5, 0.0, 1.0);
     if (coverage <= 0.0 || (part == 1.0 && coverage < 1.0) || (part == 2.0 && coverage >= 1.0)) {discard;}
-    gl_FragColor = vec4(vColor.rgb, vColor.a * coverage);
+    vec4 c = vColor;
+    if (vRing.a > 0.0) {
+      // disc, then halo, then ring, each edge smoothed over a pixel
+      c = mix(c, vHalo, clamp((dist - vRadii.x) / pixel + 0.5, 0.0, 1.0));
+      c = mix(c, vRing, clamp((dist - vRadii.y) / pixel + 0.5, 0.0, 1.0));
+    }
+    gl_FragColor = vec4(c.rgb, c.a * coverage);
   #else
     if (dist >= 0.5) {discard;}
-    gl_FragColor = vColor;
+    vec4 c = vColor;
+    if (vRing.a > 0.0) c = dist < vRadii.x ? vColor : dist < vRadii.y ? vHalo : vRing;
+    gl_FragColor = c;
   #endif
   }`;
 
@@ -221,7 +255,7 @@ const EDGE_QUAD = new Float32Array([-0.5, 0, -0.5, 1, 0.5, 1, -0.5, 0, 0.5, 1, 0
  */
 export function createNodeProgram(gl, instancing) {
   let info = createProgram(gl, NODE_VERTEX, NODE_FRAGMENT, ['point', 'row', 'size', 'color', 'room'], POSITION_UNIFORMS.concat([
-    'part', 'pass', 'resolution', 'pointedColor', 'pointedSize', 'selectedColor', 'selectedSize', 'dimAlpha', 'minSize', 'baseSize', 'fog'
+    'part', 'pass', 'resolution', 'pointedColor', 'pointedSize', 'selectedColor', 'selectedSize', 'dimAlpha', 'minSize', 'baseSize', 'fog', 'pointedRing', 'selectedRing', 'ringHalo', 'ringSize'
   ]));
   let quad = createBuffer(gl, NODE_QUAD);
   let a = info.attributes, u = info.uniforms;
@@ -239,6 +273,10 @@ export function createNodeProgram(gl, instancing) {
       gl.uniform2fv(u.selectedSize, style.selectedSize);
       gl.uniform1f(u.dimAlpha, style.dimAlpha);
       gl.uniform1f(u.minSize, style.minSize || 0);
+      gl.uniform4fv(u.pointedRing, style.pointedRing);
+      gl.uniform4fv(u.selectedRing, style.selectedRing);
+      gl.uniform4fv(u.ringHalo, style.ringHalo);
+      gl.uniform2fv(u.ringSize, style.ringSize);
       gl.uniform1f(u.baseSize, style.baseSize || 1);
       gl.uniform3fv(u.fog, style.fog);
       bindAttribute(gl, instancing, a.point, quad, 2, gl.FLOAT, false, 0);

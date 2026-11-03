@@ -48,6 +48,18 @@ const LOOK = {
     // ends' colors)
     litLinkColor: 0xe6ebf2ff,
     litLinkAlpha: 0.7,
+    // A hovered, found or focused node, and a selected one, keep their own color (their category)
+    // and get a ring: white when pointed at, amber when selected, with a halo of the canvas between
+    // node and ring, so it reads on any node color and in any crowd
+    pointedColor: 0,
+    pointedMinSize: 10,
+    pointedRing: 0xffffffff,
+    selectedColor: 0,
+    selectedMinSize: 8,
+    selectedRing: 0xffc24bff,
+    ringHalo: 0x0e1624ff,
+    ringGap: 2,
+    ringWidth: 2,
   },
   // Labels: the page's text color, a halo of the canvas wide enough to knock lines out under them
   labels: {
