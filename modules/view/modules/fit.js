@@ -31,8 +31,9 @@ const DEFAULTS = {
   ease: 0.08,
   // frame the box that holds all but `bulk` of the nodes on each side of each axis...
   bulk: 0.01,
-  // ...unless the box of every node is at most this much larger
-  bulkSlack: 1.3,
+  // ...unless the box of every node is at most this much larger: a branch that reaches out stays
+  // in the frame, pieces thrown far away don't
+  bulkSlack: 2,
   // how the camera leans the first time it fits a 3D layout (radians from straight above, and
   // around the vertical axis); null keeps it as it is
   tilt: {theta: 0.6, phi: 0.5},
