@@ -64,6 +64,20 @@ function boxBeside(side, at, width, height) {
   };
 }
 
+// The box of the node and its neighbours that show on the canvas, `COVER_MARGIN` wider
+function around(at, points, rect) {
+  let left = at.x, right = at.x, top = at.y, bottom = at.y;
+  for (let i = 0; i < points.length; ++i) {
+    let p = points[i];
+    if (p.x < 0 || p.y < 0 || p.x > rect.width || p.y > rect.height) continue;
+    if (p.x < left) left = p.x;
+    if (p.x > right) right = p.x;
+    if (p.y < top) top = p.y;
+    if (p.y > bottom) bottom = p.y;
+  }
+  return {left: left - COVER_MARGIN, right: right + COVER_MARGIN, top: top - COVER_MARGIN, bottom: bottom + COVER_MARGIN};
+}
+
 // How many points are on the box, or near it
 function covers(box, points) {
   let count = 0;
@@ -198,7 +212,8 @@ export default {
 
     // Beside the node, on the side that covers the fewest of its neighbours (what a selection
     // lights up), inside what shows of the canvas (not under a panel). When every side covers
-    // some (a hub, a small screen), along the bottom of what shows. The side it had is kept
+    // some (a hub, a node zoomed in on), just outside the neighbourhood, nearest the node; when
+    // that fails too (a small screen), along the bottom of what shows. The side it had is kept
     // unless another one is clearly better, so the card doesn't hop as the layout jiggles. When
     // the card fits nowhere at its size (a short screen, a panel open), it tries smaller ones and
     // scrolls, rather than covering its node, a panel or the canvas buttons.
@@ -287,6 +302,31 @@ export default {
         let cost = covers(box, points) + (side === shown.side ? -KEEP : 0);
         if (!best || cost < best.cost) best = {side, box, cost};
       });
+      if (!narrow && (!best || best.cost > 0)) {
+        // Every side covers some of what the selection lights up: just outside it, on the side
+        // nearest the node, rather than in a far corner
+        let hood = around(at, points, rect);
+        [
+          {x: hood.right + OFFSET, y: at.y - height / 2},
+          {x: hood.left - OFFSET - width, y: at.y - height / 2},
+          {x: at.x - width / 2, y: hood.bottom + OFFSET},
+          {x: at.x - width / 2, y: hood.top - OFFSET - height}
+        ].forEach(spot => {
+          let box = {
+            x: Math.min(Math.max(spot.x, 0), rect.width - width),
+            y: Math.min(Math.max(spot.y, 0), rect.height - height),
+            width, height
+          };
+          if (box.x < 0 || box.y < 0 || inside(at, box, width, height, OFFSET)) return;
+          if (area && area.boxCovered(box.x, box.y, width, height)) return;
+          if (!clear(box)) return;
+          let cost = covers(box, points) + (shown.side === 'hood' ? -KEEP : 0);
+          let far = Math.hypot(box.x + width / 2 - at.x, box.y + height / 2 - at.y);
+          if (!best || cost < best.cost || (cost === best.cost && best.side === 'hood' && far < best.far)) {
+            best = {side: 'hood', box, cost, far};
+          }
+        });
+      }
       if (!best || best.cost > 0) {
         // Docked at the bottom of what shows, away from the node: the spot search steps around it
         let node = {x: at.x - OFFSET, y: at.y - OFFSET, width: 2 * OFFSET, height: 2 * OFFSET};

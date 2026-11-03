@@ -11,7 +11,9 @@
 // from the ranking and the zoom. The most important labels are also bigger.
 //
 // Placement is stable:
-// - It runs again only every 250 ms while the layout or the camera moves, and once they stop.
+// - It runs again only every 250 ms while the layout or the camera moves, and once they stop;
+//   sooner when the zoom changed a lot (a search glide, a double tap), so the screen isn't left
+//   with the labels of nodes that flew off it.
 // - Labels placed last time go first, on the side of their node they had, so they don't jump.
 // - Hovered, focused, dragged and selected nodes are always labelled, then the selection's
 //   neighbours.
@@ -71,6 +73,9 @@ const LOOK_AT = 12;
 // jiggles nodes by a few pixels, and without this the labels packed tightest blink out and
 // back, or jump to another side, as their neighbours move
 const SLACK = 6;
+// The zoom changed by this factor since the last placement: place again without waiting for
+// `every`, but not more often than every ZOOM_GAP ms
+const ZOOM_STEP = 1.5, ZOOM_GAP = 50;
 
 export default {
   name: 'labels',
@@ -99,6 +104,8 @@ export default {
 
     let pending = true;
     let last = -Infinity;
+    // The camera's distance to what it looks at, at the last placement
+    let lastDistance = 0;
     let timer = 0;
     let stats = {labels: 0, placements: 0, lastMs: 0, maxMs: 0};
 
@@ -181,7 +188,7 @@ export default {
       } else if (change.positions || change.camera || coversChanged) {
         coversChanged = false;
         // Moving: place again every `every` ms, and once more after it stops
-        if (now - last >= settings.every) place(now);
+        if (now - last >= settings.every || (now - last >= ZOOM_GAP && zoomedFar())) place(now);
         else schedule(settings.every - (now - last));
       }
       if (fading(now)) ctx.animate();
@@ -195,9 +202,23 @@ export default {
       }, Math.max(16, ms));
     }
 
+    function zoomedFar() {
+      let distance = cameraDistance();
+      return lastDistance > 0 && distance > 0 &&
+        (distance > lastDistance * ZOOM_STEP || distance * ZOOM_STEP < lastDistance);
+    }
+
+    function cameraDistance() {
+      let view = ctx.scene.getDrawContext().view;
+      if (!view || !view.position || !view.center) return 0;
+      let p = view.position, c = view.center;
+      return Math.hypot(p[0] - c[0], p[1] - c[1], (p[2] || 0) - (c[2] || 0));
+    }
+
     function place(now) {
       pending = false;
       last = now;
+      lastDistance = cameraDistance();
       clearTimeout(timer);
       timer = 0;
       let screen = ctx.screenPositions();
