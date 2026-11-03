@@ -819,6 +819,11 @@ test('frontSide: the side that covers the fewest labels, inside the canvas; labe
     var above = {x: 195, y: 126, width: 10, height: 10};
     var below = {x: 170, y: 160, width: 60, height: 16};
     t.equal(m.frontSide(c, [right, left, above, below], options), 'above');
+    // A landmark's name counts more: rather a small name covered than a big one
+    var small = {x: 210, y: 142, width: 50, height: 16};
+    var big = {x: 140, y: 142, width: 40, height: 16, weight: 10};
+    var rest = [{x: 170, y: 126, width: 60, height: 16}, {x: 170, y: 158, width: 60, height: 16}];
+    t.equal(m.frontSide(c, [big, small].concat(rest), options), 'right', 'over the small name, not the landmark');
     // At the right edge of the canvas the right side is out
     t.equal(m.frontSide({x: 390, y: 150, radius: 5, width: 60, height: 16}, [], options), 'left', 'inside the canvas');
     t.equal(m.frontSide(c, [], Object.assign({blocked: function (box) { return box.x > 200; }}, options)), 'left', 'not under a cover');

@@ -100,6 +100,8 @@ const LOOK_AT = 12;
 // jiggles nodes by a few pixels, and without this the labels packed tightest blink out and
 // back, or jump to another side, as their neighbours move
 const SLACK = 6;
+// How much covering a label of each tier counts, when a label in front picks its side
+const COVER_WEIGHT = [10, 3, 1];
 // A label that comes in front (a pointed node's) starts its fade in at this alpha
 const FRONT_FROM = 0.6;
 // The zoom changed by this factor since the last placement: place again without waiting for
@@ -466,7 +468,10 @@ export default {
           // A label that wasn't on the canvas takes the side that covers the fewest others, and
           // keeps it while it stays in front
           if (!label.front || !label.anchor) {
-            if (!others) others = currentBoxes().filter(b => !b.label.front);
+            // Covering a big name costs more than covering a small one: the landmark the pointer
+            // may be on its way to stays readable
+            if (!others) others = currentBoxes().filter(b => !b.label.front).map(b => ({x: b.x, y: b.y, width: b.width, height: b.height,
+              weight: COVER_WEIGHT[b.label.tier] || 1}));
             let disc = ctx.discsOf([node])[0];
             let size = sizeOf(node, frontTier(node));
             label.anchor = disc ? frontSide({x: disc.x, y: disc.y, radius: drawnRadius(node, disc.radius, true),

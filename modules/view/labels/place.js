@@ -79,7 +79,9 @@ export function placeLabels(candidates, options) {
 
 /**
  * The side for a label drawn in front of the others (a pointed node's): the one whose box covers
- * the least of `others` ([{x, y, width, height}]), inside the canvas and not `blocked` if it can.
+ * the least of `others` ([{x, y, width, height, weight}]: a covered pixel counts `weight` times,
+ * 1 by default, so a landmark's name is covered last), inside the canvas and not `blocked` if it
+ * can.
  * `c`: {x, y, radius, width, height}; `options`: gap, width, height (the canvas), blocked.
  * Ties go to the first side in ANCHORS.
  */
@@ -96,7 +98,7 @@ export function frontSide(c, others, options = {}) {
       let o = others[i];
       let w = Math.min(box.x + box.width, o.x + o.width) - Math.max(box.x, o.x);
       let h = Math.min(box.y + box.height, o.y + o.height) - Math.max(box.y, o.y);
-      if (w > 0 && h > 0) cost += w * h;
+      if (w > 0 && h > 0) cost += w * h * (o.weight || 1);
     }
     if (cost < bestCost) {
       bestCost = cost;
