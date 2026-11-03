@@ -1,5 +1,5 @@
 <template>
-  <section aria-label='Graph and settings'>
+  <section aria-label='Graph and settings' :class='{"settings-open": settingsOpen}'>
     <!-- First after the canvas in Tab order: the controls that act on the canvas -->
     <div class='canvas-tools' data-graph-overlay>
       <button v-if='!following' class='tool fit-view' @click='fitView'
