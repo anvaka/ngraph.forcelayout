@@ -523,8 +523,26 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
   .block input[type='number'], .block select { height: 34px; }
   .help-icon { flex-basis: 28px; width: 28px; height: 28px; }
   .backend-switch button, .switch button { height: 32px; min-width: 44px; }
-  /* Code values: a 44 px tall hit area without moving the code's lines */
-  .code .value, .code select { padding: 10px 4px; margin: -10px 0; background-clip: content-box; }
+  /* Code values: a 44 px tall hit area without moving the code's lines. The dotted underline
+     and the field are painted at the text, not at the padded box's edge */
+  .code .value, .code select {
+    padding: 10px 4px;
+    margin: -10px 0;
+    border-bottom: none;
+    background: linear-gradient(to right, var(--text-3) 50%, transparent 0) left 4px bottom 9px / 4px 1px repeat-x;
+  }
+  .code .value:hover, .code select:hover {
+    background: linear-gradient(to right, var(--text-3) 50%, transparent 0) left 4px bottom 9px / 4px 1px repeat-x,
+      linear-gradient(var(--field), var(--field)) content-box;
+  }
+  .code .value:focus, .code select:focus {
+    background: linear-gradient(var(--accent), var(--accent)) left 4px bottom 9px / calc(100% - 8px) 1px no-repeat,
+      linear-gradient(var(--field-focus), var(--field-focus)) content-box;
+  }
+  .code .changed .value, .code .changed select, .code .value.changed {
+    background: linear-gradient(var(--accent), var(--accent)) left 4px bottom 9px / calc(100% - 8px) 1px no-repeat,
+      linear-gradient(var(--accent-field), var(--accent-field)) content-box;
+  }
 }
 
 /* A phone: the panel spans the top; Settings open as a sheet from the bottom */
