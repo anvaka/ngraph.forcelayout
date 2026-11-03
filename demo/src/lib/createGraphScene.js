@@ -30,6 +30,11 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
 
   let fixedViewBox = false;
   let isRunning = false;
+  // The layout settled and the frame loop stopped by itself (not paused by the viewer): moving a
+  // node, changing a setting or a new layout runs it again
+  let autoStopped = false;
+  // {step, reason} of the layout's last settling, while it stays settled
+  let settled = null;
   // The frame loop runs only while the layout runs; a paused layout draws only when the view changes
   let rafHandle = 0;
   // 0 is "auto": as many steps as fit in frameBudget ms (see deviceDefaults.js)
@@ -82,6 +87,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     guide = createGuide(scene, {showGrid: true, lineColor: 0xffffff10, maxAlpha: 0x10, showCursor: false});
     // this is a standard force layout
     layout = createForceLayout(graph, layoutSettings);
+    watchStability(layout);
     applyPlacement();
     attachPrototype();
     changeLayout(null);
@@ -109,9 +115,11 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     detachPrototype();
     layout.dispose();
     layout = createForceLayout(graph, layoutSettings);
+    watchStability(layout);
     applyPlacement();
     attachPrototype();
     showLayout();
+    resumeIfSettled();
     changeLayout(null);
     stats.reset();
     fitView();
@@ -267,6 +275,10 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
       nodes: graph ? graph.getNodesCount() : 0,
       links: graph ? graph.getLinksCount() : 0,
       steps: stats.steps,
+      running: isRunning,
+      // {step, reason}: when the layout settled ('still': the drawing stopped changing; 'noise':
+      // only jitter is left), while it stays settled
+      settled,
       msPerStep: gpu ? gpu.stats().msPerStep : stats.msPerStep(),
       // steps the last frame ran (with steps per frame on auto, what the budget allowed)
       stepsPerFrame: lastFrameSteps,
@@ -296,7 +308,15 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     });
   }
 
+  // Run or pause, as the viewer asked. Run on a settled layout keeps it going (until the viewer
+  // pauses, or it wakes and settles again)
   function runLayout(newIsRunning) {
+    autoStopped = false;
+    if (newIsRunning) settled = null;
+    setRunning(newIsRunning);
+  }
+
+  function setRunning(newIsRunning) {
     isRunning = newIsRunning;
     if (isRunning && !rafHandle) rafHandle = requestAnimationFrame(frame);
   }
@@ -322,6 +342,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     let prevLayout = layout;
     detachPrototype();
     layout = createForceLayout(graph, layoutSettings)
+    watchStability(layout);
     graph.forEachNode(node => {
       // a plain {x, y, ...} copy: positions are views into the layout's arrays
       let prevPos = prevLayout.getNodePosition(node.id).toJSON();
@@ -337,6 +358,34 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     prevLayout.dispose();
     attachPrototype(stats.steps);
     showLayout();
+    resumeIfSettled();
+  }
+
+  // When the layout settles (lib: the drawing stopped changing, or only jitter is left), the frame
+  // loop stops: no more steps, no more GPU work. When it wakes (a node is moved by hand, a setting
+  // changes), the loop runs again until it settles again.
+  function watchStability(target) {
+    settled = null;
+    target.on('stable', isStable => {
+      if (target !== layout) return;
+      if (isStable) {
+        let state = target.getStability();
+        settled = {step: stats.steps, reason: state.reason};
+        if (isRunning) {
+          autoStopped = true;
+          setRunning(false);
+        }
+      } else {
+        settled = null;
+        resumeIfSettled();
+      }
+    });
+  }
+
+  function resumeIfSettled() {
+    if (!autoStopped) return;
+    autoStopped = false;
+    setRunning(true);
   }
 
   function setFixedViewBox(isFixed) {

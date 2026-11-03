@@ -37,7 +37,8 @@
         <div v-else-if='stats'>
           {{stats.nodes.toLocaleString()}} nodes, {{stats.links.toLocaleString()}} links<span v-if='stats.placement'>, {{stats.placement}} start</span><br>
           {{stats.steps.toLocaleString()}} steps<span v-if='stats.msPerStep'>, <span class='number'>{{formatMs(stats.msPerStep)}}</span> ms/step</span>
-          on {{stats.backend === 'webgpu' ? 'WebGPU' : 'CPU'}}
+          on {{stats.backend === 'webgpu' ? 'WebGPU' : 'CPU'}}<span v-if='stats.settled' class='settled'
+            :title="stats.settled.reason === 'noise' ? 'Only jitter is left: the layout stopped. Drag a node or press Run to go on.' : 'The drawing stopped changing: the layout stopped. Drag a node or press Run to go on.'">, settled</span>
           <div v-if='stats.gpuReasons' class='off-gpu'>Runs on the CPU: {{stats.gpuReasons}}.</div>
         </div>
         <a href='#' @click.prevent='settingsOpen = !settingsOpen' class='toggle-settings'>Settings {{settingsOpen ? '▴' : '▾'}}</a>
@@ -327,6 +328,8 @@ export default {
     updateStats() {
       if (!this.scene) return;
       this.stats = this.scene.getStats();
+      // the layout stops by itself once it settles, and runs again when it wakes
+      this.isRunning = this.stats.running;
       if (this.stats.gpuError && this.backend === 'webgpu') {
         // the GPU stopped (e.g. its device was lost): the scene carries on with the CPU
         this.gpuMessage = `WebGPU stopped (${this.stats.gpuError}), switched back to CPU.`;
