@@ -134,7 +134,6 @@ body.drag-over::after {
   z-index: 10;
 }
 
-.title-row .pitch .short,
 .about-line .about-toggle {
   display: none;
 }
@@ -151,12 +150,12 @@ body.drag-over::after {
    colours, one line of colours and a button for the text; the data credit sits at the canvas's
    bottom left, as maps credit their data. */
 @media (max-width: 500px) {
-  .title-row .pitch .long,
   .stats-row .placement {
     display: none;
   }
-  .title-row .pitch .short {
-    display: inline;
+  /* the install line beside the name: a smaller face, so both fit on one row from 360 px */
+  .title-row .install {
+    font-size: 10px;
   }
   .about-line {
     padding: 4px 8px 6px;
@@ -196,5 +195,19 @@ body.drag-over::after {
   .settings-open .canvas-tools,
   .settings-open .about-line .credit {
     display: none;
+  }
+}
+
+/* Phones: Fit graph sits above the ? and search buttons, so the bottom row leaves the data
+   credit at the bottom left uncovered */
+@media (max-width: 500px) {
+  .canvas-tools .fit-view {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 8px);
+    white-space: nowrap;
+  }
+  .about-line .credit {
+    max-width: calc(100vw - 132px);
   }
 }

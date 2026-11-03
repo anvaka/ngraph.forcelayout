@@ -240,8 +240,15 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     if (newBackend !== backend) {
       backend = newBackend;
       gpuError = '';
-      stats.reset();
-      await changeLayout(null);
+      if (layout) {
+        // The other backend does the same work from the same start, as Reset does, so a
+        // "Settled in" line is all its own (a settled layout would otherwise not move at all)
+        restart();
+        await changes;
+      } else {
+        stats.reset();
+        await changeLayout(null);
+      }
     }
     return backend;
   }

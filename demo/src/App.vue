@@ -10,8 +10,12 @@
       </button>
     </div>
     <div class='title-row'>
-      <h2><a href='https://github.com/anvaka/ngraph.forcelayout#readme'>ngraph.forcelayout</a></h2>
-      <p class='pitch' v-if='showPitch'><span class='long'>{{pitch}}</span><span class='short'>{{pitchShort}}</span></p>
+      <div class='name-line'>
+        <h2><a href='https://github.com/anvaka/ngraph.forcelayout#readme'>ngraph.forcelayout</a></h2>
+        <button type='button' class='install' @click='copyInstall' :title='installNote || "Copy the install command"'
+          :aria-label='"Copy the install command: " + installLine'><code>{{copied ? 'copied' : installLine}}</code></button>
+      </div>
+      <p class='pitch' v-if='showPitch'>{{pitchShort}}</p>
     </div>
     <div class='layout-box'>
       <div class='buttons graph-row'>
@@ -196,7 +200,7 @@
 import createGraphScene from './lib/createGraphScene';
 import {graphGroups, graphTitle} from './lib/getAvailableGraphs';
 import graphInfo from './lib/graphInfo';
-import {libraryDefaultLabel, libraryDefaultsLabel, pitch, pitchShort} from './lib/release';
+import {libraryDefaultLabel, libraryDefaultsLabel, pitchShort, installLine, installNote} from './lib/release';
 import './styles/layout.css';
 import loadGraph from './lib/loadGraph';
 import bus from './lib/bus';
@@ -438,6 +442,15 @@ export default {
       this.useDeviceDefaults();
     },
 
+    copyInstall() {
+      let done = () => {
+        this.copied = true;
+        clearTimeout(this.copiedTimer);
+        this.copiedTimer = setTimeout(() => { this.copied = false; }, 1500);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(installLine).then(done, () => {});
+    },
+
     openSearch() {
       this.scene.openSearch();
     },
@@ -611,8 +624,10 @@ export default {
       fileError: '',
       helpOpen: false,
       showPitch: true,
-      pitch,
       pitchShort,
+      installLine,
+      installNote,
+      copied: false,
       graphGroups,
       libraryDefaultLabel,
       libraryDefaultsLabel,
