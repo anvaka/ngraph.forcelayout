@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <section aria-label='Graph and settings'>
     <!-- First after the canvas in Tab order: the controls that act on the canvas -->
     <div class='canvas-tools' data-graph-overlay>
       <button v-if='!following' class='tool fit-view' @click='fitView'
@@ -189,7 +189,7 @@
         </div>
       </template>
     </div>
-  </div>
+  </section>
 </template>
 
 <script>
