@@ -347,8 +347,8 @@ node labels that stay put while the layout moves.
   labels go (MapLibre's `feature-state` drives paint properties only), pointing places nothing
   again. The hovered node (the pointer rests on it, see hover), the focused node and dragged ones
   have their label in front, drawn last: where their own label is and at its size (a focused
-  node's in the top tier), with a solid halo that keeps its lit links out of the letters; or else
-  on the side that covers the fewest others (big names last), on a plate of the halo's color. The labels under it stay where they are, behind it, and show again when it goes.
+  node's in the top tier), with a full-opacity halo that keeps its lit links out of the letters; or
+  else on the side that covers the fewest others (big names last), on a plate of the halo's color. The labels under it stay where they are, behind it, and show again when it goes.
 * **Labels are targets.** Pointing at or tapping a label's text is pointing at its node (see
   [Picking](#picking)), so the label you reach for is the one you get.
 * **Out of the way.** No label goes where something covers the canvas (see "What the user
