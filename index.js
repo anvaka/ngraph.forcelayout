@@ -2,6 +2,7 @@ module.exports = createLayout;
 module.exports.simulator = require('./lib/createPhysicsSimulator');
 
 var eventify = require('ngraph.events');
+var createStabilityCheck = require('./lib/createStabilityCheck');
 
 /**
  * Creates force based layout for a given graph.
@@ -42,13 +43,20 @@ function createLayout(graph, physicsSettings) {
   listenToEvents();
 
   var wasStable = false;
+  // When the drawing stopped changing (see lib/createStabilityCheck.js). `stable` in the
+  // settings tunes it: {window, stillness, noise, hold, sample}.
+  var stability = createStabilityCheck(physicsSimulator, physicsSettings && physicsSettings.stable);
+  // New physics, new graph: the layout has to settle again
+  physicsSimulator.on('settings', wake);
+  physicsSimulator.on('topology', wake);
 
   var api = {
     /**
      * Performs one step of iterative layout algorithm
      *
-     * @returns {boolean} true if the system should be considered stable; False otherwise.
-     * The system is stable if no further call to `step()` can improve the layout.
+     * @returns {boolean} true once the layout has settled: its drawing stopped changing, or only
+     * noise is left (see `getStability()`). It stays true until nodes are moved by hand, the
+     * graph changes or a setting changes.
      */
     step: function() {
       if (bodiesCount === 0) {
@@ -65,12 +73,29 @@ function createLayout(graph, physicsSettings) {
       // Allow listeners to perform low-level actions after nodes are updated.
       api.fire('step');
 
-      var ratio = lastMove/bodiesCount;
-      var isStableNow = ratio <= 0.01; // TODO: The number is somewhat arbitrary...
+      return api.checkStable();
+    },
+
+    /**
+     * Updates whether the layout has settled from the positions in the store, and fires
+     * 'stable' when that changed. step() calls it; engines that step elsewhere (the GPU) call it
+     * after they bring positions back.
+     */
+    checkStable: function () {
+      var isStableNow = bodiesCount === 0 || stability.update();
       updateStableStatus(isStableNow);
-
-
       return isStableNow;
+    },
+
+    /**
+     * Whether and why the layout has settled: {stable, reason, step, stillness, noise}.
+     * `reason` is 'still' (the drawing stopped changing) or 'noise' (what still moves goes
+     * nowhere); `step` is when it settled; `stillness` is how far bodies moved over the last
+     * window, as a share of the drawing's size; `noise` how much further they moved over four
+     * windows than over one (16 for directed motion, 1 to 4 for noise).
+     */
+    getStability: function () {
+      return stability.state();
     },
 
     /**
@@ -90,6 +115,8 @@ function createLayout(graph, physicsSettings) {
     setNodePosition: function (nodeId) {
       var body = getInitializedBody(nodeId);
       body.setPosition.apply(body, Array.prototype.slice.call(arguments, 1));
+      // A node moved by hand: the others have to settle around it again
+      wake();
     },
 
     /**
@@ -188,6 +215,11 @@ function createLayout(graph, physicsSettings) {
   if (physicsSimulator.watchListeners) physicsSimulator.watchListeners(api);
 
   return api;
+
+  function wake() {
+    stability.reset();
+    updateStableStatus(bodiesCount === 0);
+  }
 
   function updateStableStatus(isStableNow) {
     if (wasStable !== isStableNow) {

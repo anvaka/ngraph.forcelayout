@@ -111,6 +111,42 @@ test('it fires stable on empty graph', function(t) {
   }
 });
 
+test('it settles, and wakes when a node is moved or a setting changes', function (t) {
+  var graph = require('ngraph.generators').grid(10, 10);
+  var layout = createLayout(graph);
+  var changes = [];
+  layout.on('stable', function (isStable) { changes.push(isStable); });
+  var steps = 0;
+  while (!layout.step() && steps < 5000) steps += 1;
+  t.ok(steps < 5000, 'settles within 5000 steps (' + steps + ')');
+  var state = layout.getStability();
+  t.ok(state.stable && (state.reason === 'still' || state.reason === 'noise'), 'says why: ' + state.reason);
+  t.ok(layout.step(), 'stays settled while nothing changes');
+
+  layout.setNodePosition(0, 100, 100);
+  t.notOk(layout.getStability().stable, 'moving a node wakes it');
+  steps = 0;
+  while (!layout.step() && steps < 5000) steps += 1;
+  t.ok(layout.getStability().stable, 'and it settles again');
+
+  layout.simulator.gravity(-20);
+  t.notOk(layout.getStability().stable, 'a setting change wakes it');
+  t.same(changes.slice(0, 3), [true, false, true], 'stable fires on every change');
+  t.end();
+});
+
+test('settling does not depend on the unit of length', function (t) {
+  var generators = require('ngraph.generators');
+  var at = [0.25, 4].map(function (s) {
+    var layout = createLayout(generators.grid(10, 10), { springLength: 10 * s, gravity: -12 * s * s * s, maxVelocity: 4 * s });
+    var steps = 1;
+    while (!layout.step() && steps < 5000) steps += 1;
+    return steps;
+  });
+  t.equal(at[0], at[1], 'settles at the same step at both scales');
+  t.end();
+});
+
 test('can add bodies which are standard prototype names', function (t) {
   var graph = createGraph();
   graph.addLink('constructor', 'watch');
