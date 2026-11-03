@@ -8,6 +8,7 @@ import placeNodes from 'ngraph.forcelayout.pivot';
 import {createWebGPUBackend, runOnGpu} from 'ngraph.forcelayout.gpu';
 import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes, navigateNodes, searchNodes, labelNodes} from 'ngraph.forcelayout.view';
 import createGraph from 'ngraph.graph';
+import {stepsForFrame} from './deviceDefaults';
 
 const NODE_COLOR = 0x90f8fcff;
 const layoutProps = ['timeStep', 'springLength', 'springCoefficient', 'dimensions', 'dragCoefficient', 'gravity', 'theta', 'maxVelocity', 'integrator', 'nbody'];
@@ -31,7 +32,10 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   let isRunning = false;
   // The frame loop runs only while the layout runs; a paused layout draws only when the view changes
   let rafHandle = 0;
-  let stepsPerFrame = sceneSettings.stepsPerFrame || 1;
+  // 0 is "auto": as many steps as fit in frameBudget ms (see deviceDefaults.js)
+  let stepsPerFrame = sceneSettings.stepsPerFrame ?? 1;
+  let frameBudget = sceneSettings.frameBudget || 8;
+  let lastFrameSteps = 0;
   let placement = sceneSettings.placement || 'default';
   let placementChoice = '';
   // An experimental idea from demo/src/prototypes, attached to every new layout
@@ -184,7 +188,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   }
 
   function setStepsPerFrame(newStepsPerFrame) {
-    stepsPerFrame = Math.max(1, Math.round(newStepsPerFrame) || 1);
+    stepsPerFrame = Math.max(0, Math.round(newStepsPerFrame) || 0);
   }
 
   async function setBackend(newBackend) {
@@ -264,6 +268,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
       links: graph ? graph.getLinksCount() : 0,
       steps: stats.steps,
       msPerStep: gpu ? gpu.stats().msPerStep : stats.msPerStep(),
+      // steps the last frame ran (with steps per frame on auto, what the budget allowed)
+      stepsPerFrame: lastFrameSteps,
       placement: placementChoice,
       canFinishPrototype: !!(prototypeControl && prototypeControl.finish),
       // why the layout runs on the CPU although WebGPU is picked
@@ -351,14 +357,19 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     rafHandle = requestAnimationFrame(frame);
     if (changing) return;
 
+    let steps = stepsForFrame(stepsPerFrame, gpu ? gpu.stats().msPerStep : stats.msPerStep(), frameBudget);
+    lastFrameSteps = steps;
     let start = performance.now();
     if (gpu) {
-      gpu.step(stepsPerFrame);
+      gpu.step(steps);
     } else {
       // each step fires the layout's 'step' event, on which the view asks for a frame
-      for (let i = 0; i < stepsPerFrame; ++i) layout.step();
+      for (let i = 0; i < steps; ++i) layout.step();
     }
-    stats.record(performance.now() - start, stepsPerFrame);
+    stats.record(performance.now() - start, steps);
+    // An automatic stop would plug in here: layout.step() returns whether the layout is stable,
+    // and on WebGPU the layout fires 'stable' from the movement between readbacks. Stopping is
+    // runLayout(false) plus telling the panel (isRunning); not done yet.
     if (fixedViewBox) {
       let rect = layout.getGraphRect();
       scene.setViewBox({

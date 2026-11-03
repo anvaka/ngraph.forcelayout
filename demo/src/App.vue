@@ -79,10 +79,11 @@
       <div class='section'>
         Speed-ups
         <small>
-          <a href='#' @click.prevent='useSpeedups(true)'>turn all on</a> |
-          <a href='#' @click.prevent='useSpeedups(false)'>library defaults</a>
+          <a href='#' @click.prevent='useDeviceDefaults' title='The settings picked for this device'>this device</a> |
+          <a href='#' @click.prevent='useLibraryDefaults' title="The library's own defaults">library defaults</a>
         </small>
       </div>
+      <div class='device-note' v-if='deviceSummary'>{{deviceSummary}}</div>
       <input-value label='Max velocity' v-model='layoutSettings.maxVelocity'>
         Maximum distance a node can travel in one unit of time (each step moves a node by at most
         time step * max velocity). Library default is 4. Set it to 1 to get the layouts of versions
@@ -100,8 +101,9 @@
         <b>dual tree</b> lets pairs of tree cells interact with each other, which is 5-10x faster on large
         graphs with the same accuracy. Both use theta.
       </input-select>
-      <input-value label='Steps per frame' v-model='stepsPerFrame' step=1>
+      <input-value label='Steps per frame' v-model='stepsPerFrame' step=1 :note='stepsNote'>
         How many layout steps to run before each frame is rendered. Fast layouts can do many steps per frame.
+        <b>0</b> is auto: as many steps as fit in {{device.frameBudget}} ms of each frame, up to {{maxAutoSteps}}.
       </input-value>
 
       <input-flag label='Follow bounding box' v-model='fixedViewBox' step=1>
@@ -167,9 +169,7 @@ import InputFlag from './components/InputFlag.vue';
 import InputSelect from './components/InputSelect.vue';
 import HelpIcon from './components/HelpIcon.vue';
 import prototypes from './prototypes';
-
-const librarySpeedSettings = {maxVelocity: 4, integrator: 'euler', nbody: 'quadtree'};
-const fastSpeedSettings = {maxVelocity: 4, integrator: 'fire', nbody: 'dualtree'};
+import {libraryChoice, deviceKeys, maxAutoSteps, readSignals, pickDefaults, probeWebGPU} from './lib/deviceDefaults';
 
 let appState = queryState({
   graph: 'Miserables',
@@ -182,12 +182,18 @@ let appState = queryState({
   gravity: -12,
   maxVelocity: 4,
   integrator: 'euler',
-  nbody: 'quadtree',
-  placement: 'default',
-  backend: 'cpu',
-  stepsPerFrame: 1,
+  // nbody, placement, backend and stepsPerFrame have no defaults here: the device picks them
+  // (deviceDefaults.js), and they are in the URL only when the link or the visitor sets them
   prototype: 'none',
 }, { useSearch: true });
+
+const deviceChoice = pickDefaults(readSignals());
+// Device settings the URL doesn't set: they follow the device until the visitor changes them
+const pickedByDevice = Object.fromEntries(deviceKeys.map(key => [key, appState.get(key) === undefined]));
+
+function startValue(key) {
+  return pickedByDevice[key] ? deviceChoice[key] : appState.get(key);
+}
 
 // Prototype parameters live in the URL as p.<key>
 const PARAM_PREFIX = 'p.';
@@ -222,10 +228,10 @@ export default {
       return this.layoutSettings.integrator === 'fire';
     },
     integratorOptions() {
-      return [{value: 'euler', label: 'euler (default)'}, {value: 'fire', label: 'fire'}];
+      return [{value: 'euler', label: 'euler (library default)'}, {value: 'fire', label: 'fire'}];
     },
     nbodyOptions() {
-      return [{value: 'quadtree', label: 'quad tree (default)'}, {value: 'dualtree', label: 'dual tree'}];
+      return [{value: 'quadtree', label: 'quad tree (library default)'}, {value: 'dualtree', label: 'dual tree'}];
     },
     placementOptions() {
       return [{value: 'default', label: 'library default'}, {value: 'pivot', label: 'pivot MDS (add-on)'}];
@@ -247,11 +253,57 @@ export default {
     },
     backendOptions() {
       return [{value: 'cpu', label: 'CPU (library)'}, {value: 'webgpu', label: 'WebGPU (add-on)', disabled: this.gpuAvailable === false}];
+    },
+    // What still follows the device, e.g. "Picked for this device: dual tree, pivot MDS start, WebGPU, auto steps per frame."
+    deviceSummary() {
+      let names = {
+        nbody: value => value === 'dualtree' ? 'dual tree' : 'quad tree',
+        placement: value => value === 'pivot' ? 'pivot MDS start' : 'library start',
+        backend: value => value === 'webgpu' ? 'WebGPU' : this.gpuAvailable === false ? 'CPU (no WebGPU here)' : 'CPU',
+        stepsPerFrame: value => value === 0 ? 'auto steps per frame' : `${value} steps per frame`
+      };
+      let picked = deviceKeys.filter(key => this.picked[key]).map(key => names[key](this.device[key]));
+      return picked.length ? `Picked for this device: ${picked.join(', ')}.` : '';
+    },
+    stepsNote() {
+      if (this.stepsPerFrame !== 0) return '';
+      let now = this.stats && this.stats.stepsPerFrame;
+      return `Auto: ${now ? `${now} a frame now, ` : ''}as many as fit in ${this.device.frameBudget} ms.`;
     }
   },
   methods: {
-    useSpeedups(enabled) {
-      Object.assign(this.layoutSettings, enabled ? fastSpeedSettings : librarySpeedSettings);
+    // Back to what the device picks: these settings leave the URL
+    useDeviceDefaults() {
+      deviceKeys.forEach(key => {
+        this.picked[key] = true;
+        appState.unset(key);
+      });
+      this.applyChoice(this.device);
+    },
+
+    // The library's own defaults, as a choice of the visitor (it goes into the URL)
+    useLibraryDefaults() {
+      Object.assign(this.layoutSettings, {maxVelocity: 4, integrator: 'euler'});
+      this.applyChoice(libraryChoice);
+    },
+
+    applyChoice(choice) {
+      this.layoutSettings.nbody = choice.nbody;
+      this.placement = choice.placement;
+      this.stepsPerFrame = choice.stepsPerFrame;
+      this.backend = choice.backend;
+    },
+
+    // Writes a changed setting to the URL, except a device setting that still has the device's
+    // value, and the CPU the demo fell back to (the link keeps asking for what it asked)
+    remember(key, value) {
+      if (this.fallback[key] === value) {
+        delete this.fallback[key];
+        return;
+      }
+      if (this.picked[key] && value === this.device[key]) return;
+      if (key in this.picked) this.picked[key] = false;
+      appState.set(key, value);
     },
 
     restart() {
@@ -278,6 +330,7 @@ export default {
       if (this.stats.gpuError && this.backend === 'webgpu') {
         // the GPU stopped (e.g. its device was lost): the scene carries on with the CPU
         this.gpuMessage = `WebGPU stopped (${this.stats.gpuError}), switched back to CPU.`;
+        this.fallback.backend = 'cpu';
         this.backend = 'cpu';
       }
     },
@@ -306,30 +359,43 @@ export default {
       deep: true,
       handler(newValue) {
         this.scene.updateLayoutSettings(newValue);
-        appState.set(newValue);
+        // only what changed (and not a number being typed): the device's choice stays out of the URL
+        Object.keys(newValue).forEach(key => {
+          let value = newValue[key];
+          if (value === this.lastLayoutSettings[key] || Number.isNaN(value)) return;
+          this.remember(key, value);
+        });
+        this.lastLayoutSettings = {...newValue};
       }
     },
     fixedViewBox(newValue) {
       this.scene.setFixedViewBox(newValue);
     },
     placement(newValue) {
-      appState.set('placement', newValue);
+      this.remember('placement', newValue);
       this.scene.setPlacement(newValue);
     },
     stepsPerFrame(newValue) {
-      appState.set('stepsPerFrame', newValue);
+      if (Number.isFinite(newValue)) this.remember('stepsPerFrame', newValue);
       this.scene.setStepsPerFrame(newValue);
     },
     backend(newValue) {
       this.scene.setBackend(newValue).then(actualBackend => {
         if (actualBackend !== newValue) {
-          this.gpuMessage = 'WebGPU is not available in this browser.';
           this.gpuAvailable = false;
+          if (this.picked.backend) {
+            // the device turned out to have no WebGPU: its choice is the CPU
+            this.device.backend = actualBackend;
+            this.gpuMessage = 'No WebGPU in this browser: runs on the CPU.';
+          } else {
+            this.gpuMessage = 'WebGPU is not available in this browser: runs on the CPU.';
+            this.fallback.backend = actualBackend;
+          }
           this.backend = actualBackend;
-        } else if (newValue === 'webgpu') {
-          this.gpuMessage = '';
+          return;
         }
-        appState.set('backend', this.backend);
+        if (newValue === 'webgpu') this.gpuMessage = '';
+        this.remember('backend', newValue);
       });
     },
     selectedGraph(newGraph) {
@@ -389,12 +455,18 @@ export default {
         gravity: appState.get('gravity'),
         maxVelocity: appState.get('maxVelocity'),
         integrator: appState.get('integrator'),
-        nbody: appState.get('nbody'),
+        nbody: startValue('nbody'),
       },
-      placement: appState.get('placement'),
+      placement: startValue('placement'),
       // WebGPU is turned on after the first graph is loaded (see mounted)
       backend: 'cpu',
-      stepsPerFrame: appState.get('stepsPerFrame'),
+      stepsPerFrame: startValue('stepsPerFrame'),
+      // What this device picks, and which settings still follow it (not set by the URL or the visitor)
+      device: {...deviceChoice},
+      picked: {...pickedByDevice},
+      // The backend the demo fell back to, which the URL doesn't get (see remember)
+      fallback: {},
+      maxAutoSteps,
       prototypes,
       prototypeId: findPrototype(appState.get('prototype')) ? appState.get('prototype') : 'none',
       prototypeParams: getPrototypeParams(findPrototype(appState.get('prototype')), true),
@@ -408,14 +480,29 @@ export default {
   },
   mounted() {
     const canvas = document.getElementById('cnv');
+    this.lastLayoutSettings = {...this.layoutSettings};
     this.scene = createGraphScene(canvas, {...this.layoutSettings}, {
       placement: this.placement,
-      stepsPerFrame: this.stepsPerFrame
+      stepsPerFrame: this.stepsPerFrame,
+      frameBudget: this.device.frameBudget
     });
     if (this.activePrototype) this.scene.setPrototype(this.activePrototype, this.prototypeParams);
     this.loadNewGraph(this.selectedGraph);
     bus.on('load-graph', this.onGraphLoaded);
-    if (appState.get('backend') === 'webgpu') this.backend = 'webgpu';
+    if (!this.picked.backend) {
+      if (appState.get('backend') === 'webgpu') this.backend = 'webgpu';
+    } else if (this.device.backend === 'webgpu') {
+      // navigator.gpu alone is not enough: there must be a hardware adapter
+      probeWebGPU().then(ok => {
+        if (!this.picked.backend) return;
+        if (ok) {
+          this.backend = 'webgpu';
+        } else {
+          this.device.backend = 'cpu';
+          this.gpuAvailable = false;
+        }
+      });
+    }
     this.statsTimer = setInterval(this.updateStats, 250);
   },
 
@@ -475,6 +562,11 @@ a {
   a {
     color: #267fcd;
   }
+}
+.device-note {
+  font-size: 12px;
+  opacity: 0.7;
+  margin-bottom: 4px;
 }
 .about {
   font-size: 14px;
