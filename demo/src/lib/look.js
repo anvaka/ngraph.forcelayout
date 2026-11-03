@@ -17,8 +17,8 @@ const LOOK = {
   // Labels: the page's text color, a halo of the canvas wide enough to knock lines out under them
   labels: {
     color: 0xe6ebf2ff,
-    halo: 0x0e1624f2,
-    haloWidth: 3,
+    halo: 0x0e1624b3,
+    haloWidth: 2,
   },
   // Tooltip: the panel's surface, opaque
   inspect: {

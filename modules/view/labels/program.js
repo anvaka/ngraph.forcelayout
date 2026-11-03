@@ -66,7 +66,8 @@ const VERTEX = `
     if (isPointed(flags) + hasFlag(flags, 2.0) + hasFlag(flags, 16.0) < 0.5) alpha *= dimAlpha;
     vAlpha = alpha;
     // Pointed and selected nodes' labels at full brightness; others at their tier's tone
-    vTone = isPointed(flags) + hasFlag(flags, 2.0) > 0.5 ? 1.0 : node.w;
+    // (-1: a label over the others: full brightness, on a plate)
+    vTone = node.w < 0.0 ? -1.0 : isPointed(flags) + hasFlag(flags, 2.0) > 0.5 ? 1.0 : node.w;
   }`;
 
 const FRAGMENT = `
@@ -81,11 +82,13 @@ const FRAGMENT = `
     // Premultiplied: red is the text's coverage, green the halo's where the text isn't
     vec4 texel = texture2D(atlas, vUv);
     float text = texel.r;
-    float halo = texel.g * haloColor.a;
+    // A label over the others sits on a plate: its whole box in the halo's color
+    float plate = vTone < 0.0 ? 1.0 : 0.0;
+    float halo = max(texel.g * haloColor.a, plate * (1.0 - text));
     float alpha = text + halo;
     if (alpha <= 0.0) discard;
     // A dimmer tone mixes the text toward the halo (the background): a grey, not a see-through
-    vec3 ink = mix(haloColor.rgb, textColor.rgb, vTone);
+    vec3 ink = mix(haloColor.rgb, textColor.rgb, abs(vTone));
     vec3 color = (ink * text + haloColor.rgb * halo) / alpha;
     gl_FragColor = vec4(color, alpha * textColor.a * vAlpha);
   }`;
