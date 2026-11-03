@@ -15,7 +15,13 @@
   white-space: nowrap;
 }
 
-/* Name, and one line of what it is */
+/* Name with the install line (beside it when both fit, else under it), and one line of what
+   it is */
+.title-row .name-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
 .title-row {
   padding: 8px 8px 6px;
 }
