@@ -143,8 +143,7 @@ h2 .sub { color: var(--text-3); font-weight: 400; }
   min-width: 0;
 }
 .graph-picker select,
-.block select,
-.code-settings select {
+.block select {
   appearance: none;
   -webkit-appearance: none;
   width: 100%;
@@ -464,48 +463,34 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
 }
 
 /* Settings as code: syntax in text tones, so the drawing stays the most colorful thing on the
-   page; a value you changed is the accent, on a faint accent field */
-.code-settings { font-size: 13px; }
-.code {
-  font-family: var(--mono);
-  font-size: 12.5px;
-  line-height: 1.75;
-  color: var(--text-2);
-  overflow-x: auto;
-}
-.code .line { white-space: pre; }
-.code .line.indent { padding-left: 2ch; }
-.code .line.blank { height: 0.9em; }
+   page; a value you changed is the accent, on a faint accent field. Colors only: sizes, lines
+   and touch targets are layout (styles/layout.css). */
+.code { font-family: var(--mono); color: var(--text-2); }
 .code .kw { color: var(--text-3); }
 .code .str { color: var(--text-2); }
 .code .comment, .code .line.comment { color: var(--text-3); }
-.code label { color: var(--text-2); cursor: pointer; }
-.code .value, .code input, .code select {
-  display: inline-block;
-  min-width: 2ch;
-  height: auto;
-  margin: 0 1px;
-  padding: 0 2px;
+.code label { color: var(--text-2); }
+.code .value, .code input:not([type='checkbox']), .code select {
   border: none;
   border-bottom: 1px dotted var(--text-3);
-  border-radius: 3px 3px 0 0;
-  background: transparent;
+  background: var(--field);
   color: var(--text);
   font: inherit;
-  text-align: left;
 }
-.code select { width: auto; padding-right: 2px; cursor: pointer; }
-.code .value:hover, .code select:hover { background: var(--field); }
-.code .value:focus, .code select:focus { outline: none; background: var(--field-focus); border-bottom-color: var(--accent); }
+.code .value:hover, .code select:hover { background: var(--field-hover); }
+.code .value:focus, .code select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  background: var(--field-focus);
+  border-bottom-color: var(--accent);
+}
 .code .changed .value, .code .changed select, .code .value.changed {
   color: var(--accent);
   background: var(--accent-field);
   border-bottom-color: var(--accent);
 }
-.code .unused { opacity: 0.55; }
-.code .toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .code .toggle.off span:not(.comment) { color: var(--text-3); text-decoration: line-through; text-decoration-color: var(--line-strong); }
-.code .help { color: var(--text-3); white-space: normal; padding-right: 1ch; }
+.code .help { color: var(--text-3); }
 .code-actions {
   display: flex;
   align-items: center;
@@ -523,27 +508,7 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
   .block input[type='number'], .block select { height: 34px; }
   .help-icon { flex-basis: 28px; width: 28px; height: 28px; }
   .backend-switch button, .switch button { height: 32px; min-width: 44px; }
-  /* Code values: a 44 px tall hit area without moving the code's lines. The dotted underline
-     and the field are painted at the text, not at the padded box's edge */
-  .code .value, .code select {
-    padding: 10px 2px;
-    margin: -10px 0;
-    line-height: 1.3;
-    border-bottom: none;
-    background: linear-gradient(to right, var(--text-3) 50%, transparent 0) left 2px bottom 10px / 4px 1px repeat-x;
-  }
-  .code .value:hover, .code select:hover {
-    background: linear-gradient(to right, var(--text-3) 50%, transparent 0) left 2px bottom 10px / 4px 1px repeat-x,
-      linear-gradient(var(--field), var(--field)) content-box;
-  }
-  .code .value:focus, .code select:focus {
-    background: linear-gradient(var(--accent), var(--accent)) left 2px bottom 10px / calc(100% - 4px) 1px no-repeat,
-      linear-gradient(var(--field-focus), var(--field-focus)) content-box;
-  }
-  .code .changed .value, .code .changed select, .code .value.changed {
-    background: linear-gradient(var(--accent), var(--accent)) left 2px bottom 10px / calc(100% - 4px) 1px no-repeat,
-      linear-gradient(var(--accent-field), var(--accent-field)) content-box;
-  }
+  /* Code values' hit sizes on touch are layout (styles/layout.css: 32 px lines and values) */
 }
 
 /* A phone: the panel spans the top; Settings open as a sheet from the bottom */
