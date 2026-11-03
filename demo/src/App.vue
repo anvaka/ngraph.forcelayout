@@ -173,7 +173,7 @@ import prototypes from './prototypes';
 import {libraryChoice, deviceKeys, maxAutoSteps, readSignals, pickDefaults, probeWebGPU} from './lib/deviceDefaults';
 
 let appState = queryState({
-  graph: 'Miserables',
+  graph: 'Mammals (WordNet)',
   timeStep: 0.5,
   springLength: 10,
   springCoefficient: 0.8,
