@@ -169,7 +169,8 @@ export function createInput(canvas, options) {
       try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* the pointer is gone already */ }
     }
     if (canvas.focus && env.document && env.document.activeElement !== canvas) {
-      canvas.focus({preventScroll: true});
+      // A press is not keyboard focus: no focus ring (browsers that ignore focusVisible decide themselves)
+      canvas.focus({preventScroll: true, focusVisible: false});
     }
 
     let p = new Pointer(e, local(e), env.now(), options.pick);

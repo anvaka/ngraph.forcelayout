@@ -30,7 +30,7 @@ const LOOK = {
   // Links: one color; their alpha follows the ink they put on screen (createGraphScene.js)
   linkRGB: 0xffffff,
   // Opacity links should add to a pixel where they crowd most (the 90th percentile of a grid)
-  linkInk: 0.35,
+  linkInk: 0.25,
   // Alpha range: 1/255 lets a 200k-link hairball show its texture
   linkAlpha: [1 / 255, 0.5],
   // Links inside a category take its color; links between categories are this much fainter

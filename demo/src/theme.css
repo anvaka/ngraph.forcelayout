@@ -49,7 +49,7 @@ body {
   position: absolute;
   top: var(--gap);
   left: var(--gap);
-  width: 340px;
+  width: 360px;
   max-height: calc(100dvh - 2 * var(--gap));
   overflow-y: auto;
   background: var(--panel);
