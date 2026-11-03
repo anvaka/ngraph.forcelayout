@@ -212,9 +212,11 @@ export default {
         return nodes;
       },
       stats: () => Object.assign({}, stats),
-      boxes() {
+      // `{fading: true}`: also the labels still fading out
+      boxes(which) {
         let time = (performance.now() - epoch) / 1000;
-        return currentBoxes().map(b => ({node: b.node, x: b.x, y: b.y, width: b.width, height: b.height,
+        let list = which && which.fading ? currentBoxes(true) : currentBoxes();
+        return list.map(b => ({node: b.node, x: b.x, y: b.y, width: b.width, height: b.height,
           alpha: alphaAt(b.label, time, settings.fade / 1000), front: !!b.label.front}));
       },
       dispose() {
@@ -314,6 +316,7 @@ export default {
         // No new name prints over one still fading out
         blocked: fadingOut.length ? box => (covered && covered(box)) || overlapsAny(box, fadingOut) : covered
       });
+      placed = withoutOverprint(placed, screen);
       canvasSize.width = screen.width;
       canvasSize.height = screen.height;
       apply(placed, screen, now);
@@ -537,22 +540,25 @@ export default {
 
     // Where the labels are on the canvas now (they follow their nodes), in drawing order: the
     // ones shown or fading in, with an image. Measured again after the nodes or the camera moved.
-    function currentBoxes() {
-      if (boxCache) return boxCache;
-      let list = drawOrder().filter(label => label.to > 0 && label.anchor && ctx.layout.getBody(label.node.id));
+    function currentBoxes(withFading) {
+      if (boxCache && !withFading) return boxCache;
+      let time = (performance.now() - epoch) / 1000, fade = settings.fade / 1000;
+      let list = drawOrder().filter(label => (label.to > 0 || (withFading && time - label.start < fade)) &&
+        label.anchor && ctx.layout.getBody(label.node.id));
       let discs = list.length ? ctx.discsOf(list.map(label => label.node)) : [];
       let box = {x: 0, y: 0, width: 0, height: 0};
-      boxCache = [];
+      let out = [];
       list.forEach((label, i) => {
         let disc = discs[i];
         if (!disc) return;
         let size = sizeOf(label.node, label.tier);
         boxBeside({x: disc.x, y: disc.y, radius: drawnRadius(label.node, disc.radius, !!label.front), width: size.width, height: size.height},
           label.anchor, settings.gap, box);
-        boxCache.push({label, node: label.node, x: box.x, y: box.y, width: box.width, height: box.height,
+        out.push({label, node: label.node, x: box.x, y: box.y, width: box.width, height: box.height,
           disc: {x: disc.x, y: disc.y, radius: disc.radius}, front: !!label.front});
       });
-      return boxCache;
+      if (!withFading) boxCache = out;
+      return out;
     }
 
     // The buffer the shader reads: one entry per label shown or fading out, those in front last
@@ -684,6 +690,25 @@ export default {
     }
 
     // Boxes of labels still fading out, where they are now: a new label waits for them to go
+    // A label this placement drops starts fading out now: a new label that would take its place in
+    // the same placement waits for the next one (when the old one's box blocks it until it is gone)
+    function withoutOverprint(placed, screen) {
+      let kept = new Set(placed.map(p => p.row));
+      let dropped = [];
+      shown.forEach(label => {
+        if (!(label.to > 0) || label.frontOnly || label.ox === undefined) return;
+        let body = ctx.layout.getBody(label.node.id);
+        if (!body || kept.has(body.index) || body.index >= screen.x.length || !screen.onScreen[body.index]) return;
+        dropped.push(screen.x[body.index] + label.ox, screen.y[body.index] + label.oy, label.w, label.h);
+      });
+      if (!dropped.length) return placed;
+      return placed.filter(p => {
+        let label = shown.get(screen.nodes[p.row].id);
+        let isNew = !(label && label.to > 0 && !label.frontOnly);
+        return !isNew || !overlapsAny(p, dropped);
+      });
+    }
+
     function fadingBoxes(screen, now) {
       let time = (now - epoch) / 1000, fade = settings.fade / 1000, list = [];
       shown.forEach(label => {
