@@ -259,9 +259,6 @@ body.drag-over::after {
   color: var(--accent, #4fb3ff);
   border-bottom-color: var(--accent, #4fb3ff);
 }
-.code .unused {
-  opacity: 0.55;
-}
 .code .toggle {
   cursor: pointer;
   padding-left: 0;
