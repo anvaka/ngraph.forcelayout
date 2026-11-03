@@ -523,7 +523,8 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
   .block input[type='number'], .block select { height: 34px; }
   .help-icon { flex-basis: 28px; width: 28px; height: 28px; }
   .backend-switch button, .switch button { height: 32px; min-width: 44px; }
-  .code .value, .code select { padding: 6px 4px; margin: -6px 0; }
+  /* Code values: a 44 px tall hit area without moving the code's lines */
+  .code .value, .code select { padding: 10px 4px; margin: -10px 0; background-clip: content-box; }
 }
 
 /* A phone: the panel spans the top; Settings open as a sheet from the bottom */
