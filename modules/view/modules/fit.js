@@ -172,16 +172,21 @@ export default {
       let scaleNow = Math.min(free.width / axis.extent(now), free.height / axis.extent(now + Math.PI / 2));
       let scaleTurned = Math.min(free.width / axis.extent(want), free.height / axis.extent(want + Math.PI / 2));
       if (!(scaleTurned * scaleTurned >= settings.orient * scaleNow * scaleNow)) return;
-      // phi turns the view about the vertical; which way the screen turns is measured, not assumed
-      let phi0 = angles().phi;
+      // phi turns the view about the vertical; which way the screen turns is measured, not assumed.
+      // From straight above phi can't be read back from the camera, so the turn is applied in steps
+      // that add up, and the probe is undone.
       cam.rotateByAngle(0.01, 0);
       cam.redraw();
       let e2 = ctx.toScreen(axis.cx + axis.ux, axis.cy + axis.uy, 0), c2 = ctx.toScreen(axis.cx, axis.cy, 0);
+      cam.rotateByAngle(-0.01, 0);
+      cam.redraw();
+      if (!e2 || !c2) return;
       let shift = Math.atan2(e2.y - c2.y, e2.x - c2.x) - now;
       if (shift > Math.PI) shift -= 2 * Math.PI;
       if (shift < -Math.PI) shift += 2 * Math.PI;
       // phi by +0.01 turned the screen by `shift`: the turn in phi that gives `delta` on the screen
       let total = (Math.sign(shift) || 1) * delta;
+      let applied = 0;
       let start = performance.now();
       let duration = reduced && reduced.matches ? 0 : settings.orientTime;
       if (turning) cancelAnimationFrame(turning);
@@ -190,19 +195,15 @@ export default {
         if (!following) return;
         let t = duration > 0 ? Math.min(1, (performance.now() - start) / duration) : 1;
         let eased = t < 1 ? 1 - Math.pow(1 - t, 3) : 1;
-        turnTo(cam, phi0 + total * eased);
+        let next = total * eased;
+        cam.rotateByAngle(next - applied, 0);
+        cam.redraw();
+        applied = next;
         pending = true;
         fitNow(true);
         if (t < 1) turning = requestAnimationFrame(step);
       };
-      turnTo(cam, phi0);
       step();
-    }
-
-    function turnTo(cam, phi) {
-      let now = angles();
-      cam.rotateByAngle(phi - now.phi, 0);
-      cam.redraw();
     }
 
     function checkArea() {
@@ -366,21 +367,44 @@ export default {
     // corners of its box. Null when a point is behind the camera.
     function projectBox(b) {
       if (b.D > 2) return projectNodes(b);
+      let corners = b.corners || (b.corners = screenAlignedCorners(b));
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      let zs = [0];
-      for (let i = 0; i < 2; ++i) {
-        for (let j = 0; j < 2; ++j) {
-          for (let k = 0; k < zs.length; ++k) {
-            let p = ctx.toScreen(i ? b.maxX : b.minX, j ? b.maxY : b.minY, zs[k]);
-            if (!p) return null;
-            if (p.x < minX) minX = p.x;
-            if (p.x > maxX) maxX = p.x;
-            if (p.y < minY) minY = p.y;
-            if (p.y > maxY) maxY = p.y;
-          }
-        }
+      for (let i = 0; i < corners.length; i += 2) {
+        let p = ctx.toScreen(corners[i], corners[i + 1], 0);
+        if (!p) return null;
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
       }
       return {x: minX, y: minY, width: Math.max(maxX - minX, 1e-3), height: Math.max(maxY - minY, 1e-3)};
+    }
+
+    // 2D: the corners of the nodes' box along the screen's axes (the view may be turned), so a
+    // turned drawing doesn't get the room of its box's corners. The camera turns only in
+    // orient(), never inside a fit, so the axes stay put while the fit converges.
+    function screenAlignedCorners(b) {
+      let m = ctx.scene.getDrawContext().view.cameraWorld;
+      let rx = m[0], ry = m[1], ux = m[4], uy = m[5];
+      let lr = Math.hypot(rx, ry) || 1, lu = Math.hypot(ux, uy) || 1;
+      rx /= lr; ry /= lr; ux /= lu; uy /= lu;
+      if (Math.abs(rx - 1) < 1e-9 && Math.abs(uy - 1) < 1e-9) {
+        return [b.minX, b.minY, b.maxX, b.minY, b.minX, b.maxY, b.maxX, b.maxY];
+      }
+      let {pos, D, n} = ctx.layout.simulator.store;
+      let r0 = Infinity, r1 = -Infinity, u0 = Infinity, u1 = -Infinity;
+      for (let i = 0; i < n; ++i) {
+        let x = pos[i * D], y = pos[i * D + 1];
+        if (!(x >= b.minX && x <= b.maxX && y >= b.minY && y <= b.maxY)) continue;
+        let r = x * rx + y * ry, u = x * ux + y * uy;
+        if (r < r0) r0 = r;
+        if (r > r1) r1 = r;
+        if (u < u0) u0 = u;
+        if (u > u1) u1 = u;
+      }
+      if (!(r0 <= r1)) return [b.minX, b.minY, b.maxX, b.minY, b.minX, b.maxY, b.maxX, b.maxY];
+      let corner = (r, u) => [r * rx + u * ux, r * ry + u * uy];
+      return [].concat(corner(r0, u0), corner(r1, u0), corner(r0, u1), corner(r1, u1));
     }
 
     function projectNodes(b) {
