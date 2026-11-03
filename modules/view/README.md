@@ -266,7 +266,9 @@ modules and not styled.
 `dimAlpha` (0.15). A color with alpha 0 keeps the
 node's own color.
 
-Rings: `pointedRing` and `selectedRing` (0: none) draw a ring around pointed and selected nodes,
+Rings: `pointedRing` and `selectedRing` (0: none) draw a ring around pointed and selected nodes
+(`focusedRing`, when set, for focused ones: the keyboard's place, or where search went; a pointer
+on a node still shows `pointedRing`),
 `ringWidth` (2) CSS pixels wide, with a halo of `ringHalo` (`0x000000cc`; best the background's
 color) `ringGap` (2) pixels wide between the node and its ring. A ring reads on a node of any color
 and in any crowd, so with rings the fill colors can be 0, and nodes keep their own color (their
@@ -299,8 +301,8 @@ made for a dark background:
   at 1/255. A 200k-link hairball keeps its texture; a sparse tree's links are bright.
 * **Nodes at least `minSize`** (3.5) CSS pixels wide, less where they crowd, and at most `room`
   (0.7) of the distance to their nearest neighbour as big (the view's `nodeRoom`).
-* **Highlights** (`rings`, true): hovered, found and focused nodes keep their color with a white
-  ring, selected ones an amber ring; lit links in one light color. While something is selected,
+* **Highlights** (`rings`, true): nodes keep their color and get a ring: white under the pointer,
+  cyan when focused or found by search, amber when selected; lit links in one light color. While something is selected,
   the rest fades to `dim` (0.3), so the visitor still sees where the selection is.
 * **`background`** (`'#0e1624'`): the scene's clear color, the rings' and the labels' halo.
 * In 3D, `fog` (0.3) fades the far side of the drawing.

@@ -62,6 +62,8 @@ const NODE_VERTEX = `
   // the ring's widths
   uniform vec4 pointedRing;
   uniform vec4 selectedRing;
+  // The ring of a focused node (the keyboard's place, a node search went to); alpha 0: pointedRing
+  uniform vec4 focusedRing;
   uniform vec4 ringHalo;
   uniform vec2 ringSize;
   // Alpha of nodes that are neither selected, next to a selected node, nor pointed at, while
@@ -119,7 +121,13 @@ const NODE_VERTEX = `
         diameter = max(diameter * pointedSize.x, pointedSize.y / scale);
       }
       if (pointed + selected + hasFlag(flags, 16.0) < 0.5) c.a *= dimAlpha;
-      ring = pointed > 0.5 && pointedRing.a > 0.0 ? pointedRing : selected > 0.5 ? selectedRing : vec4(0.0);
+      // A pointer on the node wins, then focus, then selection
+      float pointer = max(hasFlag(flags, 1.0), hasFlag(flags, 4.0));
+      float focused = hasFlag(flags, 8.0);
+      ring = pointer > 0.5 && pointedRing.a > 0.0 ? pointedRing
+        : focused > 0.5 && focusedRing.a > 0.0 ? focusedRing
+        : pointed > 0.5 && pointedRing.a > 0.0 ? pointedRing
+        : selected > 0.5 ? selectedRing : vec4(0.0);
     } else {
       c.a *= dimAlpha;
     }
@@ -255,7 +263,7 @@ const EDGE_QUAD = new Float32Array([-0.5, 0, -0.5, 1, 0.5, 1, -0.5, 0, 0.5, 1, 0
  */
 export function createNodeProgram(gl, instancing) {
   let info = createProgram(gl, NODE_VERTEX, NODE_FRAGMENT, ['point', 'row', 'size', 'color', 'room'], POSITION_UNIFORMS.concat([
-    'part', 'pass', 'resolution', 'pointedColor', 'pointedSize', 'selectedColor', 'selectedSize', 'dimAlpha', 'minSize', 'baseSize', 'fog', 'pointedRing', 'selectedRing', 'ringHalo', 'ringSize'
+    'part', 'pass', 'resolution', 'pointedColor', 'pointedSize', 'selectedColor', 'selectedSize', 'dimAlpha', 'minSize', 'baseSize', 'fog', 'pointedRing', 'selectedRing', 'focusedRing', 'ringHalo', 'ringSize'
   ]));
   let quad = createBuffer(gl, NODE_QUAD);
   let a = info.attributes, u = info.uniforms;
@@ -275,6 +283,7 @@ export function createNodeProgram(gl, instancing) {
       gl.uniform1f(u.minSize, style.minSize || 0);
       gl.uniform4fv(u.pointedRing, style.pointedRing);
       gl.uniform4fv(u.selectedRing, style.selectedRing);
+      gl.uniform4fv(u.focusedRing, style.focusedRing);
       gl.uniform4fv(u.ringHalo, style.ringHalo);
       gl.uniform2fv(u.ringSize, style.ringSize);
       gl.uniform1f(u.baseSize, style.baseSize || 1);

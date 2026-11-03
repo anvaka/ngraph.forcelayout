@@ -125,8 +125,9 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     view.use(inspectNodes, look.inspect);
     view.use(navigateNodes);
     view.use(searchNodes);
-    // A node search goes to sends out two fading rings, so the eye finds it in a big drawing
-    view.use(pulseNodes);
+    // A node search goes to sends out two fading rings, so the eye finds it in a big drawing (in
+    // the focus color, as its ring)
+    view.use(pulseNodes, {color: 0x7fe7efff});
     view.use(labelNodes, labelOptions(graph));
     window.view = view;
 

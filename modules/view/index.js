@@ -70,6 +70,8 @@ const STYLES = {
   // color, so with rings the fill colors above can be 0 (the node keeps its own color).
   pointedRing: 0,
   selectedRing: 0,
+  // A focused node's ring (the keyboard's place, or where search went); 0: pointedRing
+  focusedRing: 0,
   ringHalo: 0x000000cc,
   ringGap: 2,
   ringWidth: 2,
@@ -127,7 +129,7 @@ export default function createView(scene, options = {}) {
   let style = {
     pointedColor: new Float32Array(4), pointedSize: new Float32Array(2),
     selectedColor: new Float32Array(4), selectedSize: new Float32Array(2),
-    pointedRing: new Float32Array(4), selectedRing: new Float32Array(4), ringHalo: new Float32Array(4),
+    pointedRing: new Float32Array(4), selectedRing: new Float32Array(4), focusedRing: new Float32Array(4), ringHalo: new Float32Array(4),
     ringSize: new Float32Array(2),
     litAlpha: 1, litColor: new Float32Array(4), dimAlpha: 1, minSize: 0, fog: new Float32Array([0, 1, 1])
   };
@@ -950,6 +952,7 @@ export default function createView(scene, options = {}) {
     toRGBA(styles.litLinkColor || 0, style.litColor);
     toRGBA(styles.pointedRing || 0, style.pointedRing);
     toRGBA(styles.selectedRing || 0, style.selectedRing);
+    toRGBA(styles.focusedRing || 0, style.focusedRing);
     toRGBA(styles.ringHalo || 0, style.ringHalo);
     style.ringSize[0] = (styles.ringGap || 0) * ratio;
     style.ringSize[1] = (styles.ringWidth || 0) * ratio;

@@ -21,8 +21,9 @@
 //   is drawn at 1/255 instead.
 // - **Nodes at least `minSize` pixels wide**, less where they crowd (1 px at the least), and no
 //   wider than `room` of the distance to their nearest neighbour as big (the view's nodeRoom).
-// - **Highlights**: hovered, found and focused nodes keep their color and get a white ring,
-//   selected ones an amber ring, with a halo of the background; lit links in one light color.
+// - **Highlights**: nodes keep their color and get a ring, with a halo of the background: white
+//   under the pointer, cyan (the page's focus color) when focused or found by search, amber when
+//   selected; lit links in one light color.
 // - **`background`**: the scene's clear color, the rings' halo and the labels' halo.
 // - In 3D, `fog` fades the far side of the drawing.
 //
@@ -116,6 +117,9 @@ export default {
         Object.assign(styles, {
           pointedColor: 0, pointedMinSize: 10, pointedRing: 0xffffffff,
           selectedColor: 0, selectedMinSize: 8, selectedRing: 0xffc24bff,
+          // Focus (the keyboard's place, a node search went to) in the page's focus color, so a
+          // found node and a hovered one never look the same
+          focusedRing: 0x7fe7efff,
           ringHalo: halo, ringGap: 2, ringWidth: 2
         });
       }
