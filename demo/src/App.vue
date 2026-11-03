@@ -63,14 +63,12 @@
         <button @click='settingsOpen = !settingsOpen' class='toggle-settings' :aria-expanded='settingsOpen ? "true" : "false"'>Settings<span v-if='!settingsOpen && changedCount'> · {{changedCount}} changed</span><span aria-hidden='true'> {{settingsOpen ? '▴' : '▾'}}</span></button>
       </div>
       <div class='about-line' v-if='info && !loading'>
-        <p class='about-text' id='about-text' v-if='info.about' :class='{open: aboutTextOpen, "with-legend": legend.length > 0}' @click='aboutTextOpen = !aboutTextOpen'>{{info.about}}</p>
-        <div class='legend' v-if='legend.length'>
+        <p class='about-text' id='about-text' v-if='info.about' :class='{open: aboutTextOpen, "with-legend": !!(legendData && legendData.items.length)}' @click='aboutTextOpen = !aboutTextOpen'>{{info.about}}</p>
+        <legend-row v-if='legendData && legendData.items.length' :title='legendData.title' :items='legendData.items'
+          :more='legendData.more ? legendData.more.count : 0'>
           <button type='button' class='about-toggle' v-if='info.about' @click='aboutTextOpen = !aboutTextOpen'
             :aria-expanded='aboutTextOpen ? "true" : "false"' aria-controls='about-text' aria-label='About this graph'>ⓘ</button>
-          <span class='legend-name'>Colour: {{legendData.title}}</span>
-          <span class='legend-chip' v-for='item in legend' :key='item.label'><span class='swatch' aria-hidden='true' :style='{background: item.color}'></span>{{item.label}}</span>
-          <span class='legend-more' v-if='legendMore'>+{{legendMore}}</span>
-        </div>
+        </legend-row>
         <div class='credit' v-if='info.credit'>Data: <a :href='info.credit.href' target='_blank' rel='noopener'>{{info.credit.text}}</a></div>
       </div>
     </div>
@@ -208,6 +206,7 @@ import queryState from 'query-state';
 import InputValue from './components/InputValue.vue';
 import InputSelect from './components/InputSelect.vue';
 import HelpIcon from './components/HelpIcon.vue';
+import LegendRow from './components/LegendRow.vue';
 import prototypes from './prototypes';
 import {libraryChoice, deviceKeys, maxAutoSteps, readSignals, pickDefaults, probeWebGPU} from './lib/deviceDefaults';
 
@@ -280,7 +279,8 @@ export default {
   components: {
     InputValue,
     InputSelect,
-    HelpIcon
+    HelpIcon,
+    LegendRow
   },
   computed: {
     onGpu() {
@@ -340,16 +340,6 @@ export default {
       return parts.join(' ');
     },
     // The legend's first entries (the most common values), and how many more there are
-    // What the colours mean (look.js): the first values, and how many more there are
-    legend() {
-      let list = (this.legendData && this.legendData.items) || [];
-      return list.slice(0, coarse ? 4 : 6);
-    },
-    legendMore() {
-      let data = this.legendData;
-      if (!data) return 0;
-      return Math.max(0, data.items.length - this.legend.length) + (data.more ? data.more.count : 0);
-    },
     // Settings that differ from what the page starts with (the button says so while closed)
     changedCount() {
       let physics = PHYSICS.filter(key => this.layoutSettings[key] !== DEFAULTS[key]).length;
