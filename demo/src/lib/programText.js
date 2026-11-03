@@ -191,7 +191,7 @@ export function drawingProgram(graph, state) {
     `  graph, layout, nodeColor, nodeSize, linkColor, linkWidth: ${LOOK.linkWidth},`,
     `  nodeMinSize: ${round(state.nodeMinSize === undefined ? LOOK.nodeMinSize : state.nodeMinSize)}, nodeRoom: ${LOOK.nodeRoom},` +
       (state.dimensions > 2 ? ` fog: ${LOOK.fog},` : ''),
-    `  styles: {litLinkColor: ${hex32(LOOK.styles.litLinkColor)}, litLinkAlpha: ${LOOK.styles.litLinkAlpha}}`,
+    `  styles: ${stylesText(LOOK.styles)}`,
     `});`,
     `view.use(fitLayout); // the whole drawing in view, until you move the camera`
   );
@@ -294,6 +294,16 @@ export function installLines(parts, installLine, repo, released) {
     `// then npm i ${addons.map(name => `./ngraph.forcelayout/modules/${name}`).join(' ')}`);
   }
   return lines;
+}
+
+// The view's styles as the demo has them: colours as 0xRRGGBBAA, other numbers as they are
+function stylesText(styles) {
+  let entries = Object.keys(styles).map(key => {
+    let value = styles[key];
+    let text = /Color$|Ring$|Halo$/.test(key) && value > 255 ? hex32(value) : String(value);
+    return `${key}: ${text}`;
+  });
+  return `{${entries.join(', ')}}`;
 }
 
 function addHelper(part, name) {
