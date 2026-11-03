@@ -10,6 +10,11 @@
 // elsewhere or Escape; that is how touch shows it. The tooltip follows its node as the layout and the camera
 // move, beside the node rather than over it, inside the canvas.
 //
+// Where it goes: beside the node, on the side that covers the fewest of the node's neighbours
+// (what a selection lights up), never under what covers the canvas; when every side covers some,
+// docked at the bottom of what shows. On a phone-sized canvas it always docks at the bottom, in a
+// card at most 150 px tall that scrolls.
+//
 // Options:
 // - `content(node)`: what to show, as text (a string) or an element; null shows nothing. The
 //   default is `describeNode()`: the label (and the id when it differs), the number of links,
@@ -31,6 +36,43 @@ const OFFSET = 14;
 const LINGER = 200;
 const MAX_FIELDS = 12;
 const MAX_VALUE = 120;
+// The sides of a node a tooltip may take, in the order they are tried
+const SIDES = ['below-right', 'above-right', 'below-left', 'above-left'];
+// A neighbour this close to the card counts as covered (its disc and the start of its label)
+const COVER_MARGIN = 10;
+// The side the card has wins ties: it moves only to a side that covers fewer neighbours
+const KEEP = 0.5;
+// Pixels between a docked tooltip and what covers the canvas or its edges
+const DOCK_MARGIN = 12;
+// Neighbours looked at, at most (a hub's thousands don't need to be)
+const NEIGHBOURS = 500;
+// A canvas narrower than this (a phone) has no room beside a node: the card docks at the bottom,
+// in the band a width-bound drawing leaves free, at most DOCK_HEIGHT tall (it scrolls) and
+// narrow enough to leave room for buttons in a corner
+const NARROW = 560, DOCK_HEIGHT = 150, DOCK_ROOM = 150;
+
+function boxBeside(side, at, width, height) {
+  let right = side.endsWith('right'), below = side.startsWith('below');
+  return {
+    x: right ? at.x + OFFSET : at.x - OFFSET - width,
+    y: below ? at.y + OFFSET : at.y - OFFSET - height,
+    width, height
+  };
+}
+
+// How many points are on the box, or near it
+function covers(box, points) {
+  let count = 0;
+  for (let i = 0; i < points.length; ++i) {
+    if (inside(points[i], box, box.width, box.height, COVER_MARGIN)) count += 1;
+  }
+  return count;
+}
+
+function inside(point, box, width, height, margin) {
+  return point.x >= box.x - margin && point.x <= box.x + width + margin &&
+    point.y >= box.y - margin && point.y <= box.y + height + margin;
+}
 
 export default {
   name: 'inspect',
@@ -100,7 +142,8 @@ export default {
       if (body === null || body === undefined) return hide();
       ensureCard();
       if (!shown || shown.node !== node) fill(body);
-      shown = {node, pinned, source};
+      let same = shown && shown.node === node;
+      shown = {node, pinned, source, side: same ? shown.side : null, narrow: same ? shown.narrow : (card.style.maxHeight !== '')};
       place();
     }
 
@@ -140,7 +183,10 @@ export default {
       card.appendChild(table);
     }
 
-    // Beside the node, flipped to stay inside the canvas
+    // Beside the node, on the side that covers the fewest of its neighbours (what a selection
+    // lights up), inside what shows of the canvas (not under a panel). When every side covers
+    // some (a hub, a small screen), along the bottom of what shows. The side it had is kept
+    // unless another one is clearly better, so the card doesn't hop as the layout jiggles.
     function place() {
       let layout = ctx.layout;
       if (!layout || !layout.getBody(shown.node.id)) return hide();
@@ -157,12 +203,75 @@ export default {
         return;
       }
       card.style.display = 'block';
+      let narrow = rect.width < NARROW;
+      if (narrow !== !!shown.narrow) {
+        shown.narrow = narrow;
+        card.style.maxWidth = narrow ? Math.max(160, Math.min(280, rect.width - DOCK_ROOM)) + 'px' : '';
+        card.style.maxHeight = narrow ? DOCK_HEIGHT + 'px' : '';
+        card.style.overflowY = narrow ? 'auto' : '';
+      }
       let width = card.offsetWidth, height = card.offsetHeight;
-      let x = rect.left + at.x + OFFSET, y = rect.top + at.y + OFFSET;
-      if (x + width > rect.right) x = rect.left + at.x - OFFSET - width;
-      if (y + height > rect.bottom) y = rect.top + at.y - OFFSET - height;
-      card.style.left = Math.max(rect.left, x) + 'px';
-      card.style.top = Math.max(rect.top, y) + 'px';
+      let area = ctx.visibleArea ? ctx.visibleArea() : null;
+      if (area && (area.allHidden || area.width !== rect.width || area.height !== rect.height)) area = null;
+      let points = neighbourPoints(shown.node);
+      // The view's other overlays (buttons on the canvas, a search box) stay uncovered too
+      let others = overlayBoxes(rect);
+      let clear = box => !others.some(b => box.x < b.x + b.width && box.x + width > b.x && box.y < b.y + b.height && box.y + height > b.y);
+      let best = null;
+      (narrow ? [] : SIDES).forEach(side => {
+        let box = boxBeside(side, at, width, height);
+        if (box.x < 0 || box.y < 0 || box.x + width > rect.width || box.y + height > rect.height) return;
+        if (area && area.boxCovered(box.x, box.y, width, height)) return;
+        if (!clear(box)) return;
+        let cost = covers(box, points) + (side === shown.side ? -KEEP : 0);
+        if (!best || cost < best.cost) best = {side, box, cost};
+      });
+      if (!best || best.cost > 0) {
+        // Docked at the bottom of what shows, away from the node
+        let spot = area ? area.spot(width, height, DOCK_MARGIN, 'bottom', others)
+          : {x: DOCK_MARGIN, y: rect.height - height - DOCK_MARGIN};
+        if (spot && spot.y >= 0 && !inside(at, spot, width, height, OFFSET) && clear(spot)) {
+          let box = {x: spot.x, y: spot.y, width, height};
+          let cost = covers(box, points) + (shown.side === 'dock' ? -KEEP : 0);
+          if (!best || cost < best.cost) best = {side: 'dock', box, cost};
+        }
+      }
+      if (!best) {
+        // Nowhere good: beside the node, inside the canvas, as before
+        let x = at.x + OFFSET, y = at.y + OFFSET;
+        if (x + width > rect.width) x = at.x - OFFSET - width;
+        if (y + height > rect.height) y = at.y - OFFSET - height;
+        best = {side: null, box: {x: Math.max(0, x), y: Math.max(0, y)}};
+      }
+      shown.side = best.side;
+      card.style.left = (rect.left + best.box.x) + 'px';
+      card.style.top = (rect.top + best.box.y) + 'px';
+    }
+
+    // Boxes of the view's other overlays on the canvas, in canvas pixels
+    function overlayBoxes(rect) {
+      let boxes = [];
+      document.querySelectorAll('[data-graph-overlay]').forEach(element => {
+        if (element === card || element.contains(card) || card.contains(element)) return;
+        let r = element.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return;
+        if (r.right <= rect.left || r.left >= rect.right || r.bottom <= rect.top || r.top >= rect.bottom) return;
+        boxes.push({x: r.left - rect.left, y: r.top - rect.top, width: r.width, height: r.height});
+      });
+      return boxes;
+    }
+
+    // Where the shown node's neighbours are on the canvas (at most NEIGHBOURS of them)
+    function neighbourPoints(node) {
+      let points = [];
+      let layout = ctx.layout;
+      ctx.graph.forEachLinkedNode(node.id, other => {
+        if (points.length >= NEIGHBOURS || other.id === node.id || !layout.getBody(other.id)) return;
+        let p = layout.getNodePosition(other.id);
+        let s = ctx.toScreen(p.x, p.y || 0, p.z || 0);
+        if (s) points.push(s);
+      });
+      return points;
     }
 
     function ensureCard() {

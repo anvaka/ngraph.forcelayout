@@ -857,6 +857,16 @@ test('measureArea: what covers the canvas, the nearest visible spot, the middle 
     t.equal(area.spot(390, 40, 12), null, 'wider than the canvas');
     t.equal(area.spot(300, 250, 12), null, 'nowhere big enough');
     t.same(v.measureArea(400, 300, function () { return false; }, 20).spot(80, 40, 12), {x: 12, y: 12}, 'nothing covers: the corner');
+    // Other boxes to stay clear of (the view's own buttons): to their left, or above them
+    var free = v.measureArea(400, 300, function () { return false; }, 20);
+    var buttons = [{x: 300, y: 240, width: 88, height: 48}];
+    var docked = free.spot(80, 40, 12, 'bottom', buttons);
+    t.equal(docked.y, 248, 'still at the bottom');
+    t.ok(docked.x + 80 + 12 <= 300, 'left of the buttons', docked);
+    var wide = free.spot(300, 40, 12, 'bottom', buttons);
+    t.ok(wide.y + 40 + 12 <= 240, 'too wide to pass them: above them', wide);
+    t.ok(area.boxCovered(50, 50, 20, 20), 'a box under the panel is covered');
+    t.notOk(area.boxCovered(300, 250, 20, 20), 'one far from it is not');
   });
 });
 
