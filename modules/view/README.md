@@ -338,7 +338,8 @@ before a change is kept. API: `get()`, `set(nodesOrIds)`, `clear()`, `has(nodeOr
 its number of links and the fields of `node.data` (`describeNode()`). Hovering a node shows it
 while the pointer stays on the node or on the tooltip; a tap (mouse, pen or finger) keeps it open
 until a tap elsewhere or Escape. It follows its node as the layout and the camera move, beside the
-node and inside the canvas. `content(node)` returns text (never parsed as HTML), an element, or
+node and inside the canvas. The wheel over it zooms the drawing, as it would without the tooltip,
+unless the tooltip has more to scroll. `content(node)` returns text (never parsed as HTML), an element, or
 null. Hover tooltips need the hover module. API: `show(node)`, `hide()`, `get()`.
 
 ### navigate

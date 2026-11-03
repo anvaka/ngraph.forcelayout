@@ -261,6 +261,23 @@ export default {
       }
     }
 
+    // The card sits over the canvas: the wheel over it zooms the drawing, as it would without the
+    // card, unless the card scrolls (a docked one with more to show). A pinch (Ctrl + wheel)
+    // always zooms the drawing, never the page.
+    function onCardWheel(e) {
+      // Firefox turns line deltas into pixels only if the deltas are read first: read the mode first
+      let deltaMode = e.deltaMode;
+      if (!e.ctrlKey && !e.metaKey && card.scrollHeight - card.clientHeight > 1) return;
+      e.preventDefault();
+      let canvas = ctx.scene.getDrawContext().canvas;
+      canvas.dispatchEvent(new WheelEvent('wheel', {
+        deltaMode, deltaX: e.deltaX, deltaY: e.deltaY, deltaZ: e.deltaZ,
+        clientX: e.clientX, clientY: e.clientY, screenX: e.screenX, screenY: e.screenY,
+        ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey, metaKey: e.metaKey,
+        bubbles: true, cancelable: true
+      }));
+    }
+
     // Boxes of the view's other overlays on the canvas, in canvas pixels
     function overlayBoxes(rect) {
       let boxes = [];
@@ -296,6 +313,7 @@ export default {
       card.style.cssText = STYLE + (options.style || '');
       if (options.className) card.className = options.className;
       card.addEventListener('scroll', fadeIfMore, {passive: true});
+      card.addEventListener('wheel', onCardWheel, {passive: false});
       // The pointer can move onto the tooltip without it closing
       card.addEventListener('pointerenter', () => { overCard = true; clearTimeout(lingering); });
       card.addEventListener('pointerleave', () => {
