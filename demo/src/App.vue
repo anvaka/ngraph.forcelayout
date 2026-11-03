@@ -1,7 +1,8 @@
 <template>
   <section aria-label='Graph and settings' :class='{"settings-open": settingsOpen, "panel-folded": panelFolded}'>
     <!-- First after the canvas in Tab order: the controls that act on the canvas -->
-    <div class='canvas-tools' data-graph-overlay>
+    <!-- Not an overlay: they cover the canvas, so the fit, labels and the card keep clear of them -->
+    <div class='canvas-tools'>
       <button v-if='!following' class='tool fit-view' @click='fitView'
         title='Show the whole graph, and follow it as the layout moves (0)'>Fit graph</button>
       <button class='tool' @click='toggleHelp' :aria-expanded='helpOpen ? "true" : "false"' aria-label='Keys and gestures' title='Keys and gestures (?)'>?</button>
@@ -75,7 +76,9 @@
           <button type='button' :aria-pressed='backend === "webgpu" ? "true" : "false"' :aria-disabled='gpuAvailable === false ? "true" : null'
             @click='pickGpu' title='The WebGPU add-on (modules/gpu)'>GPU</button>
         </div>
-        <button @click='settingsOpen = !settingsOpen' class='toggle-settings' :aria-expanded='settingsOpen ? "true" : "false"' aria-controls='settings'>Settings<span v-if='!settingsOpen && changedCount'> · {{changedCount}} changed</span><span aria-hidden='true'> {{settingsOpen ? '▴' : '▾'}}</span></button>
+        <button @click='settingsOpen = !settingsOpen' class='toggle-settings' :class='{tuned: !settingsOpen && changedCount > 0}'
+          :aria-expanded='settingsOpen ? "true" : "false"' aria-controls='settings'
+          :aria-label='!settingsOpen && changedCount ? `Settings, ${changedCount} changed` : null'>Settings<span class='changed-count' v-if='!settingsOpen && changedCount'> · {{changedCount}} changed</span><span aria-hidden='true'> {{settingsOpen ? '▴' : '▾'}}</span></button>
       </div>
       <div class='about-line' v-if='info && !loading'>
         <p class='about-text' id='about-text' v-if='info.about' :class='{open: aboutTextOpen, "with-legend": !!(legendData && legendData.items.length)}' @click='aboutTextOpen = !aboutTextOpen'>{{info.about}}</p>
@@ -93,13 +96,14 @@
       @pointerup='onFoldUp' @pointercancel='onFoldUp' :aria-expanded='panelFolded ? "false" : "true"'
       :aria-label='panelFolded ? "Show the panel (" + foldTitle + ")" : "Hide the panel"' :title='panelFolded ? "Show the panel" : "Hide the panel"'>
       <span class='fold-title' v-if='panelFolded'>{{foldTitle}}</span>
-      <span class='fold-chevron' v-if='panelFolded' aria-hidden='true'>▾</span>
+      <span class='fold-chevron' v-if='panelFolded' aria-hidden='true'>Show</span>
       <span class='grip' aria-hidden='true'></span>
     </button>
-    <div class='content sheet' id='settings' v-if='settingsOpen' ref='sheet' :style='sheetStyle'>
+    <div class='content sheet' id='settings' v-if='settingsOpen' ref='sheet' @focusin='onSettingsFocus'>
       <code-settings :settings='layoutSettings' :steps-per-frame='stepsPerFrame' :auto-now='stats ? stats.stepsPerFrame : 0'
         :frame-budget='device.frameBudget' :placement='placement' :backend='backend' :gpu-available='gpuAvailable !== false'
         :gpu-message='gpuMessage' :install-line='installLine' :install-note='installNote' :library-default-label='libraryDefaultLabel'
+        :describe='describeProgram' :program-key='programKey'
         @set='setSetting' @reset='resetSettings' @speedups='useDeviceDefaults'></code-settings>
 
       <template v-if='prototypes.length && !prototype'>
@@ -135,6 +139,7 @@
           </a>
         </div>
       </template>
+      <button type='button' class='settings-done' @click='settingsOpen = false'>Done</button>
     </div>
   </section>
 </template>
@@ -200,6 +205,10 @@ const pickedByDevice = Object.fromEntries(deviceKeys.map(key => [key, appState.g
 
 function startValue(key) {
   return pickedByDevice[key] ? deviceChoice[key] : appState.get(key);
+}
+
+function startsFolded() {
+  return typeof matchMedia === 'function' && matchMedia('(max-width: 500px) and (max-height: 700px), (max-height: 500px)').matches;
 }
 
 function formatSeconds(seconds) {
@@ -303,12 +312,8 @@ export default {
       return parts.join(' ');
     },
     // The legend's first entries (the most common values), and how many more there are
-    // With the keyboard up the sheet takes at most half of what is left under the panel, so some
-    // of the graph stays in view while one types
-    sheetStyle() {
-      if (!this.keyboardInset) return null;
-      let left = Math.max(0, window.innerHeight - this.keyboardInset - this.panelHeight);
-      return {bottom: this.keyboardInset + 'px', maxHeight: Math.max(120, Math.round(left / 2)) + 'px'};
+    programKey() {
+      return `${this.selectedGraph}|${this.fileName}|${this.loading}|${this.legendData ? 1 : 0}`;
     },
     // Settings that differ from what the page starts with (the button says so while closed)
     changedCount() {
@@ -414,6 +419,39 @@ export default {
       this.backend = 'webgpu';
     },
 
+    // What the copied program needs to load and draw the graph on screen as the demo does
+    describeProgram() {
+      let state = this.scene && this.scene.getDrawingState ? this.scene.getDrawingState() : {};
+      return Object.assign({
+        name: this.selectedGraph, fileName: this.fileName,
+        base: new URL(import.meta.env.BASE_URL, location.href).href
+      }, state);
+    },
+
+    // The soft keyboard covers the bottom of the screen: the field being typed in scrolls up into
+    // what shows (its panel or Settings scroll), once the keyboard has opened
+    onSettingsFocus(e) {
+      let target = e.target;
+      if (!target || !/^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName)) return;
+      let vv = window.visualViewport;
+      // Scroll the field's scrolling boxes (Settings, the panel) just enough to bring it above the
+      // keyboard: scrollIntoView would centre it in the whole window, under the keyboard
+      let reveal = () => {
+        let bottom = (vv ? vv.offsetTop + vv.height : window.innerHeight) - 12;
+        let need = target.getBoundingClientRect().bottom - bottom;
+        for (let el = target.parentElement; el && need > 0; el = el.parentElement) {
+          let style = getComputedStyle(el);
+          if (!/auto|scroll/.test(style.overflowY) || el.scrollHeight <= el.clientHeight) continue;
+          let room = el.scrollHeight - el.clientHeight - el.scrollTop;
+          let by = Math.min(need, room);
+          el.scrollTop += by;
+          need -= by;
+        }
+      };
+      if (vv) vv.addEventListener('resize', reveal, {once: true});
+      setTimeout(reveal, 350);
+    },
+
     copyInstall() {
       let done = () => {
         this.copied = true;
@@ -455,17 +493,6 @@ export default {
     onFilePicked(e) {
       this.fileError = '';
       loadDroppedGraph(e.target.files);
-    },
-
-    // On a phone the settings are a sheet at the bottom; the keyboard covers the bottom of the
-    // window without making it shorter, so the sheet sits on top of the keyboard while one types
-    onViewport() {
-      let vv = window.visualViewport;
-      if (!vv) return;
-      let covered = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-      this.keyboardInset = covered > 40 ? covered : 0;
-      let app = document.getElementById('app');
-      this.panelHeight = app ? app.getBoundingClientRect().height : 0;
     },
 
     deviceValue(key) {
@@ -555,6 +582,14 @@ export default {
     }
   },
   watch: {
+    // Opening Settings shows them: the panel scrolls back to its top, where they now begin
+    settingsOpen(open) {
+      if (!open) return;
+      this.$nextTick(() => {
+        let app = document.getElementById('app');
+        if (app) app.scrollTop = 0;
+      });
+    },
     layoutSettings: {
       deep: true,
       handler(newValue) {
@@ -653,13 +688,12 @@ export default {
       gpuNote: '',
       copied: false,
       pickerKey: '',
-      keyboardInset: 0,
-      panelHeight: 0,
       installLine,
       installNote,
       showPitch: true,
-      // Phones: the panel is folded to one line (see .panel-fold)
-      panelFolded: false,
+      // Phones: the panel is folded to one line (see .panel-fold). Short screens start folded: the
+      // panel would take half of them
+      panelFolded: startsFolded(),
       pitchShort,
       graphGroups,
       libraryDefaultLabel,
@@ -710,10 +744,6 @@ export default {
     this.loadNewGraph(this.selectedGraph);
     bus.on('load-graph', this.onGraphLoaded);
     bus.on('file-graph', this.onFileGraph);
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', this.onViewport);
-      window.visualViewport.addEventListener('scroll', this.onViewport);
-    }
     bus.on('file-error', this.onFileError);
     ['pointerdown', 'wheel', 'keydown'].forEach(name => canvas.addEventListener(name, this.hidePitch, {once: true, passive: true}));
     if (!this.picked.backend) {
@@ -734,10 +764,6 @@ export default {
   },
 
   beforeUnmount() {
-    if (window.visualViewport) {
-      window.visualViewport.removeEventListener('resize', this.onViewport);
-      window.visualViewport.removeEventListener('scroll', this.onViewport);
-    }
     clearInterval(this.statsTimer);
     clearTimeout(this.paramsTimer);
     if (this.scene) {

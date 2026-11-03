@@ -74,6 +74,12 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     restart,
     getStats,
     getLegend,
+    // The graph and what the drawing picked for it now (for the copied program)
+    getDrawingState: () => ({
+      graph,
+      linkAlpha: drawing && drawing.linkAlpha ? drawing.linkAlpha() : undefined,
+      nodeMinSize: drawing && drawing.nodeMinSize ? drawing.nodeMinSize() : undefined
+    }),
   };
 
   function loadGraph(newGraph, desiredLayout) {
@@ -116,6 +122,9 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     // the nodes have names (look.js decides, for the labels too)
     fitter = view.use(fitLayout, hasNames(graph) ? {} : {labelRoom: null});
     fitter.on(following => followListeners.forEach(fn => fn(following)));
+    // A node found by search comes close: on a big graph it is a dot among thousands at the
+    // whole drawing's zoom. Fit (or 0) goes back to the whole drawing.
+    view.on('search', e => { if (e.node) fitter.zoomTo(e.node); });
     followListeners.forEach(fn => fn(true));
     // Hover, drag, select and inspect nodes (modules/view). Dragging works while the layout is paused too.
     // Keyboard: Enter focuses a node, arrows move between nodes, / searches, ? lists the keys.

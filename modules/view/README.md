@@ -423,10 +423,23 @@ move fires `dragstart`, `drag` and `dragend` with `pointerType: 'keyboard'`. API
 `view.use(searchNodes, {limit, key, placeholder})`: `/` on the canvas opens a search box (an ARIA
 combobox). Typing lists the best matches: labels that start with the text, then labels with a
 word that does, then labels that contain it, then ids; nodes with more links first. Up and Down
-choose, Enter or a click goes to the node: with navigate it gets keyboard focus, otherwise it is
-tapped. The camera brings it into view. Escape gives the keys back to the canvas. A query scans
-every node: 1.6 ms at 100k nodes (17 ms at 1M), after a 31 ms index built when the box first
-opens. Fires `search` ({node, query}). API: `open(text)`, `close()`, `find(text)`.
+choose, Enter or a click goes to the node: it is tapped (so selected, with the select module), and
+with navigate it gets keyboard focus too. The camera brings it into view; with fit, listen to
+`search` and call `fit.zoomTo(e.node)` to bring it close (the demo does). The box goes where the
+canvas shows, and again after the window resizes. Escape gives the keys back to the canvas. A
+query scans every node: 1.6 ms at 100k nodes (17 ms at 1M), after a 31 ms index built when the
+box first opens. Fires `search` ({node, query}). API: `open(text)`, `close()`, `find(text)`.
+
+### fit
+
+`view.use(fitLayout, {padding, labelRoom, maxScale, ease, bulk, bulkSlack, tilt, key, orient})`:
+the camera keeps the whole drawing in view, inside the part of the canvas that nothing covers
+(see [What the user sees](#what-the-user-sees)), until the user moves it. The drawing's bulk is
+framed (a few far pieces don't shrink the rest), labels get room at the sides, a 3D layout is
+tilted once, and a settled 2D drawing turns to the screen's long side. It snaps under
+`prefers-reduced-motion`. API: `fit()` (back to the whole drawing, following again; also the `0`
+key), `follow(on)`, `following()`, `on(fn)` (`fn(following)`), `zoomTo(node, {linkPixels,
+duration})` (bring a node close: its links about `linkPixels` long, 60).
 
 ### Writing a module
 
