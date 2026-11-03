@@ -107,11 +107,6 @@
         <b>0</b> is auto: as many steps as fit in {{device.frameBudget}} ms of each frame, up to {{maxAutoSteps}}.
       </input-value>
 
-      <input-flag label='Follow bounding box' v-model='fixedViewBox' step=1>
-      Setting this to true will disable pan/zoom but will always keep the graph visible. This is not
-      part of the layout algorithm. Just a view setting of the renderer.
-      </input-flag>
-
       <div class='section'>
         Add-ons
         <small><a href='https://github.com/anvaka/ngraph.forcelayout/tree/main/modules'>not part of the library</a></small>
@@ -156,6 +151,8 @@
         </div>
       </template>
     </div>
+    <button v-if='!following' class='fit-view' data-graph-overlay @click='fitView'
+      title='Show the whole graph, and follow it as the layout moves'>Fit graph</button>
   </div>
 </template>
 
@@ -311,6 +308,10 @@ export default {
       this.scene.restart();
     },
 
+    fitView() {
+      this.scene.fitView();
+    },
+
     finishPrototype() {
       // A final step means little while the layout keeps moving the nodes
       if (this.isRunning) this.toggleLayoutRun();
@@ -370,9 +371,6 @@ export default {
         });
         this.lastLayoutSettings = {...newValue};
       }
-    },
-    fixedViewBox(newValue) {
-      this.scene.setFixedViewBox(newValue);
     },
     placement(newValue) {
       this.remember('placement', newValue);
@@ -444,7 +442,8 @@ export default {
     let graphs = getAvailableGraphs();
     return {
       isRunning: true,
-      fixedViewBox: false,
+      // the camera follows the whole drawing until the user moves it
+      following: true,
       selectedGraph: appState.get('graph'),
       settingsOpen: window.innerWidth > 500,
       loading: false,
@@ -489,6 +488,7 @@ export default {
       stepsPerFrame: this.stepsPerFrame,
       frameBudget: this.device.frameBudget
     });
+    this.scene.onFollow(following => { this.following = following; });
     if (this.activePrototype) this.scene.setPrototype(this.activePrototype, this.prototypeParams);
     this.loadNewGraph(this.selectedGraph);
     bus.on('load-graph', this.onGraphLoaded);
@@ -730,6 +730,22 @@ h2 {
   top: 18px;
   left: 50%;
   transform: translateX(-50%);
+}
+button.fit-view {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  padding: 8px 14px;
+  border: 1px solid #267fcd;
+  border-radius: 18px;
+  background: rgb(12, 41, 82);
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+button.fit-view:hover, button.fit-view:focus-visible {
+  background: #004499;
 }
 @media (max-width: small-screen) {
   #app {

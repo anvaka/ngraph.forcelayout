@@ -6,7 +6,7 @@ import findLargestComponent from './findLargestComponent';
 // Add-ons from modules/ in this repository (see vite.config.js), not part of ngraph.forcelayout
 import placeNodes from 'ngraph.forcelayout.pivot';
 import {createWebGPUBackend, runOnGpu} from 'ngraph.forcelayout.gpu';
-import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes, navigateNodes, searchNodes, labelNodes} from 'ngraph.forcelayout.view';
+import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes, navigateNodes, searchNodes, labelNodes, fitLayout} from 'ngraph.forcelayout.view';
 import createGraph from 'ngraph.graph';
 import {stepsForFrame} from './deviceDefaults';
 
@@ -28,7 +28,10 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   // Starting and stopping the GPU runs one change at a time; frames don't step meanwhile
   let changes = Promise.resolve(), changing = false;
 
-  let fixedViewBox = false;
+  // The camera follows the whole drawing (fitLayout) until the user moves it; `onFollow`
+  // listeners hear when that starts or stops, so the app can offer a Fit button
+  let fitter = null;
+  let followListeners = new Set();
   let isRunning = false;
   // The layout settled and the frame loop stopped by itself (not paused by the viewer): moving a
   // node, changing a setting or a new layout runs it again
@@ -53,7 +56,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     dispose,
     runLayout,
     updateLayoutSettings,
-    setFixedViewBox,
+    fitView,
+    onFollow: fn => followListeners.add(fn),
     setStepsPerFrame,
     setPlacement,
     setBackend,
@@ -93,9 +97,11 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     changeLayout(null);
     stats.reset();
 
-    fitView();
     let meta = graph.meta || {};
     view = createView(scene, {graph, layout, nodeColor: nodeColorOf(), linkColor: meta.linkColor, nodeSize: meta.nodeSize});
+    fitter = view.use(fitLayout);
+    fitter.on(following => followListeners.forEach(fn => fn(following)));
+    followListeners.forEach(fn => fn(true));
     // Hover, drag, select and inspect nodes (modules/view). Dragging works while the layout is paused too.
     // Keyboard: Enter focuses a node, arrows move between nodes, / searches, ? lists the keys.
     view.use(hoverNodes);
@@ -104,7 +110,9 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     view.use(inspectNodes);
     view.use(navigateNodes);
     view.use(searchNodes);
-    view.use(labelNodes, meta.importance ? {importance: meta.importance} : undefined);
+    // Labels only when nodes have names: a graph of numbered nodes would be covered in numbers
+    // (the tooltip, search and keyboard still name every node by its id)
+    if (hasNames(graph)) view.use(labelNodes, meta.importance ? {importance: meta.importance} : undefined);
     window.view = view;
 
     runLayout(true);
@@ -124,6 +132,11 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     changeLayout(null);
     stats.reset();
     fitView();
+  }
+
+  // Back to the whole drawing, following it again
+  function fitView() {
+    if (fitter) fitter.fit();
   }
 
   // The view draws the current layout, in the colors of the attached idea
@@ -292,24 +305,6 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     };
   }
 
-  function fitView() {
-    let rect = layout.getGraphRect();
-    let cx = (rect.min_x + rect.max_x) / 2;
-    let cy = (rect.min_y + rect.max_y) / 2;
-    let half = Math.max(rect.max_x - rect.min_x, rect.max_y - rect.min_y) * 0.6;
-    if (!Number.isFinite(half) || half < 100.8) {
-      // Small graphs: keep the scene size we always had
-      cx = cy = 0;
-      half = 100.8;
-    }
-    scene.setViewBox({
-      left:  cx - half,
-      top:   cy - half,
-      right:  cx + half,
-      bottom: cy + half,
-    });
-  }
-
   // Run or pause, as the viewer asked. Run on a settled layout keeps it going (until the viewer
   // pauses, or it wakes and settles again)
   function runLayout(newIsRunning) {
@@ -390,15 +385,13 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     setRunning(true);
   }
 
-  function setFixedViewBox(isFixed) {
-    fixedViewBox = isFixed;
-  }
-
   function initScene() {
     // No multisampling: the view smooths its own lines, and multisampled blending made links the
     // most expensive part of a frame (see modules/view/programs.js)
     let scene = createScene(canvas, {wglContextOptions: {antialias: false}});
     scene.setClearColor(12/255, 41/255, 82/255, 1)
+    // Until the fit module takes over: the scene size small graphs always had
+    scene.setViewBox({left: -100.8, top: -100.8, right: 100.8, bottom: 100.8});
     return scene;
   }
   
@@ -419,15 +412,6 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     }
     stats.record(performance.now() - start, steps);
     // The loop stops by itself when the layout settles: see the 'stable' listener above
-    if (fixedViewBox) {
-      let rect = layout.getGraphRect();
-      scene.setViewBox({
-        left:  rect.min_x,
-        top:   rect.min_y,
-        right:  rect.max_x,
-        bottom: rect.max_y,
-      });
-    }
   }
 
   function dispose() {
@@ -441,6 +425,20 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     scene.dispose();
     bus.off('load-graph', loadGraph);
   }
+}
+
+// True when some node has a name of its own: data.label or data.name, or an id that isn't a number
+function hasNames(graph) {
+  let named = false;
+  graph.forEachNode(node => {
+    let data = node.data;
+    if ((data && typeof data === 'object' && (data.label != null || data.name != null)) ||
+        (typeof node.id === 'string' && !/^-?\d+(\.\d+)?$/.test(node.id))) {
+      named = true;
+      return true;
+    }
+  });
+  return named;
 }
 
 // Average time per layout step over the last frames.

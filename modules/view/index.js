@@ -875,5 +875,6 @@ export {default as inspectNodes, describeNode} from './modules/inspect.js';
 export {default as navigateNodes, nearestInDirection, neighboursOf} from './modules/navigate.js';
 export {default as searchNodes, buildSearchIndex, findNodes} from './modules/search.js';
 export {default as labelNodes} from './modules/labels.js';
+export {default as fitLayout, largestOpenRect} from './modules/fit.js';
 export {placeLabels} from './labels/place.js';
 export {computeImportance, rankRows} from './labels/importance.js';
