@@ -32,7 +32,7 @@
     <div class='line'>});</div>
     <label class='line toggle' :class='{off: placement !== "pivot"}'>
       <input type='checkbox' :checked='placement === "pivot"' @change='$emit("set", "placement", $event.target.checked ? "pivot" : "default")'>
-      <span v-if='placement === "pivot"'>placeNodes(graph, layout<template v-if='settings.dimensions !== 2'>, {dimensions: {{settings.dimensions}}}</template>); <span class='comment'>// start from pivot MDS</span></span>
+      <span v-if='placement === "pivot"'>{{placeLine()}} <span class='comment'>// start from pivot MDS</span></span>
       <span v-else class='comment'>// placeNodes(graph, layout); start from pivot MDS (add-on)</span>
     </label>
     <label class='line toggle' :class='{off: backend !== "webgpu"}'>
@@ -188,6 +188,13 @@ export default {
     blur(key) {
       if (this.focused === key) this.focused = '';
     },
+    // As the demo calls it: the start's unit is the spring length
+    placeLine() {
+      let options = [];
+      if (this.settings.dimensions !== 2) options.push(`dimensions: ${this.settings.dimensions}`);
+      if (this.settings.springLength !== 10) options.push(`unit: ${this.settings.springLength}`);
+      return options.length ? `placeNodes(graph, layout, {${options.join(', ')}});` : `placeNodes(graph, layout);`;
+    },
     // Where the graph comes from, how it is drawn, what to install: from what is on screen
     program() {
       let gpu = this.backend === 'webgpu', pivot = this.placement === 'pivot';
@@ -223,7 +230,7 @@ export default {
       let parts = this.program();
       let lines = [...parts.head, ''];
       lines.push(changed.length ? `const layout = createLayout(graph, {\n${changed.join('\n')}\n});` : `const layout = createLayout(graph);`);
-      if (pivot) lines.push(this.settings.dimensions !== 2 ? `placeNodes(graph, layout, {dimensions: ${this.settings.dimensions}});` : `placeNodes(graph, layout);`);
+      if (pivot) lines.push(this.placeLine());
       if (gpu) lines.push(`const gpu = await runOnGpu(layout, await createWebGPUBackend());`);
       lines.push('', ...parts.drawing, '');
       lines.push(`let settled = false; // it stops when the layout settles, and wakes when you drag a node`,

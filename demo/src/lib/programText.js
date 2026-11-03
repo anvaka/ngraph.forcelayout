@@ -162,7 +162,8 @@ export function graphProgram(name, fileName, base) {
  */
 export function drawingProgram(graph, state) {
   let part = {
-    packages: ['w-gl'], addons: ['view'],
+    // the view's w-gl (its peer dependency): one copy for the page and the view
+    packages: ['w-gl@0.21'], addons: ['view'],
     imports: [
       `import {createScene} from 'w-gl';`,
       `import createView, {fitLayout, labelNodes, hoverNodes, dragNodes, selectNodes, inspectNodes} from 'ngraph.forcelayout.view';`

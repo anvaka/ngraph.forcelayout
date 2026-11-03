@@ -55,6 +55,9 @@ export function attachDrawing(view, graph, colors) {
 
   return {
     legend: colors.legend,
+    // What it picked for the screen now (the copied code starts from these)
+    linkAlpha: () => alpha,
+    nodeMinSize: () => minSize,
     update: measure,
     dispose() {
       clearTimeout(timer);
