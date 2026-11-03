@@ -23,13 +23,14 @@ const VERTEX = `
   uniform vec2 rings;
   ${POSITION_OF}
   attribute vec2 corner; // per vertex, 0..1
-  attribute vec4 node;   // row, diameter in scene units, side (0 right, 1 left, 2 above, 3 below)
+  attribute vec4 node;   // row, diameter in scene units, side (0 right, 1 left, 2 above, 3 below), tone
   attribute vec2 box;    // width, height in CSS pixels
   attribute vec4 uv;     // the image in the atlas: left, top, right, bottom
   attribute vec3 fade;   // start (seconds), alpha at the start, alpha at the end
 
   varying vec2 vUv;
   varying float vAlpha;
+  varying float vTone;
   void main() {
     vec4 position = positionOf(node.x);
     vec4 clip = modelViewProjection * vec4(position.xyz, 1.0);
@@ -64,6 +65,8 @@ const VERTEX = `
     float alpha = mix(fade.y, fade.z, t);
     if (isPointed(flags) + hasFlag(flags, 2.0) + hasFlag(flags, 16.0) < 0.5) alpha *= dimAlpha;
     vAlpha = alpha;
+    // Pointed and selected nodes' labels at full brightness; others at their tier's tone
+    vTone = isPointed(flags) + hasFlag(flags, 2.0) > 0.5 ? 1.0 : node.w;
   }`;
 
 const FRAGMENT = `
@@ -73,6 +76,7 @@ const FRAGMENT = `
   uniform vec4 haloColor;
   varying vec2 vUv;
   varying float vAlpha;
+  varying float vTone;
   void main() {
     // Premultiplied: red is the text's coverage, green the halo's where the text isn't
     vec4 texel = texture2D(atlas, vUv);
@@ -80,7 +84,9 @@ const FRAGMENT = `
     float halo = texel.g * haloColor.a;
     float alpha = text + halo;
     if (alpha <= 0.0) discard;
-    vec3 color = (textColor.rgb * text + haloColor.rgb * halo) / alpha;
+    // A dimmer tone mixes the text toward the halo (the background): a grey, not a see-through
+    vec3 ink = mix(haloColor.rgb, textColor.rgb, vTone);
+    vec3 color = (ink * text + haloColor.rgb * halo) / alpha;
     gl_FragColor = vec4(color, alpha * textColor.a * vAlpha);
   }`;
 

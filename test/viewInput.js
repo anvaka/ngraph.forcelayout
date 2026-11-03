@@ -731,6 +731,31 @@ test('input: a tap from a key reaches the app first, then the handlers', functio
 var place = import('../modules/view/labels/place.js');
 var importance = import('../modules/view/labels/importance.js');
 
+test('placeLabels: spacing keeps the nodes of labels apart, wider than tall', function (t) {
+  return place.then(function (m) {
+    var label = function (row, x, y, extra) {
+      return Object.assign({row: row, x: x, y: y, radius: 2, width: 40, height: 14, anchor: null, forced: false}, extra);
+    };
+    var options = {width: 800, height: 600, gap: 3, padding: 2, spacing: {x: 100, y: 40}};
+    // In a row 60 px apart: every other node gets a label
+    var row = [0, 1, 2, 3, 4].map(function (i) { return label(i, 100 + 60 * i, 300); });
+    t.same(m.placeLabels(row, options).map(function (p) { return p.row; }), [0, 2, 4], 'horizontal: 60 px is too near');
+    // In a column 60 px apart: all of them (the ellipse is 40 px tall)
+    var column = [0, 1, 2, 3].map(function (i) { return label(i, 300, 100 + 60 * i); });
+    t.equal(m.placeLabels(column, options).length, 4, 'vertical: 60 px is far enough');
+    // A label shown last time needs only 0.7 of the spacing to stay
+    var near = [label(0, 100, 300), label(1, 175, 300, {anchor: 'right'})];
+    t.equal(m.placeLabels(near, options).length, 2, 'one shown before stays at 75 px');
+    near[1].anchor = null;
+    t.equal(m.placeLabels(near, options).length, 1, 'a new one does not');
+    // Forced labels ignore it
+    near[1].forced = true;
+    t.equal(m.placeLabels(near, options).length, 2, 'forced');
+    // Without spacing, as before
+    t.equal(m.placeLabels(row, {width: 800, height: 600, gap: 3, padding: 2}).length, 5);
+  });
+});
+
 test('placeLabels: in order, beside the node, never overlapping unless forced', function (t) {
   return place.then(function (m) {
     var options = {width: 400, height: 300, gap: 3, padding: 2};
