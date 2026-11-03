@@ -519,6 +519,8 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
   background: transparent;
   border-bottom-color: var(--line-strong);
 }
+/* ...and a changed value that is unused keeps its accent underline */
+.code .unused.changed .value, .code .unused.changed select { border-bottom-color: var(--accent); }
 .code .toggle.off span:not(.comment) { color: var(--text-3); text-decoration: line-through; text-decoration-color: var(--line-strong); }
 .code .help { color: var(--text-3); }
 .code-actions {
