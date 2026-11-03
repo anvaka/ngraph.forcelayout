@@ -30,6 +30,8 @@
   --radius-field: 7px;
   --row: 30px;
   --gap: 12px;
+  /* Text in the panel starts here: the controls' edge plus the fields' own inset */
+  --inset: calc(var(--gap) + 2px);
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   color-scheme: dark;
@@ -69,7 +71,15 @@ button { font: inherit; color: inherit; }
 /* The canvas is the first tab stop: its ring sits inside the edge of the screen */
 canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
-/* Name row */
+/* Name row: the name, and one line of what it is */
+.title-row { padding: 12px var(--inset) 8px; }
+.title-row h2 { padding: 0; }
+.title-row .pitch, .tagline {
+  margin: 3px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
 .title {
   display: flex;
   align-items: center;
@@ -85,8 +95,7 @@ h2 {
 }
 .title h2 { padding: 0; }
 h2 a { color: var(--text); }
-h2 .sub, .tagline { color: var(--text-3); font-weight: 400; }
-.tagline { font-size: 12px; line-height: 1.4; }
+h2 .sub { color: var(--text-3); font-weight: 400; }
 
 /* The install line: a field with a copy glyph, in the mono face */
 .install {
@@ -259,6 +268,7 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
   color: var(--text-2);
 }
 .stats .number { color: var(--text); font-weight: 600; }
+.stats .stats-text { min-width: 0; flex: 1; }
 .stats .settled { color: var(--accent); }
 .stats .off-gpu { margin-top: 2px; color: var(--text-3); }
 .stats .file-error { color: var(--danger); }
@@ -284,6 +294,30 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
   height: 6px;
   border-radius: 50%;
   background: var(--accent);
+}
+
+/* What the graph is, what the colors mean, whose data it is */
+.about-line {
+  margin: 0 calc(-1 * var(--gap));
+  padding: 8px var(--inset) 10px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+.about-line p { margin: 0; }
+.about-line .about-text { color: var(--text-2); }
+.about-line .legend { padding: 0; margin-top: 6px; }
+.about-line .credit { padding: 0; margin-top: 6px; }
+.legend .legend-name { color: var(--text-3); white-space: nowrap; }
+.legend .legend-chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; color: var(--text-2); }
+.legend .legend-more { color: var(--text-3); }
+.legend .swatch, .about-line .swatch {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
 /* What the colors mean, and where the data comes from */
@@ -313,6 +347,17 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
   color: var(--text-3);
 }
 .credit a, .about-graph a { color: var(--text-2); text-decoration: underline; text-decoration-color: var(--line-strong); }
+
+/* Buttons that act on the canvas (Fit, keys, search): quiet round fields on the canvas */
+.canvas-tools .tool {
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.canvas-tools .tool:hover { background: var(--panel-raised); }
+.canvas-tools .tool[aria-expanded='true'] { color: var(--accent); border-color: var(--accent); }
+.canvas-tools .fit-view { color: var(--accent); }
 
 /* Settings */
 .content {
@@ -494,6 +539,10 @@ input[type='checkbox'] { accent-color: var(--accent); margin: 0; }
     border-radius: 0 0 var(--radius) var(--radius);
   }
   h2, .title { padding: 9px 12px 7px; font-size: 14px; }
+  .title-row { padding: 9px var(--inset) 6px; }
+  .title-row h2 { padding: 0; }
+  .about-line { padding: 6px var(--inset) 8px; }
+  .about-line .credit { margin: 0; }
   .stats { padding: 4px 2px 8px; }
 }
 .sheet {
