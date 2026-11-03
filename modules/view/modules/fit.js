@@ -65,6 +65,7 @@ export default {
     // What shows can change without a frame (a panel opens): look again now and then while following
     let areaTimer = setInterval(checkArea, 400);
     let turning = 0;          // the animation frame of a turn
+    let gliding = 0;          // the animation frame of a glide to a node (zoomTo)
 
     ctx.onFrame(change => {
       watch(ctx.layout);
@@ -118,6 +119,15 @@ export default {
         }
       },
       following: () => following,
+      /**
+       * Brings `node` to the middle of what shows, close enough that its links are about
+       * `linkPixels` long on the screen (it never moves out: a node already that close is only
+       * centred). Following stops, as after any camera move; fit() brings the whole drawing back.
+       * It glides over `duration` ms, or jumps when the user prefers reduced motion.
+       */
+      zoomTo(node, how = {}) {
+        return zoomTo(node, how);
+      },
       /** The key that fits, for help texts */
       key: settings.key,
       /** `fn(following)` runs when following starts or stops. Returns a function that removes it. */
@@ -129,6 +139,7 @@ export default {
         clearInterval(areaTimer);
         window.removeEventListener('resize', onResize);
         if (turning) cancelAnimationFrame(turning);
+        if (gliding) cancelAnimationFrame(gliding);
         watch(null);
         listeners.clear();
       }
@@ -218,6 +229,52 @@ export default {
         easing = true;
         ctx.requestFrame();
       }
+    }
+
+    function zoomTo(node, {linkPixels = 60, duration = 450} = {}) {
+      let cam = controls(), layout = ctx.layout;
+      if (!cam || !layout || !node || !layout.getBody(node.id)) return false;
+      let p = layout.getNodePosition(node.id);
+      let at = [p.x, p.y || 0, p.z || 0];
+      // How long its links are: the median, in layout units
+      let lengths = [];
+      ctx.graph.forEachLinkedNode(node.id, other => {
+        if (!layout.getBody(other.id)) return;
+        let q = layout.getNodePosition(other.id);
+        lengths.push(Math.hypot(q.x - p.x, (q.y || 0) - (p.y || 0), (q.z || 0) - (p.z || 0)));
+      });
+      lengths.sort((x, y) => x - y);
+      let length = lengths.length ? lengths[Math.floor(lengths.length / 2)] : 0;
+      if (!(length > 0)) length = (layout.simulator && layout.simulator.springLength && layout.simulator.springLength()) || 10;
+      let rect = canvas.getBoundingClientRect();
+      let fov = ctx.scene.getDrawContext().fov;
+      let view = ctx.scene.getDrawContext().view;
+      let from = {center: Array.from(view.center), r: distance()};
+      // pixels per unit at the distance r, and the distance that gives `linkPixels` per link
+      let ppu = r => (rect.height / 2) / (r * Math.tan(fov / 2));
+      let want = linkPixels / length;
+      let r = Math.min(from.r, (rect.height / 2) / (want * Math.tan(fov / 2)));
+      if (ppu(from.r) >= want) r = from.r;
+      // The node at the middle of the free area (out from under a panel)
+      let area = ctx.visibleArea && ctx.visibleArea();
+      let free = (area && area.largestRect()) || {x: 0, y: 0, width: rect.width, height: rect.height};
+      let dx = -(free.x + free.width / 2 - rect.width / 2) / ppu(r);
+      let dy = -(free.y + free.height / 2 - rect.height / 2) / ppu(r);
+      let m = view.cameraWorld;
+      let to = [at[0] + m[0] * dx - m[4] * dy, at[1] + m[1] * dx - m[5] * dy, at[2] + m[2] * dx - m[6] * dy];
+      setFollowing(false);
+      if (gliding) cancelAnimationFrame(gliding);
+      let start = performance.now();
+      let time = reduced && reduced.matches ? 0 : duration;
+      let step = () => {
+        gliding = 0;
+        let t = time > 0 ? Math.min(1, (performance.now() - start) / time) : 1;
+        let e = t < 1 ? 1 - Math.pow(1 - t, 3) : 1;
+        place(from.center.map((v, i) => v + (to[i] - v) * e), from.r * Math.pow(r / from.r, e));
+        if (t < 1) gliding = requestAnimationFrame(step);
+      };
+      step();
+      return true;
     }
 
     function setFollowing(on) {
