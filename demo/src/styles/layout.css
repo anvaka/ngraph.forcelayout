@@ -466,3 +466,73 @@ body.drag-over::after {
     display: none;
   }
 }
+
+/* Phones: the panel folds to one line so the drawing can have the screen. Its fold button is
+   the grip under the last row; folded, it is the graph's name with the grip under it. A tap
+   or a swipe (up folds, down unfolds) works it. Bigger screens have room: no button. */
+.panel-fold {
+  display: none;
+}
+@media (max-width: 500px) {
+  .panel-fold {
+    display: flex;
+    align-items: center;
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    height: 22px;
+    margin: 0;
+    padding: 0 var(--inset, 12px);
+    border: none;
+    background: none;
+    color: var(--text, #fff);
+    font: inherit;
+    cursor: pointer;
+    /* a swipe on it is ours, not a scroll of the panel */
+    touch-action: none;
+  }
+  .panel-fold .grip {
+    position: absolute;
+    left: 50%;
+    bottom: 7px;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    border-radius: 2px;
+    background: var(--text-3, rgba(255, 255, 255, 0.45));
+  }
+  /* the grip row is the panel's bottom padding (theme.css loads later: two classes win) */
+  .layout-box .about-line {
+    padding-bottom: 0;
+  }
+  .panel-folded .panel-fold {
+    height: 44px;
+  }
+  .panel-folded .panel-fold .grip {
+    bottom: 4px;
+  }
+  .panel-fold .fold-title {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .panel-fold .fold-chevron {
+    margin-left: 8px;
+    color: var(--text-2, rgba(255, 255, 255, 0.75));
+  }
+  /* Folded: every row goes but the data credit, which sits over the canvas */
+  .panel-folded .title-row,
+  .panel-folded .layout-box > :not(.about-line),
+  .panel-folded .about-line > :not(.credit),
+  .settings-open .panel-fold {
+    display: none;
+  }
+  .panel-folded .layout-box .about-line {
+    padding: 0;
+  }
+}

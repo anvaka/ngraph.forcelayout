@@ -1,5 +1,5 @@
 <template>
-  <section aria-label='Graph and settings' :class='{"settings-open": settingsOpen}'>
+  <section aria-label='Graph and settings' :class='{"settings-open": settingsOpen, "panel-folded": panelFolded}'>
     <!-- First after the canvas in Tab order: the controls that act on the canvas -->
     <div class='canvas-tools' data-graph-overlay>
       <button v-if='!following' class='tool fit-view' @click='fitView'
@@ -87,6 +87,15 @@
         <div class='credit' v-if='info.credit'>Data: <a :href='info.credit.href' target='_blank' rel='noopener'>{{info.credit.text}}</a></div>
       </div>
     </div>
+    <!-- Phones: the panel folds to one line, out of the drawing's way (a tap or a swipe up), and
+         unfolds by a tap or a swipe down -->
+    <button type='button' class='panel-fold' @click='onFoldClick' @pointerdown='onFoldDown' @pointermove='onFoldMove'
+      @pointerup='onFoldUp' @pointercancel='onFoldUp' :aria-expanded='panelFolded ? "false" : "true"'
+      :aria-label='panelFolded ? "Show the panel (" + foldTitle + ")" : "Hide the panel"' :title='panelFolded ? "Show the panel" : "Hide the panel"'>
+      <span class='fold-title' v-if='panelFolded'>{{foldTitle}}</span>
+      <span class='fold-chevron' v-if='panelFolded' aria-hidden='true'>▾</span>
+      <span class='grip' aria-hidden='true'></span>
+    </button>
     <div class='content sheet' id='settings' v-if='settingsOpen' ref='sheet' :style='sheetStyle'>
       <code-settings :settings='layoutSettings' :steps-per-frame='stepsPerFrame' :auto-now='stats ? stats.stepsPerFrame : 0'
         :frame-budget='device.frameBudget' :placement='placement' :backend='backend' :gpu-available='gpuAvailable !== false'
@@ -181,6 +190,8 @@ let appState = {
 };
 // The physics settings, as the page starts them
 const PHYSICS = ['timeStep', 'springLength', 'springCoefficient', 'dragCoefficient', 'dimensions', 'theta', 'gravity', 'maxVelocity', 'integrator'];
+// Pixels a swipe on the panel's fold button travels before it folds or unfolds the panel
+const FOLD_SWIPE = 16;
 const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 
 const deviceChoice = pickDefaults(readSignals());
@@ -238,6 +249,10 @@ export default {
       return [{value: 'default', label: libraryDefaultLabel}, {value: 'pivot', label: 'pivot MDS (add-on)'}];
     },
     // The picker's value: a graph's name, or the file that was dropped
+    // What the folded panel says: the graph on screen
+    foldTitle() {
+      return this.fileName || graphTitle(this.selectedGraph);
+    },
     graphChoice: {
       get() {
         return this.fileName ? '__file__' : this.selectedGraph;
@@ -406,6 +421,35 @@ export default {
         this.copiedTimer = setTimeout(() => { this.copied = false; }, 1500);
       };
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(installLine).then(done, () => {});
+    },
+
+    // A swipe on the fold button folds (up) or unfolds (down) the panel; a tap toggles it
+    onFoldDown(e) {
+      this.foldFrom = e.clientY;
+      this.foldSwiped = false;
+      // The swipe goes on past the button's edge
+      if (e.currentTarget.setPointerCapture) e.currentTarget.setPointerCapture(e.pointerId);
+    },
+
+    onFoldUp() {
+      this.foldFrom = null;
+    },
+
+    onFoldMove(e) {
+      if (this.foldFrom == null) return;
+      let dy = e.clientY - this.foldFrom;
+      if (Math.abs(dy) < FOLD_SWIPE) return;
+      this.foldFrom = null;
+      this.foldSwiped = true;
+      this.panelFolded = dy < 0;
+    },
+
+    onFoldClick() {
+      if (this.foldSwiped) {
+        this.foldSwiped = false;
+        return;
+      }
+      this.panelFolded = !this.panelFolded;
     },
 
     onFilePicked(e) {
@@ -614,6 +658,8 @@ export default {
       installLine,
       installNote,
       showPitch: true,
+      // Phones: the panel is folded to one line (see .panel-fold)
+      panelFolded: false,
       pitchShort,
       graphGroups,
       libraryDefaultLabel,
