@@ -347,32 +347,7 @@ body.drag-over::after {
   color: var(--text-3, #8a9ab0);
 }
 
-/* Full: the name with the install line, and a row of switches under the stats */
-.title-row .name-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.title-row .install {
-  margin-left: auto;
-  max-width: 100%;
-  padding: 2px 8px;
-  border: 1px solid var(--line, rgba(255, 255, 255, 0.35));
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-2, #ddd);
-  font-size: 12px;
-  line-height: 18px;
-  cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.title-row .install code {
-  font: inherit;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-}
+/* Full: a row of switches under the stats */
 .controls-row {
   display: flex;
   align-items: center;
@@ -399,12 +374,9 @@ body.drag-over::after {
   }
 }
 
-/* Phones: no install line in the title (Settings has it, in the code), and Settings are a sheet
-   at the bottom, at most 46% of the screen, so the graph stays in view above it */
+/* Phones: Settings are a sheet at the bottom, at most 46% of the screen, so the graph stays in
+   view above it */
 @media (max-width: 500px) {
-  .title-row .install {
-    display: none;
-  }
   .content.sheet {
     position: fixed;
     left: 0;
