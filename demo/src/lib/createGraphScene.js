@@ -1,4 +1,4 @@
-import {createScene, createGuide} from 'w-gl';
+import {createScene} from 'w-gl';
 import bus from './bus';
 import createHighLayout from 'ngraph.hde'
 import createForceLayout from './createForceLayout';
@@ -10,6 +10,7 @@ import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes, navigateNo
 import createGraph from 'ngraph.graph';
 import {stepsForFrame} from './deviceDefaults';
 import look from './look.js';
+import {viewOptions, labelOptions, attachDrawing} from './drawing.js';
 
 const NODE_COLOR = 0x90f8fcff;
 const layoutProps = ['timeStep', 'springLength', 'springCoefficient', 'dimensions', 'dragCoefficient', 'gravity', 'theta', 'maxVelocity', 'integrator', 'nbody'];
@@ -19,7 +20,9 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   // and captured into closure. loadGraph will do the initialization
   let graph, layout;
   // `view` draws the graph (modules/view): it redraws when the layout steps or the camera moves
-  let scene, view, guide;
+  let scene, view;
+  // The drawing's rules on the view (drawing.js): link alpha and node sizes, the legend
+  let drawing = null, colors = null;
 
   // With WebGPU picked, the GPU runs the layout's own simulator whenever its plan says it can
   // (`gpu`); otherwise the layout stays on the CPU and `gpuReasons` says why.
@@ -63,10 +66,13 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     finishPrototype,
     restart,
     getStats,
+    getLegend,
   };
 
   function loadGraph(newGraph, desiredLayout) {
     if (scene) {
+      if (drawing) drawing.dispose();
+      drawing = null;
       view.dispose();
       view = null;
       scene.dispose();
@@ -95,17 +101,20 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     stats.reset();
 
     fitView();
-    let meta = graph.meta || {};
-    view = createView(scene, {graph, layout, nodeColor: nodeColorOf(), linkColor: meta.linkColor, nodeSize: meta.nodeSize});
+    // Colors, sizes and labels from the data, by the same rules for every graph (look.js)
+    let drawn = viewOptions(graph, layout, {springLength: layoutSettings.springLength});
+    colors = drawn.colors;
+    view = createView(scene, Object.assign(drawn.options, {nodeColor: nodeColorOf()}));
     // Hover, drag, select and inspect nodes (modules/view). Dragging works while the layout is paused too.
     // Keyboard: Enter focuses a node, arrows move between nodes, / searches, ? lists the keys.
     view.use(hoverNodes);
     view.use(dragNodes);
     view.use(selectNodes);
-    view.use(inspectNodes);
+    view.use(inspectNodes, look.inspect);
     view.use(navigateNodes);
     view.use(searchNodes);
-    view.use(labelNodes, meta.importance ? {importance: meta.importance} : undefined);
+    view.use(labelNodes, labelOptions(graph));
+    drawing = attachDrawing(view, graph, colors);
     window.view = view;
 
     runLayout(true);
@@ -137,9 +146,14 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   // attach (and after its final step), not on every frame.
   function nodeColorOf() {
     let nodeColor = prototypeControl && prototypeControl.nodeColor;
-    // Graphs with names may color their nodes by a field (loadLabelledGraph.js)
-    if (!nodeColor) return (graph.meta && graph.meta.nodeColor) || NODE_COLOR;
-    return node => nodeColor(node.id) || NODE_COLOR;
+    let own = colors ? colors.nodeColor : NODE_COLOR;
+    if (!nodeColor) return own;
+    return node => nodeColor(node.id) || (typeof own === 'function' ? own(node) : own);
+  }
+
+  // What the colors mean: {title, items: [{color, label, count}], more} or null (look.js)
+  function getLegend() {
+    return drawing ? drawing.legend : null;
   }
 
   function setPrototype(newPrototype, params) {
@@ -439,6 +453,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     if (gpu) gpu.stop();
     gpu = null;
     detachPrototype();
+    if (drawing) drawing.dispose();
     if (view) view.dispose();
     scene.dispose();
     bus.off('load-graph', loadGraph);
