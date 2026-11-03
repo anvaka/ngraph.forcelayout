@@ -166,6 +166,12 @@ export default {
     // The view's pick() asks here first: a point on a label's text is its node
     ctx.provide('labelTargets', {
       at: (x, y) => labelAt(currentBoxes(), x, y),
+      /** The nodes whose labels are placed on the canvas now (not those only in front) */
+      labelled() {
+        let nodes = [];
+        shown.forEach(label => { if (label.to > 0 && !label.frontOnly) nodes.push(label.node); });
+        return nodes;
+      },
       /** The box of `node`'s label on the canvas now ({x, y, width, height}), or null */
       boxOf(node) {
         let found = currentBoxes().find(b => b.node === node);

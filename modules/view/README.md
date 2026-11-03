@@ -184,7 +184,7 @@ seen the next time.
 
 The camera uses this when it brings a node into view (`reveal()`, so keyboard focus and search):
 a node under the panel comes out, `margin` from the panel's edge as from the canvas's. Enter
-starts on the node nearest the middle of what shows.
+starts on the labelled node nearest the middle of what shows.
 
 Hit testing costs a few µs a point. `reveal()` first looks at 25 points around where the node
 would go; only when one of them is covered does it measure the whole visible area, on a grid of
@@ -431,7 +431,7 @@ leaves it.
 
 | Key | Does |
 |---|---|
-| Enter | focuses the node nearest the middle of what shows (or the selected one); on a focused node it is a tap: it selects (Shift adds, Cmd/Ctrl toggles) and keeps the tooltip open |
+| Enter | focuses the selected node, the hovered one, or the labelled node nearest the middle of what shows; on a focused node it is a tap: it selects (Shift adds, Cmd/Ctrl toggles) and keeps the tooltip open |
 | Arrows | move focus to the nearest node in that direction; with no node focused they move the camera |
 | `]` and `[` | next and previous neighbour of the node the walk started from, strongest link first |
 | Space | walks into the focused node: its neighbours are next |
