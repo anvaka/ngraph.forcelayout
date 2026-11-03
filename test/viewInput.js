@@ -905,3 +905,27 @@ test('createVisibility: a function can say what is hidden; the area is measured 
     });
   });
 });
+
+test('overlayBoxes: the view\'s overlays over the canvas, in canvas pixels, but the one placed', function (t) {
+  return visible.then(function (v) {
+    function el(left, top, width, height) {
+      var e = {
+        getBoundingClientRect: function () { return {left: left, top: top, right: left + width, bottom: top + height, width: width, height: height}; },
+        contains: function (other) { return other === e; }
+      };
+      return e;
+    }
+    var card = el(110, 220, 100, 50);
+    var keys = el(20, 30, 80, 60);
+    var hidden = el(0, 0, 0, 0);
+    var away = el(900, 900, 50, 50);
+    var root = {querySelectorAll: function (selector) {
+      t.equal(selector, '[data-graph-overlay]');
+      return [card, keys, hidden, away];
+    }};
+    var rect = {left: 10, top: 20, right: 410, bottom: 320};
+    t.same(v.overlayBoxes(rect, card, root), [{x: 10, y: 10, width: 80, height: 60}], 'the keys card; not the card itself, a hidden one or one off the canvas');
+    t.same(v.overlayBoxes(rect, null, root).length, 2, 'both without an exception');
+    t.same(v.overlayBoxes(rect, null, null), [], 'no page');
+  });
+});

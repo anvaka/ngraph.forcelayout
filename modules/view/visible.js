@@ -104,19 +104,38 @@ const OVERLAY_MARGIN = 12;
 /**
  * Puts a fixed-position element of the view (a search box, a help card) over the canvas where it
  * shows: the first spot from the `from` edge ('top' or 'bottom') where it fits in the visible
- * `area`, a little away from covers; the canvas's corner on that side when nothing covers the
- * canvas or the element fits nowhere. `height`: room to keep for an element that grows (its own
- * height when larger).
+ * `area`, a little away from covers and from the view's other overlays (a details card); over
+ * another overlay when it fits nowhere else; the canvas's corner on that side when it fits
+ * nowhere at all. `height`: room to keep for an element that grows (its own height when larger).
  */
 export function placeOverCanvas(element, canvas, area, from = 'top', height = 0) {
   let rect = canvas.getBoundingClientRect();
   let w = element.offsetWidth, h = Math.max(element.offsetHeight, height);
-  let at = area && area.anyHidden ? area.spot(w, h, OVERLAY_MARGIN, from) : null;
+  let others = overlayBoxes(rect, element);
+  let at = area ? area.spot(w, h, OVERLAY_MARGIN, from, others) : null;
+  if (!at && area && others.length) at = area.spot(w, h, OVERLAY_MARGIN, from);
   if (!at) {
     at = {x: OVERLAY_MARGIN, y: from === 'bottom' ? Math.max(OVERLAY_MARGIN, rect.height - h - OVERLAY_MARGIN) : OVERLAY_MARGIN};
   }
   element.style.left = (rect.left + at.x) + 'px';
   element.style.top = (rect.top + at.y) + 'px';
+}
+
+/**
+ * Boxes ({x, y, width, height}, canvas pixels) of the view's overlays that show over the canvas
+ * (elements marked `data-graph-overlay`), but `except` and what contains it or is inside it
+ */
+export function overlayBoxes(rect, except = null, root = typeof document !== 'undefined' ? document : null) {
+  let boxes = [];
+  if (!root) return boxes;
+  root.querySelectorAll('[' + OVERLAY_ATTRIBUTE + ']').forEach(element => {
+    if (except && (element === except || element.contains(except) || except.contains(element))) return;
+    let r = element.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return;
+    if (r.right <= rect.left || r.left >= rect.right || r.bottom <= rect.top || r.top >= rect.bottom) return;
+    boxes.push({x: r.left - rect.left, y: r.top - rect.top, width: r.width, height: r.height});
+  });
+  return boxes;
 }
 
 // A point is covered when the topmost element there (looking through the view's own overlays)

@@ -25,6 +25,7 @@
 // - `style`: CSS added to the tooltip's own. `className`: a class for it.
 //
 // API: show(node), hide(), get() (the node shown, or null).
+import {overlayBoxes} from '../visible.js';
 
 const STYLE = 'position:fixed;z-index:2147483646;max-width:280px;padding:6px 8px;border-radius:4px;' +
   'background:rgba(9,22,44,0.94);color:#e8f1ff;border:1px solid rgba(255,255,255,0.18);' +
@@ -50,6 +51,9 @@ const NEIGHBOURS = 500;
 // in the band a width-bound drawing leaves free, at most DOCK_HEIGHT tall (it scrolls) and
 // narrow enough to leave room for buttons in a corner
 const NARROW = 560, DOCK_HEIGHT = 150, DOCK_ROOM = 150;
+// Smaller caps a card takes when it fits nowhere at its own size; it scrolls (and fades at its
+// edge) instead. On a narrow canvas only the heights apply.
+const COMPACT = [{width: 220, height: 110}, {width: 160, height: 72}];
 
 function boxBeside(side, at, width, height) {
   let right = side.endsWith('right'), below = side.startsWith('below');
@@ -79,6 +83,7 @@ export default {
   attach(ctx, options = {}) {
     let content = options.content || (node => describeNode(node, ctx.graph, ctx.labelOf ? ctx.labelOf(node) : undefined));
     let card = null;
+    let natural = null;
     // What is shown: {node, pinned, source} (source: 'hover', 'focus' or 'tap')
     let shown = null;
     let overCard = false;
@@ -108,6 +113,14 @@ export default {
     });
     // Nodes move under their tooltips: follow them every frame
     ctx.onFrame(() => { if (shown) place(); });
+    // More room may show (a panel closed): a card that shrank tries its own size again
+    if (ctx.onVisibleAreaChange) {
+      ctx.onVisibleAreaChange(() => {
+        if (!shown) return;
+        shown.size = 0;
+        ctx.requestFrame();
+      });
+    }
     ctx.graph.on('changed', onGraphChanged);
 
     return {
@@ -143,7 +156,7 @@ export default {
       ensureCard();
       if (!shown || shown.node !== node) fill(body);
       let same = shown && shown.node === node;
-      shown = {node, pinned, source, side: same ? shown.side : null, narrow: same ? shown.narrow : (card.style.maxHeight !== '')};
+      shown = {node, pinned, source, side: same ? shown.side : null, narrow: same ? shown.narrow : null, size: same ? shown.size : 0};
       place();
     }
 
@@ -186,7 +199,9 @@ export default {
     // Beside the node, on the side that covers the fewest of its neighbours (what a selection
     // lights up), inside what shows of the canvas (not under a panel). When every side covers
     // some (a hub, a small screen), along the bottom of what shows. The side it had is kept
-    // unless another one is clearly better, so the card doesn't hop as the layout jiggles.
+    // unless another one is clearly better, so the card doesn't hop as the layout jiggles. When
+    // the card fits nowhere at its size (a short screen, a panel open), it tries smaller ones and
+    // scrolls, rather than covering its node, a panel or the canvas buttons.
     function place() {
       let layout = ctx.layout;
       if (!layout || !layout.getBody(shown.node.id)) return hide();
@@ -204,19 +219,64 @@ export default {
       }
       card.style.display = 'block';
       let narrow = rect.width < NARROW;
-      if (narrow !== !!shown.narrow) {
+      if (narrow !== shown.narrow) {
         shown.narrow = narrow;
-        card.style.maxWidth = narrow ? Math.max(160, Math.min(280, rect.width - DOCK_ROOM)) + 'px' : '';
-        card.style.maxHeight = narrow ? DOCK_HEIGHT + 'px' : '';
-        card.style.overflowY = narrow ? 'auto' : '';
+        shown.size = 0;
       }
-      fadeIfMore();
-      let width = card.offsetWidth, height = card.offsetHeight;
       let area = ctx.visibleArea ? ctx.visibleArea() : null;
       if (area && (area.allHidden || area.width !== rect.width || area.height !== rect.height)) area = null;
       let points = neighbourPoints(shown.node);
-      // The view's other overlays (buttons on the canvas, a search box) stay uncovered too
-      let others = overlayBoxes(rect);
+      // The view's other overlays (a search box, the keys card) stay uncovered too
+      let others = overlayBoxes(rect, card);
+      let sizes = cardSizes(rect, narrow);
+      let best = null;
+      // A card that had to shrink stays small until what shows changes (see onVisibleAreaChange)
+      for (let i = Math.min(shown.size || 0, sizes.length - 1); i < sizes.length && !best; ++i) {
+        setSize(sizes[i]);
+        best = bestBox(at, rect, area, points, others, narrow);
+        shown.size = i;
+      }
+      if (!best && others.length) {
+        // No room beside another overlay (the keys card on a short phone): the one opened later
+        // wins, and this card is back when it closes
+        card.style.display = 'none';
+        return;
+      }
+      if (!best) {
+        // Nowhere good: beside the node, inside the canvas, at the smallest size
+        let width = card.offsetWidth, height = card.offsetHeight;
+        let x = at.x + OFFSET, y = at.y + OFFSET;
+        if (x + width > rect.width) x = at.x - OFFSET - width;
+        if (y + height > rect.height) y = at.y - OFFSET - height;
+        best = {side: null, box: {x: Math.max(0, x), y: Math.max(0, y)}};
+      }
+      fadeIfMore();
+      shown.side = best.side;
+      card.style.left = (rect.left + best.box.x) + 'px';
+      card.style.top = (rect.top + best.box.y) + 'px';
+    }
+
+    // The sizes to try, largest first: {width, height} caps in pixels (0: none)
+    function cardSizes(rect, narrow) {
+      if (!narrow) return [{width: 0, height: 0}].concat(COMPACT);
+      let width = Math.max(160, Math.min(280, rect.width - DOCK_ROOM));
+      return [DOCK_HEIGHT].concat(COMPACT.map(size => size.height)).map(height => ({width, height}));
+    }
+
+    function setSize(size) {
+      let maxWidth = size.width ? size.width + 'px' : natural.maxWidth;
+      let maxHeight = size.height ? size.height + 'px' : natural.maxHeight;
+      if (card.style.maxWidth !== maxWidth) card.style.maxWidth = maxWidth;
+      if (card.style.maxHeight !== maxHeight) {
+        card.style.maxHeight = maxHeight;
+        card.style.overflowY = maxHeight ? 'auto' : '';
+      }
+    }
+
+    // Where the card goes at its current size: {side, box, cost}, or null when it fits nowhere
+    // clear of its node, what covers the canvas and the other overlays
+    function bestBox(at, rect, area, points, others, narrow) {
+      let width = card.offsetWidth, height = card.offsetHeight;
       let clear = box => !others.some(b => box.x < b.x + b.width && box.x + width > b.x && box.y < b.y + b.height && box.y + height > b.y);
       let best = null;
       (narrow ? [] : SIDES).forEach(side => {
@@ -228,8 +288,9 @@ export default {
         if (!best || cost < best.cost) best = {side, box, cost};
       });
       if (!best || best.cost > 0) {
-        // Docked at the bottom of what shows, away from the node
-        let spot = area ? area.spot(width, height, DOCK_MARGIN, 'bottom', others)
+        // Docked at the bottom of what shows, away from the node: the spot search steps around it
+        let node = {x: at.x - OFFSET, y: at.y - OFFSET, width: 2 * OFFSET, height: 2 * OFFSET};
+        let spot = area ? area.spot(width, height, DOCK_MARGIN, 'bottom', others.concat([node]))
           : {x: DOCK_MARGIN, y: rect.height - height - DOCK_MARGIN};
         if (spot && spot.y >= 0 && !inside(at, spot, width, height, OFFSET) && clear(spot)) {
           let box = {x: spot.x, y: spot.y, width, height};
@@ -237,16 +298,7 @@ export default {
           if (!best || cost < best.cost) best = {side: 'dock', box, cost};
         }
       }
-      if (!best) {
-        // Nowhere good: beside the node, inside the canvas, as before
-        let x = at.x + OFFSET, y = at.y + OFFSET;
-        if (x + width > rect.width) x = at.x - OFFSET - width;
-        if (y + height > rect.height) y = at.y - OFFSET - height;
-        best = {side: null, box: {x: Math.max(0, x), y: Math.max(0, y)}};
-      }
-      shown.side = best.side;
-      card.style.left = (rect.left + best.box.x) + 'px';
-      card.style.top = (rect.top + best.box.y) + 'px';
+      return best;
     }
 
     // A docked card that scrolls fades out at its bottom edge while there is more below, so the
@@ -278,19 +330,6 @@ export default {
       }));
     }
 
-    // Boxes of the view's other overlays on the canvas, in canvas pixels
-    function overlayBoxes(rect) {
-      let boxes = [];
-      document.querySelectorAll('[data-graph-overlay]').forEach(element => {
-        if (element === card || element.contains(card) || card.contains(element)) return;
-        let r = element.getBoundingClientRect();
-        if (r.width <= 0 || r.height <= 0) return;
-        if (r.right <= rect.left || r.left >= rect.right || r.bottom <= rect.top || r.top >= rect.bottom) return;
-        boxes.push({x: r.left - rect.left, y: r.top - rect.top, width: r.width, height: r.height});
-      });
-      return boxes;
-    }
-
     // Where the shown node's neighbours are on the canvas (at most NEIGHBOURS of them)
     function neighbourPoints(node) {
       let points = [];
@@ -311,6 +350,8 @@ export default {
       // It moves with the node it describes: it doesn't hide the canvas (see visible.js)
       card.setAttribute('data-graph-overlay', '');
       card.style.cssText = STYLE + (options.style || '');
+      // Its own size caps (STYLE's, or the `style` option's): what a card that shrank goes back to
+      natural = {maxWidth: card.style.maxWidth, maxHeight: card.style.maxHeight};
       if (options.className) card.className = options.className;
       card.addEventListener('scroll', fadeIfMore, {passive: true});
       card.addEventListener('wheel', onCardWheel, {passive: false});
