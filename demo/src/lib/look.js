@@ -158,6 +158,8 @@ function hasField(graph, name) {
 
 function legendOf(field, values, counts, colorOf, max) {
   if (values.length < 2) return null;
+  // Bare numbers (Les Misérables' groups) name nothing: the colors show the groups, no legend
+  if (values.every(value => typeof value === 'number' || /^\d+$/.test(String(value)))) return null;
   let shown = values.slice(0, max);
   let rest = values.slice(max);
   return {
