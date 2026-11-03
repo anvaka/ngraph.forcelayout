@@ -95,6 +95,8 @@ const DEFAULTS = {
   fade: 300,
   maxLength: 40
 };
+// For this long after a selection ends, the labels from before it come first (ms)
+const RESTORE_TIME = 1200;
 // A label placed less than this long ago is kept before older ones
 const YOUNG = 1000;
 // At most this many selected nodes are labelled for sure, and this many of their neighbours first
@@ -143,6 +145,11 @@ export default {
     let pending = true;
     // The layout or the camera moved since the last placement
     let moved = true;
+    // The labels on screen when a selection began (node ids), given back their place first when
+    // it ends: the selection's neighbours took places of their own while it lasted, and they must
+    // not keep the landmarks they displaced off the screen afterwards
+    // (for a second after it ends: the details card that covered part of the canvas goes too)
+    let beforeSelection = null, restore = null, restoreUntil = 0, hadSelection = false;
     let last = -Infinity;
     // The canvas at the last placement (CSS pixels)
     let canvasSize = {width: 0, height: 0};
@@ -316,6 +323,19 @@ export default {
       let covered = coveredTest(ctx.visibleArea());
       let spacing = spacingFor(settings.spacing, screen, max);
       let fadingOut = fadingBoxes(screen, now);
+      let selecting = ctx.flags.ids(SELECTED).length > 0;
+      if (selecting && !hadSelection) {
+        // and on which side of their node they were: the selected node's label may take another
+        // side while it is selected (a forced label takes a side where it fits)
+        beforeSelection = new Map();
+        shown.forEach((label, id) => { if (label.to > 0 && !label.frontOnly) beforeSelection.set(id, label.anchor); });
+      } else if (!selecting && hadSelection) {
+        restore = beforeSelection;
+        restoreUntil = now + RESTORE_TIME;
+        beforeSelection = null;
+      }
+      hadSelection = selecting;
+      if (restore && (selecting || now > restoreUntil)) restore = null;
       let list = candidates(screen, max);
       moved = false;
       let placed = placeLabels(list, {
@@ -345,7 +365,8 @@ export default {
     function candidates(screen, max) {
       let list = [];
       let taken = new Set();
-      let add = (node, forced) => {
+      // `anchor`: the side it had (a label from before a selection, which counts as one on screen)
+      let add = (node, forced, anchor) => {
         if (!node || taken.has(node.id)) return;
         if (!textOf(node)) return;
         let body = ctx.layout.getBody(node.id);
@@ -359,7 +380,7 @@ export default {
         list.push({
           row, node, tier, x: screen.x[row], y: screen.y[row], radius,
           width: size.width, height: size.height,
-          anchor: previous && previous.to > 0 && !previous.frontOnly ? previous.anchor : null,
+          anchor: anchor || (previous && previous.to > 0 && !previous.frontOnly ? previous.anchor : null),
           forced
         });
       };
@@ -372,6 +393,12 @@ export default {
           neighbours += 1;
           add(other, false);
         });
+      }
+      // A selection just ended: the labels from before it come back first, most important first
+      if (restore) {
+        Array.from(restore.keys()).map(id => graph.getNode(id)).filter(Boolean)
+          .sort((a, b) => ranked.position[rowOf(a)] - ranked.position[rowOf(b)])
+          .forEach(node => add(node, false, restore.get(node.id)));
       }
       // Landmarks first: the top tier's nodes on screen, before the labels placed last time, so the
       // biggest names arrive at once and stay while the layout runs
