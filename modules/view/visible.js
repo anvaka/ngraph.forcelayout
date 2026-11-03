@@ -91,7 +91,7 @@ function isOverlay(element) {
  * sampled at the centre of each cell. Returns an area with:
  * - `cell`, `cols`, `rows`, `hidden` (1 per covered cell), `anyHidden`;
  * - `clearance`: per cell, how many cells away the nearest covered cell is (along either axis);
- * - `isHidden(x, y)`, `nearest(x, y, margin)`, `center()` below.
+ * - `isHidden(x, y)`, `nearest(x, y, margin)`, `center()`, `largestRect()` below.
  */
 export function measureArea(width, height, covered, cellSize) {
   let cell = cellSize || Math.max(MIN_CELL, Math.ceil(Math.sqrt(width * height / CELLS)));
@@ -112,6 +112,7 @@ export function measureArea(width, height, covered, cellSize) {
     }
   }
   let clearance = chebyshev(hidden, cols, rows);
+  let largest;
 
   return {
     width, height, cell, cols, rows, hidden, clearance, anyHidden,
@@ -152,6 +153,25 @@ export function measureArea(width, height, covered, cellSize) {
         }
       }
       return best < 0 ? null : {x: Math.min((best % cols + 0.5) * cell, width), y: Math.min((Math.floor(best / cols) + 0.5) * cell, height)};
+    },
+    /**
+     * The largest rectangle of the canvas that nothing covers, {x, y, width, height} in canvas
+     * pixels (the whole canvas when nothing covers it; null when everything does). It is where
+     * the whole graph can be shown, or an overlay placed, out from under a panel.
+     */
+    largestRect() {
+      if (largest !== undefined) return largest;
+      if (allHidden) return (largest = null);
+      if (!anyHidden) return (largest = {x: 0, y: 0, width, height});
+      let best = largestOpenRect(hidden, cols, rows);
+      if (!best) return (largest = null);
+      let x = best.c0 * cell, y = best.r0 * cell;
+      largest = {
+        x, y,
+        width: Math.min(width, (best.c1 + 1) * cell) - x,
+        height: Math.min(height, (best.r1 + 1) * cell) - y
+      };
+      return largest;
     }
   };
 
@@ -220,4 +240,32 @@ function chebyshev(hidden, cols, rows) {
     }
   }
   return d;
+}
+
+/**
+ * The largest all-open rectangle of a grid (`hidden[r * cols + c]` is 1 where covered), by the
+ * histogram method in O(cols × rows): {c0, c1, r0, r1} (inclusive cells), or null.
+ */
+export function largestOpenRect(hidden, cols, rows) {
+  let heights = new Int32Array(cols);
+  let stack = new Int32Array(cols + 1);
+  let best = null, bestArea = 0;
+  for (let r = 0; r < rows; ++r) {
+    for (let c = 0; c < cols; ++c) heights[c] = hidden[r * cols + c] ? 0 : heights[c] + 1;
+    let top = 0;
+    for (let c = 0; c <= cols; ++c) {
+      let h = c < cols ? heights[c] : 0;
+      while (top > 0 && heights[stack[top - 1]] >= h) {
+        let height = heights[stack[--top]];
+        let left = top > 0 ? stack[top - 1] + 1 : 0;
+        let area = height * (c - left);
+        if (area > bestArea) {
+          bestArea = area;
+          best = {c0: left, c1: c - 1, r0: r - height + 1, r1: r};
+        }
+      }
+      stack[top++] = c;
+    }
+  }
+  return best;
 }

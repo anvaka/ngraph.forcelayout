@@ -1,0 +1,163 @@
+/* Layout of the panel's rows and the canvas tools: where things go and how big they are. Colours,
+   type and control looks come from the tokens stylesheet (ui); the var() fallbacks keep this
+   readable without it. */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Name, and one line of what it is */
+.title-row {
+  padding: 8px 8px 6px;
+}
+.title-row h2 {
+  margin: 0;
+}
+.title-row .pitch {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-2, rgba(255, 255, 255, 0.75));
+}
+
+/* Buttons that act on the canvas: bottom right, where a thumb reaches */
+.canvas-tools {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: center;
+  gap: 8px;
+  z-index: 2;
+}
+.canvas-tools .tool {
+  min-width: 36px;
+  height: 36px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.35));
+  border-radius: 18px;
+  background: var(--panel, rgb(12, 41, 82));
+  color: var(--text, #fff);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+@media (pointer: coarse) {
+  .canvas-tools .tool {
+    min-width: 44px;
+    height: 44px;
+    border-radius: 22px;
+  }
+}
+
+/* What the graph is, what colour means, whose data it is */
+.about-line {
+  padding: 6px 8px 8px;
+  font-size: 12px;
+  line-height: 16px;
+  border-top: 1px solid var(--line, rgba(255, 255, 255, 0.3));
+}
+.about-line p {
+  margin: 0;
+}
+.about-line .about-text {
+  color: var(--text-2, rgba(255, 255, 255, 0.8));
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  cursor: pointer;
+}
+.about-line .about-text.open {
+  -webkit-line-clamp: unset;
+  display: block;
+}
+.about-line .legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  margin-top: 4px;
+}
+.about-line .legend-name {
+  white-space: nowrap;
+  color: var(--text-3, rgba(255, 255, 255, 0.6));
+}
+.about-line .legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.about-line .swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.about-line .credit {
+  margin-top: 4px;
+  color: var(--text-3, rgba(255, 255, 255, 0.6));
+}
+
+/* Stats: the text takes the room, the buttons keep theirs */
+.stats-row .stats-text {
+  min-width: 0;
+  flex: 1;
+}
+
+/* A file dragged over the page */
+body.drag-over::after {
+  content: 'Drop a .dot or .json file to lay it out';
+  position: fixed;
+  inset: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--accent, #267fcd);
+  border-radius: 12px;
+  background: var(--canvas-veil, rgba(12, 41, 82, 0.85));
+  color: var(--text, #fff);
+  font-size: 22px;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Phones: the panel stays short. One line of what the graph is (tap for all of it), one line of
+   colours, and the data credit at the canvas's bottom left, as maps credit their data. */
+@media (max-width: 500px) {
+  .about-line {
+    padding: 4px 8px 6px;
+  }
+  .about-line .about-text {
+    -webkit-line-clamp: 1;
+  }
+  .about-line .legend {
+    flex-wrap: nowrap;
+    overflow: hidden;
+  }
+  .about-line .credit {
+    position: fixed;
+    left: 8px;
+    bottom: 8px;
+    max-width: calc(100vw - 140px);
+    margin: 0;
+    font-size: 11px;
+    line-height: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}

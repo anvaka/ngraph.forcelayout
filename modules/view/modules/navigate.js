@@ -43,6 +43,16 @@ const DIRECTIONS = {
 // Pixels a node moves per key press (Alt: fine steps)
 const STEP = 10, FINE_STEP = 1;
 
+// Pointer gestures: the same for a mouse, a pen and a finger (only the reach differs)
+const GESTURES = [
+  ['Drag', 'a node moves it; the background pans'],
+  ['Pinch or wheel', 'zoom'],
+  ['Double tap', 'zoom in; a two-finger tap zooms out'],
+  ['Tap a node', 'its details and neighbours; tap the background to clear'],
+  ['Long press', 'on a node: grab it where nodes crowd; on the background: drag a box to select'],
+  ['Twist, or right drag', 'rotate (3D)']
+];
+
 const HELP = [
   ['Enter', 'focus a node; on a focused node, select it (Shift adds, Cmd/Ctrl toggles)'],
   ['Arrows', 'nearest node in that direction'],
@@ -123,7 +133,16 @@ export default {
       focus: node => focus(node, 'api'),
       get: () => current,
       clear,
-      announce: say
+      announce: say,
+      /** Shows or hides the help card (keys and gestures); with no argument it toggles */
+      help(show) {
+        if (show === undefined ? !help : show) {
+          if (!help) toggleHelp();
+        } else {
+          closeHelp();
+        }
+        return !!help;
+      }
     };
     ctx.provide('focus', {get: () => current, set: (node, reason) => focus(node, reason || 'api'), clear});
     ctx.provide('announce', say);
@@ -431,28 +450,50 @@ export default {
       help = document.createElement('div');
       help.style.cssText = CARD_STYLE;
       help.setAttribute('data-graph-overlay', '');
-      let title = document.createElement('div');
-      title.style.cssText = 'font-weight:600;margin-bottom:4px;';
-      title.textContent = 'Keys';
-      help.appendChild(title);
-      let table = document.createElement('div');
-      table.style.cssText = 'display:grid;grid-template-columns:auto 1fr;column-gap:10px;';
-      HELP.forEach(([keys, what]) => {
-        let k = document.createElement('div');
-        k.style.cssText = 'white-space:nowrap;font-weight:600;';
-        k.textContent = keys;
-        let w = document.createElement('div');
-        w.style.cssText = 'opacity:0.8;';
-        w.textContent = what;
-        table.appendChild(k);
-        table.appendChild(w);
+      help.setAttribute('role', 'dialog');
+      help.setAttribute('aria-label', 'Keys and gestures');
+      let keys = keyRows();
+      // A finger first sees what fingers do; a keyboard first sees the keys
+      let coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+      let sections = coarse ? [['Gestures', GESTURES], ['Keys', keys]] : [['Keys', keys], ['Gestures', GESTURES]];
+      sections.forEach(([name, rows], i) => {
+        let title = document.createElement('div');
+        title.style.cssText = 'font-weight:600;margin:' + (i ? '8px' : '0') + ' 0 4px;';
+        title.textContent = name;
+        help.appendChild(title);
+        let table = document.createElement('div');
+        table.style.cssText = 'display:grid;grid-template-columns:auto 1fr;column-gap:10px;';
+        rows.forEach(([what, does]) => {
+          let k = document.createElement('div');
+          k.style.cssText = 'white-space:nowrap;font-weight:600;';
+          k.textContent = what;
+          let w = document.createElement('div');
+          w.style.cssText = 'opacity:0.8;';
+          w.textContent = does;
+          table.appendChild(k);
+          table.appendChild(w);
+        });
+        help.appendChild(table);
       });
-      help.appendChild(table);
+      help.style.maxHeight = 'calc(100dvh - 24px)';
+      help.style.overflowY = 'auto';
       document.body.appendChild(help);
+      // Bottom left of what shows: out from under a panel
       let rect = canvas.getBoundingClientRect();
-      help.style.left = (rect.left + 12) + 'px';
-      help.style.top = Math.max(rect.top + 12, rect.bottom - help.offsetHeight - 12) + 'px';
-      say('Keys: ' + HELP.map(([keys, what]) => `${keys}: ${what}`).join('. ') + '.');
+      let area = ctx.visibleArea && ctx.visibleArea();
+      let free = (area && area.largestRect()) || {x: 0, y: 0, width: rect.width, height: rect.height};
+      help.style.left = (rect.left + free.x + 12) + 'px';
+      help.style.top = Math.max(rect.top + free.y + 12, rect.top + free.y + free.height - help.offsetHeight - 12) + 'px';
+      say('Keys: ' + keys.map(([name, what]) => `${name}: ${what}`).join('. ') + '. Gestures: ' +
+        GESTURES.map(([gesture, what]) => `${gesture}: ${what}`).join('. ') + '.');
+    }
+
+    // The keys, with those of other modules that say so (fit's key)
+    function keyRows() {
+      let rows = HELP.slice();
+      let fit = ctx.get('fit');
+      if (fit && fit.key) rows.splice(rows.length - 1, 0, [fit.key, 'fit the whole graph, and follow it']);
+      return rows;
     }
 
     function closeHelp() {

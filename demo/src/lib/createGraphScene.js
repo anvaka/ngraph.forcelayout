@@ -58,6 +58,9 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     updateLayoutSettings,
     fitView,
     onFollow: fn => followListeners.add(fn),
+    // The view's search box and its keys-and-gestures card, for buttons a finger can reach
+    openSearch: () => { let search = view && view.getModule('search'); if (search) search.open(''); },
+    toggleHelp: () => { let navigate = view && view.getModule('navigate'); return navigate ? navigate.help() : false; },
     setStepsPerFrame,
     setPlacement,
     setBackend,
@@ -295,6 +298,8 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
       // only jitter is left), while it stays settled
       settled,
       msPerStep: gpu ? gpu.stats().msPerStep : stats.msPerStep(),
+      // wall clock: steps and frames per second over the last second, while it runs
+      rate: isRunning ? stats.rate() : null,
       // steps the last frame ran (with steps per frame on auto, what the budget allowed)
       stepsPerFrame: lastFrameSteps,
       placement: placementChoice,
@@ -315,6 +320,7 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
 
   function setRunning(newIsRunning) {
     isRunning = newIsRunning;
+    if (!isRunning) stats.pause();
     if (isRunning && !rafHandle) rafHandle = requestAnimationFrame(frame);
   }
 
@@ -367,7 +373,10 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
       if (target !== layout) return;
       if (isStable) {
         let state = target.getStability();
-        settled = {step: stats.steps, reason: state.reason};
+        // how long it took counts only the first time it settles after a start
+        // how long it took counts only the first time it settles after a start (load, reset)
+        settled = {step: stats.steps, reason: state.reason, seconds: stats.timed ? 0 : stats.runMs / 1000};
+        stats.timed = true;
         if (isRunning) {
           autoStopped = true;
           setRunning(false);
@@ -427,37 +436,68 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   }
 }
 
-// True when some node has a name of its own: data.label or data.name, or an id that isn't a number
+// Labels only for graphs whose nodes have names: at least half of the first 200 nodes have a
+// data.label or data.name (a mostly numbered graph with a few names gets none). Ids are not names.
 function hasNames(graph) {
-  let named = false;
+  let named = 0, seen = 0;
   graph.forEachNode(node => {
+    seen += 1;
     let data = node.data;
-    if ((data && typeof data === 'object' && (data.label != null || data.name != null)) ||
-        (typeof node.id === 'string' && !/^-?\d+(\.\d+)?$/.test(node.id))) {
-      named = true;
-      return true;
-    }
+    if (data && typeof data === 'object' && (typeof data.label === 'string' || typeof data.name === 'string')) named += 1;
+    return seen >= 200;
   });
-  return named;
+  return named > 0 && named >= seen / 2;
 }
 
-// Average time per layout step over the last frames.
+// Average time per layout step over the last frames; steps and frames per second over the last
+// second (wall clock, so they compare across CPU and GPU); and how long the layout has run.
 function createStats() {
   let samples = [];
+  let recent = [];  // [time, steps, time, steps, ...] of the last second's frames
+  let lastAt = 0;
   let api = {
     steps: 0,
+    // ms the layout has been running since it started (paused time doesn't count)
+    runMs: 0,
+    // the layout settled once since it started: later settles (after a wake) aren't timed
+    timed: false,
     record(ms, steps) {
       api.steps += steps;
       samples.push(ms / steps);
       if (samples.length > 30) samples.shift();
+      let now = performance.now();
+      if (lastAt) api.runMs += Math.min(now - lastAt, 100);
+      lastAt = now;
+      recent.push(now, steps);
+      while (recent.length > 2 && now - recent[0] > 1000) recent.splice(0, 2);
+    },
+    // The loop stopped: the next frame doesn't count the pause as running time
+    pause() {
+      lastAt = 0;
+      recent = [];
     },
     reset() {
       api.steps = 0;
+      api.runMs = 0;
+      api.timed = false;
       samples = [];
+      recent = [];
+      lastAt = 0;
     },
     msPerStep() {
       if (samples.length === 0) return 0;
       return samples.reduce((a, b) => a + b, 0) / samples.length;
+    },
+    // {stepsPerSecond, fps} over the last second, or null before a quarter second of frames
+    rate() {
+      if (recent.length < 4) return null;
+      let span = recent[recent.length - 2] - recent[0];
+      if (span < 250) return null;
+      let steps = 0;
+      // the first frame's steps ran before the span started
+      for (let i = 3; i < recent.length; i += 2) steps += recent[i];
+      let frames = recent.length / 2 - 1;
+      return {stepsPerSecond: steps * 1000 / span, fps: frames * 1000 / span};
     }
   };
   return api;

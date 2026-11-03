@@ -51,32 +51,39 @@ function toGraph(doc) {
   for (let i = 0; i + 1 < doc.links.length; i += 2) {
     graph.addLink(ids[doc.links[i]], ids[doc.links[i + 1]], linkData ? linkData[i / 2] : undefined);
   }
+  let colors = doc.colorBy ? categoryColor(doc, graph) : null;
   graph.meta = {
     title: doc.title, about: doc.about, source: doc.source, license: doc.license,
     importance: doc.importance,
     nodeSize: doc.nodeSize,
-    nodeColor: doc.colorBy ? categoryColor(doc, graph) : undefined,
+    nodeColor: colors ? colors.color : undefined,
+    // What the colours mean: the field, and its values by how many nodes have them
+    colorBy: doc.colorBy,
+    legend: colors ? colors.legend : undefined,
     linkColor: linkData ? linkColorOf(doc) : undefined,
   };
   return graph;
 }
 
-// Colors by a field: the palette in the file, else the most common values get the PALETTE
+// Colors by a field: the palette in the file, else the most common values get the PALETTE.
+// Returns {color: node => rgba, legend: [{label, color, count}]} (legend most common first).
 function categoryColor(doc, graph) {
   let field = doc.colorBy;
+  let counts = new Map();
+  graph.forEachNode(node => {
+    let value = node.data[field];
+    if (value !== undefined) counts.set(value, (counts.get(value) || 0) + 1);
+  });
+  let byCount = [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a));
   let colors = {...doc.palette};
-  if (!doc.palette) {
-    let counts = new Map();
-    graph.forEachNode(node => {
-      let value = node.data[field];
-      if (value !== undefined) counts.set(value, (counts.get(value) || 0) + 1);
-    });
-    [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a))
-      .forEach((value, i) => { colors[value] = PALETTE[i] || OTHER; });
-  }
+  if (!doc.palette) byCount.forEach((value, i) => { colors[value] = PALETTE[i] || OTHER; });
   let rgba = {};
   Object.keys(colors).forEach(key => { if (colors[key]) rgba[key] = toRGBA(colors[key], 0xff); });
-  return node => rgba[node.data && node.data[field]] || toRGBA(OTHER, 0xff);
+  // A hidden field (its own colour per value, such as a metro line's) has no legend
+  let legend = field[0] === '_' ? null : byCount.map(value => ({
+    label: String(value), color: colors[value] || OTHER, count: counts.get(value)
+  }));
+  return {color: node => rgba[node.data && node.data[field]] || toRGBA(OTHER, 0xff), legend};
 }
 
 function linkColorOf(doc) {

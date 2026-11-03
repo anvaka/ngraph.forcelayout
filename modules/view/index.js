@@ -21,7 +21,7 @@ import {createNodeProgram, createEdgeProgram} from './programs.js';
 import {TEXTURE_WIDTH, textureRows, packPositions, collectNodes, collectEdges} from './positions.js';
 import {createProjector, ORIGIN, Z_NORMAL} from './math.js';
 import {pickNode, nodesInRect, projectAll} from './pick.js';
-import {createFlags, layoutFlags, SELECTED, HOVERED} from './flags.js';
+import {createFlags, layoutFlags, SELECTED} from './flags.js';
 import * as FLAGS from './flags.js';
 import {createInput, ViewEvent} from './input.js';
 import {createCamera} from './camera.js';
@@ -164,7 +164,9 @@ export default function createView(scene, options = {}) {
     camera = createCamera(scene, options.camera);
     input = createInput(canvas, {
       // A press of a mouse or pen picks the node it highlighted, if it is still within reach
-      pick: (x, y, p) => pick(x, y, {pointerType: p.pointerType, width: p.width, sticky: p.pointerType === 'touch' ? null : hoveredNode()}),
+      // A press is decided the same way for every pointer: no bonus for the hovered node, which
+      // would make a mouse grab where a finger pans (in a crowd, see drag.js)
+      pick: (x, y, p) => pick(x, y, {pointerType: p.pointerType, width: p.width}),
       emit: (name, e) => events.emit(name, e),
       hasListeners: name => events.has(name),
       scenePoint,
@@ -425,13 +427,6 @@ export default function createView(scene, options = {}) {
     hit.node = nodeData.nodes[hit.row];
     hit.clear = hit.inside || hit.gap >= margin;
     return hit.node ? hit : null;
-  }
-
-  // The hovered node, if one is
-  function hoveredNode() {
-    if (!flags.count(HOVERED)) return null;
-    let ids = flags.ids(HOVERED);
-    return ids.length === 1 ? graph.getNode(ids[0]) : null;
   }
 
   function reachFor(pointerType, width) {
@@ -875,6 +870,7 @@ export {default as inspectNodes, describeNode} from './modules/inspect.js';
 export {default as navigateNodes, nearestInDirection, neighboursOf} from './modules/navigate.js';
 export {default as searchNodes, buildSearchIndex, findNodes} from './modules/search.js';
 export {default as labelNodes} from './modules/labels.js';
-export {default as fitLayout, largestOpenRect} from './modules/fit.js';
+export {default as fitLayout, layoutBounds} from './modules/fit.js';
+export {largestOpenRect} from './visible.js';
 export {placeLabels} from './labels/place.js';
 export {computeImportance, rankRows} from './labels/importance.js';

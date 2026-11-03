@@ -61,7 +61,9 @@ export default {
         });
       }
       set(hit);
-      updateCursor(hit);
+      // The cursor shows what a press would do, and a press is picked without the hover's bonus
+      let pressHit = hit && hovered ? ctx.pick(point.x, point.y, {pointerType: point.pointerType, width: point.width}) : hit;
+      updateCursor(pressHit);
     }
 
     function set(hit) {

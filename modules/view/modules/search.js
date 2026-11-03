@@ -70,9 +70,12 @@ export default {
     function open(text) {
       if (!box) createBox();
       box.input.value = text || '';
+      // Top left of what shows: out from under a panel
       let rect = canvas.getBoundingClientRect();
-      box.root.style.left = (rect.left + 12) + 'px';
-      box.root.style.top = (rect.top + 12) + 'px';
+      let area = ctx.visibleArea && ctx.visibleArea();
+      let free = (area && area.largestRect()) || {x: 0, y: 0};
+      box.root.style.left = (rect.left + free.x + 12) + 'px';
+      box.root.style.top = (rect.top + free.y + 12) + 'px';
       box.root.style.display = 'block';
       box.input.focus({preventScroll: true});
       update();

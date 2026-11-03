@@ -1,17 +1,33 @@
 <template>
   <div>
-    <h2><a href='https://github.com/anvaka/ngraph.forcelayout'>ngraph.forcelayout</a> demo</h2>
+    <!-- First after the canvas in Tab order: the controls that act on the canvas -->
+    <div class='canvas-tools' data-graph-overlay>
+      <button class='tool' @click='openSearch' aria-label='Find a node' title='Find a node (/)'>
+        <svg aria-hidden='true' viewBox='0 0 16 16' width='16' height='16'><circle cx='6.5' cy='6.5' r='4.5' fill='none' stroke='currentColor' stroke-width='1.6'/><path d='M10 10l4 4' stroke='currentColor' stroke-width='1.6' stroke-linecap='round'/></svg>
+      </button>
+      <button class='tool' @click='toggleHelp' :aria-expanded='helpOpen ? "true" : "false"' aria-label='Keys and gestures' title='Keys and gestures (?)'>?</button>
+      <button v-if='!following' class='tool fit-view' @click='fitView'
+        title='Show the whole graph, and follow it as the layout moves (0)'>Fit graph</button>
+    </div>
+    <div class='title-row'>
+      <h2><a href='https://github.com/anvaka/ngraph.forcelayout#readme'>ngraph.forcelayout</a></h2>
+      <p class='pitch' v-if='showPitch'>{{pitch}}</p>
+    </div>
     <div class='layout-box'>
-      <div class='buttons'>
-        <label class='graph-picker' title='Graph'>
-          <select v-model='selectedGraph'>
-            <option v-for="graph in graphs" :key='graph' :value='graph'>{{graph}}</option>
+      <div class='buttons graph-row'>
+        <label class='graph-picker'>
+          <span class='visually-hidden'>Graph</span>
+          <select v-model='graphChoice' ref='graphSelect'>
+            <option v-if='fileName' value='__file__'>{{fileName}}</option>
+            <optgroup v-for='group in graphGroups' :key='group.label' :label='group.label'>
+              <option v-for='graph in group.graphs' :key='graph' :value='graph'>{{graphTitle(graph)}}</option>
+            </optgroup>
           </select>
         </label>
-        <a href="#" @click.prevent='toggleLayoutRun' class='btn'>{{isRunning ? 'Pause' : 'Run'}}</a>
-        <a href="#" @click.prevent='restart' class='btn restart' title='Start over from initial positions'>Reset</a>
+        <button @click='toggleLayoutRun' class='btn'>{{isRunning ? 'Pause' : 'Run'}}</button>
+        <button @click='restart' class='btn restart' title='Start over from initial positions'>Reset</button>
       </div>
-      <div class='buttons idea-bar' v-if='prototypes.length'>
+      <div class='buttons idea-bar' v-if='prototype'>
         <label class='graph-picker' title='Layout idea to try'>
           <select v-model='prototypeId'>
             <option v-for='option in prototypeOptions' :key='option.value' :value='option.value'>{{option.label}}</option>
@@ -23,7 +39,7 @@
         </label>
         <help-icon @show='aboutOpen = !aboutOpen' :class='{open: aboutOpen}'></help-icon>
       </div>
-      <div class='about idea-about' v-if='aboutOpen && prototypes.length'>
+      <div class='about idea-about' v-if='aboutOpen && prototype'>
         <div v-if='prototype' v-html='prototype.description'></div>
         <template v-else>
           Experimental changes to the layout, one per folder in <code>demo/src/prototypes</code>.
@@ -32,19 +48,39 @@
           changing one carries on from the current drawing, and Reset starts over.
         </template>
       </div>
-      <div class='stats'>
-        <div v-if='loading'>Loading graph...</div>
-        <div v-else-if='stats'>
-          {{stats.nodes.toLocaleString()}} nodes, {{stats.links.toLocaleString()}} links<span v-if='stats.placement'>, {{stats.placement}} start</span><br>
-          {{stats.steps.toLocaleString()}} steps<span v-if='stats.msPerStep'>, <span class='number'>{{formatMs(stats.msPerStep)}}</span> ms/step</span>
-          on {{stats.backend === 'webgpu' ? 'WebGPU' : 'CPU'}}<span v-if='stats.settled' class='settled'
-            :title="stats.settled.reason === 'noise' ? 'Only jitter is left: the layout stopped. Drag a node or press Run to go on.' : 'The drawing stopped changing: the layout stopped. Drag a node or press Run to go on.'">, settled</span>
+      <div class='stats stats-row'>
+        <div v-if='loading' role='status'>Loading {{graphTitle(selectedGraph)}}…</div>
+        <div v-else-if='stats' class='stats-text'>
+          <div>{{stats.nodes.toLocaleString()}} nodes · {{stats.links.toLocaleString()}} links<span v-if='stats.placement'> · {{stats.placement}} start</span></div>
+          <div :title='speedTitle'>{{speedLine}}</div>
           <div v-if='stats.gpuReasons' class='off-gpu'>Runs on the CPU: {{stats.gpuReasons}}.</div>
+          <div v-if='fileError' class='off-gpu file-error' role='alert'>{{fileError}}</div>
         </div>
-        <a href='#' @click.prevent='settingsOpen = !settingsOpen' class='toggle-settings'>Settings {{settingsOpen ? '▴' : '▾'}}</a>
+        <button @click='settingsOpen = !settingsOpen' class='toggle-settings' :aria-expanded='settingsOpen ? "true" : "false"'>Settings<span v-if='!settingsOpen && changedCount'> · {{changedCount}} changed</span><span aria-hidden='true'> {{settingsOpen ? '▴' : '▾'}}</span></button>
+      </div>
+      <div class='about-line' v-if='info && !loading'>
+        <p class='about-text' v-if='info.about' :class='{open: aboutTextOpen}' @click='aboutTextOpen = !aboutTextOpen'>{{info.about}}</p>
+        <div class='legend' v-if='legend.length'>
+          <span class='legend-name'>Colour: {{info.colorBy}}</span>
+          <span class='legend-chip' v-for='item in legend' :key='item.label'><span class='swatch' aria-hidden='true' :style='{background: item.color}'></span>{{item.label}}</span>
+          <span class='legend-more' v-if='legendMore'>+{{legendMore}}</span>
+        </div>
+        <div class='credit' v-if='info.credit'>Data: <a :href='info.credit.href' target='_blank' rel='noopener'>{{info.credit.text}}</a></div>
       </div>
     </div>
     <div class='content' v-if='settingsOpen'>
+      <template v-if='prototypes.length && !prototype'>
+        <div class='section first'>
+          Layout ideas
+          <small><a href='https://github.com/anvaka/ngraph.forcelayout/tree/main/demo/src/prototypes'>experiments, not part of the library</a></small>
+        </div>
+        <input-select label='Try an idea' v-model='prototypeId' :options='prototypeOptions'>
+          Experimental changes to the layout, one per folder in <code>demo/src/prototypes</code>.
+          Picking an idea restarts the layout from the same start as <b>none</b>, and puts it at
+          the top of the panel; its <b>on</b> box turns it off and on again, so you can compare the two.
+        </input-select>
+        <div class='section'>Layout <small><a href='#' @click.prevent='resetSettings' title='Every setting back to what this page starts with'>reset all settings</a></small></div>
+      </template>
       <input-value label='Time step' v-model='layoutSettings.timeStep'>
       This is integration time step value. The higher it is, the faster nodes will move, but setting it too high
       can result in lots of jitter and instability.
@@ -80,8 +116,8 @@
       <div class='section'>
         Speed-ups
         <small>
-          <a href='#' @click.prevent='useDeviceDefaults' title='The settings picked for this device'>this device</a> |
-          <a href='#' @click.prevent='useLibraryDefaults' title="The library's own defaults">library defaults</a>
+          <a href='#' @click.prevent='useDeviceDefaults' title='The speed-ups picked for this device'>this device</a> |
+          <a href='#' @click.prevent='useLibraryDefaults' :title='"The " + libraryDefaultLabel + "s for the speed-ups (the physics stay)"'>{{libraryDefaultLabel}}s</a>
         </small>
       </div>
       <div class='device-note' v-if='deviceSummary'>{{deviceSummary}}</div>
@@ -151,25 +187,25 @@
         </div>
       </template>
     </div>
-    <button v-if='!following' class='fit-view' data-graph-overlay @click='fitView'
-      title='Show the whole graph, and follow it as the layout moves'>Fit graph</button>
   </div>
 </template>
 
 <script>
 import createGraphScene from './lib/createGraphScene';
-import getAvailableGraphs from './lib/getAvailableGraphs';
+import {graphGroups, graphTitle} from './lib/getAvailableGraphs';
+import graphInfo from './lib/graphInfo';
+import {libraryDefaultLabel, pitch} from './lib/release';
+import './styles/layout.css';
 import loadGraph from './lib/loadGraph';
 import bus from './lib/bus';
 import queryState from 'query-state';
 import InputValue from './components/InputValue.vue';
-import InputFlag from './components/InputFlag.vue';
 import InputSelect from './components/InputSelect.vue';
 import HelpIcon from './components/HelpIcon.vue';
 import prototypes from './prototypes';
 import {libraryChoice, deviceKeys, maxAutoSteps, readSignals, pickDefaults, probeWebGPU} from './lib/deviceDefaults';
 
-let appState = queryState({
+const DEFAULTS = {
   graph: 'Mammals (WordNet)',
   timeStep: 0.5,
   springLength: 10,
@@ -183,7 +219,26 @@ let appState = queryState({
   // nbody, placement, backend and stepsPerFrame have no defaults here: the device picks them
   // (deviceDefaults.js), and they are in the URL only when the link or the visitor sets them
   prototype: 'none',
-}, { useSearch: true });
+};
+
+// The address keeps only what differs from the defaults, so a shared link says what was changed
+// (and a later change of a default reaches old links)
+let urlState = queryState({}, { useSearch: true });
+let appState = {
+  get(key) {
+    let value = urlState.get(key);
+    return value === undefined ? DEFAULTS[key] : value;
+  },
+  set(key, value) {
+    if (key in DEFAULTS && DEFAULTS[key] === value) urlState.unset(key);
+    else urlState.set(key, value);
+  },
+  unset: key => urlState.unset(key),
+  has: key => urlState.get(key) !== undefined
+};
+// The physics settings, as the page starts them
+const PHYSICS = ['timeStep', 'springLength', 'springCoefficient', 'dragCoefficient', 'dimensions', 'theta', 'gravity', 'maxVelocity', 'integrator'];
+const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 
 const deviceChoice = pickDefaults(readSignals());
 // Device settings the URL doesn't set: they follow the device until the visitor changes them
@@ -191,6 +246,10 @@ const pickedByDevice = Object.fromEntries(deviceKeys.map(key => [key, appState.g
 
 function startValue(key) {
   return pickedByDevice[key] ? deviceChoice[key] : appState.get(key);
+}
+
+function formatSeconds(seconds) {
+  return seconds < 10 ? `${seconds.toFixed(1)} s` : `${Math.round(seconds)} s`;
 }
 
 // Prototype parameters live in the URL as p.<key>
@@ -214,7 +273,6 @@ export default {
   name: 'app',
   components: {
     InputValue,
-    InputFlag,
     InputSelect,
     HelpIcon
   },
@@ -226,13 +284,69 @@ export default {
       return this.layoutSettings.integrator === 'fire';
     },
     integratorOptions() {
-      return [{value: 'euler', label: 'euler (library default)'}, {value: 'fire', label: 'fire'}];
+      return [{value: 'euler', label: `euler (${libraryDefaultLabel})`}, {value: 'fire', label: 'fire'}];
     },
     nbodyOptions() {
-      return [{value: 'quadtree', label: 'quad tree (library default)'}, {value: 'dualtree', label: 'dual tree'}];
+      return [{value: 'quadtree', label: `quad tree (${libraryDefaultLabel})`}, {value: 'dualtree', label: 'dual tree'}];
     },
     placementOptions() {
-      return [{value: 'default', label: 'library default'}, {value: 'pivot', label: 'pivot MDS (add-on)'}];
+      return [{value: 'default', label: libraryDefaultLabel}, {value: 'pivot', label: 'pivot MDS (add-on)'}];
+    },
+    // The picker's value: a graph's name, or the file that was dropped
+    graphChoice: {
+      get() {
+        return this.fileName ? '__file__' : this.selectedGraph;
+      },
+      set(value) {
+        if (value === '__file__') return;
+        this.fileName = '';
+        this.fileError = '';
+        if (value === this.selectedGraph) this.loadNewGraph(value);
+        else this.selectedGraph = value;
+      }
+    },
+    // "2,140 steps · 612 steps/s · 60 fps · WebGPU", or how it settled
+    speedLine() {
+      let s = this.stats;
+      if (!s) return '';
+      let where = s.backend === 'webgpu' ? 'WebGPU' : 'CPU';
+      let steps = `${s.steps.toLocaleString()} steps`;
+      if (s.settled) {
+        return s.settled.seconds > 0
+          ? `Settled in ${formatSeconds(s.settled.seconds)} · ${steps} · ${where}`
+          : `Settled · ${steps} · ${where}`;
+      }
+      if (!this.isRunning) return `Paused · ${steps} · ${where}`;
+      let rate = s.rate;
+      if (!rate) return `${steps} · ${where}`;
+      return `${steps} · ${Math.round(rate.stepsPerSecond).toLocaleString()} steps/s · ${Math.round(rate.fps)} fps · ${where}`;
+    },
+    speedTitle() {
+      let s = this.stats;
+      if (!s) return '';
+      let parts = [];
+      if (s.msPerStep) parts.push(`${this.formatMs(s.msPerStep)} ms of layout per step (${s.backend === 'webgpu' ? 'GPU time' : 'wall time'}).`);
+      if (s.settled) {
+        parts.push(s.settled.reason === 'noise'
+          ? 'Only jitter is left, so the layout stopped. Drag a node or press Run to go on.'
+          : 'The drawing stopped changing, so the layout stopped. Drag a node or press Run to go on.');
+      }
+      return parts.join(' ');
+    },
+    // The legend's first entries (the most common values), and how many more there are
+    legend() {
+      let list = (this.info && this.info.legend) || [];
+      return list.slice(0, coarse ? 4 : 6);
+    },
+    legendMore() {
+      let list = (this.info && this.info.legend) || [];
+      return Math.max(0, list.length - this.legend.length);
+    },
+    // Settings that differ from what the page starts with (the button says so while closed)
+    changedCount() {
+      let physics = PHYSICS.filter(key => this.layoutSettings[key] !== DEFAULTS[key]).length;
+      let device = deviceKeys.filter(key => !this.picked[key] && this.deviceValue(key) !== this.device[key]).length;
+      return physics + device;
     },
     prototype() {
       return findPrototype(this.prototypeId);
@@ -308,6 +422,40 @@ export default {
       this.scene.restart();
     },
 
+    graphTitle,
+
+    deviceValue(key) {
+      return key === 'nbody' ? this.layoutSettings.nbody : this[key];
+    },
+
+    // Every setting back to what the page starts with: the physics, and what the device picks
+    resetSettings() {
+      PHYSICS.forEach(key => { this.layoutSettings[key] = DEFAULTS[key]; });
+      this.useDeviceDefaults();
+    },
+
+    openSearch() {
+      this.scene.openSearch();
+    },
+
+    toggleHelp() {
+      this.helpOpen = this.scene.toggleHelp();
+    },
+
+    onFileGraph(name) {
+      this.fileName = name;
+      this.fileError = '';
+    },
+
+    onFileError(message) {
+      this.fileError = message;
+    },
+
+    hidePitch() {
+      // On a phone the line goes once they use the canvas: the graph needs the room
+      if (coarse) this.showPitch = false;
+    },
+
     fitView() {
       this.scene.fitView();
     },
@@ -354,8 +502,10 @@ export default {
         this.loading = false;
       });
     },
-    onGraphLoaded() {
+    onGraphLoaded(graph) {
       this.isRunning = true;
+      this.info = graphInfo(this.selectedGraph, graph, this.fileName);
+      this.aboutTextOpen = false;
     }
   },
   watch: {
@@ -400,6 +550,7 @@ export default {
       });
     },
     selectedGraph(newGraph) {
+      this.fileName = '';
       appState.set('graph', newGraph);
       this.loadNewGraph(newGraph);
     },
@@ -439,13 +590,23 @@ export default {
     }
   },
   data() {
-    let graphs = getAvailableGraphs();
     return {
       isRunning: true,
       // the camera follows the whole drawing until the user moves it
       following: true,
       selectedGraph: appState.get('graph'),
-      settingsOpen: window.innerWidth > 500,
+      // Closed: the first view is the graph. A link that changed settings opens them on a desktop;
+      // on a phone the Settings button says how many changed instead (they would cover the graph)
+      settingsOpen: !coarse && window.innerWidth > 500 && PHYSICS.concat(deviceKeys).some(key => appState.has(key)),
+      info: null,
+      aboutTextOpen: false,
+      fileName: '',
+      fileError: '',
+      helpOpen: false,
+      showPitch: true,
+      pitch,
+      graphGroups,
+      libraryDefaultLabel,
       loading: false,
       layoutSettings: {
         timeStep: appState.get('timeStep'),
@@ -476,8 +637,7 @@ export default {
       aboutOpen: false,
       gpuAvailable: typeof navigator !== 'undefined' && !!navigator.gpu,
       gpuMessage: '',
-      stats: null,
-      graphs
+      stats: null
     }
   },
   mounted() {
@@ -492,6 +652,9 @@ export default {
     if (this.activePrototype) this.scene.setPrototype(this.activePrototype, this.prototypeParams);
     this.loadNewGraph(this.selectedGraph);
     bus.on('load-graph', this.onGraphLoaded);
+    bus.on('file-graph', this.onFileGraph);
+    bus.on('file-error', this.onFileError);
+    ['pointerdown', 'wheel', 'keydown'].forEach(name => canvas.addEventListener(name, this.hidePitch, {once: true, passive: true}));
     if (!this.picked.backend) {
       if (appState.get('backend') === 'webgpu') this.backend = 'webgpu';
     } else if (this.device.backend === 'webgpu') {

@@ -1,9 +1,9 @@
 <template>
 <div class='block' :class='{inactive: disabled}'>
   <div class='row'>
-    <div class='col'>{{label}}</div>
+    <label class='col' :for='id'>{{label}}</label>
     <div class='col'>
-      <input type='number' 
+      <input :id='id' type='number' 
         :step='step' 
         v-model='inputValue' 
         :disabled='disabled'
@@ -13,16 +13,18 @@
         autocapitalize="off" 
         spellcheck="false">
     </div>
-    <help-icon @show='helpVisible = !helpVisible' :class='{open: helpVisible}'></help-icon>
+    <help-icon @show='helpVisible = !helpVisible' :class='{open: helpVisible}' :label='label' :expanded='helpVisible' :controls='id + "-help"'></help-icon>
   </div>
   <div class='row note' v-if='note'>{{note}}</div>
-  <div class='row help' v-if='helpVisible'>
+  <div class='row help' v-if='helpVisible' :id='id + "-help"'>
     <slot></slot>
   </div>
 </div>
 </template>
 <script>
 import HelpIcon from './HelpIcon.vue';
+
+let ids = 0;
 
 export default {
   components: {
@@ -47,6 +49,8 @@ export default {
   },
   data() {
     return {
+      // links the label, the input and its help
+      id: 'value-' + (++ids),
       helpVisible: false,
       inputValue: this.modelValue
     }
