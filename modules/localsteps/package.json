@@ -1,0 +1,10 @@
+{
+  "name": "ngraph.forcelayout.localsteps",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local time steps for ngraph.forcelayout: each body gets the inertia its neighbourhood can follow",
+  "type": "module",
+  "main": "index.js",
+  "exports": "./index.js",
+  "license": "MIT"
+}

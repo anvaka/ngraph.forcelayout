@@ -1,0 +1,10 @@
+{
+  "name": "ngraph.forcelayout.calm",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Measured local inertia that keeps crowded bodies of ngraph.forcelayout inside the stable step",
+  "type": "module",
+  "main": "index.js",
+  "exports": "./index.js",
+  "license": "MIT"
+}
