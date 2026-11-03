@@ -6,7 +6,7 @@ import findLargestComponent from './findLargestComponent';
 // Add-ons from modules/ in this repository (see vite.config.js), not part of ngraph.forcelayout
 import placeNodes from 'ngraph.forcelayout.pivot';
 import {createWebGPUBackend, runOnGpu} from 'ngraph.forcelayout.gpu';
-import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes} from 'ngraph.forcelayout.view';
+import createView, {hoverNodes, dragNodes, selectNodes, inspectNodes, navigateNodes, searchNodes} from 'ngraph.forcelayout.view';
 import createGraph from 'ngraph.graph';
 
 const NODE_COLOR = 0x90f8fcff;
@@ -86,10 +86,13 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     fitView();
     view = createView(scene, {graph, layout, nodeColor: nodeColorOf()});
     // Hover, drag, select and inspect nodes (modules/view). Dragging works while the layout is paused too.
+    // Keyboard: Enter focuses a node, arrows move between nodes, / searches, ? lists the keys.
     view.use(hoverNodes);
     view.use(dragNodes);
     view.use(selectNodes);
     view.use(inspectNodes);
+    view.use(navigateNodes);
+    view.use(searchNodes);
     window.view = view;
 
     runLayout(true);

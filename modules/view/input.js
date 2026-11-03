@@ -9,6 +9,12 @@
 // everyone while the press is undecided; a handler that takes it becomes the owner. Taps fire on
 // release, at once: a double tap doesn't make single taps wait.
 //
+// Two fingers pinch. A finger that lands while another is down goes to the camera, and so does
+// that other finger, wherever they landed (on a node or not): its owner gets cancel(). Only a
+// finger that has committed to a gesture of its own keeps its owner: one that was long-pressed,
+// or that has dragged for `pinchTime`. Then the new finger is offered as usual (it moves the
+// camera, or drags another node).
+//
 // A handler is an object with any of:
 //   priority          lower is asked first (default 100; the camera is last)
 //   press(p)          claim pointer `p`? Must not change anything: it is also asked for the cursor
@@ -31,7 +37,9 @@ const DEFAULTS = {
   doubleTapTime: 300,
   doubleTapDistance: {mouse: 10, pen: 30, touch: 30},
   longPressTime: 500,
-  twoFingerTapTime: 400
+  twoFingerTapTime: 400,
+  // A finger that has dragged for less than this (ms) joins a pinch when another one lands
+  pinchTime: 250
 };
 
 /**
@@ -96,6 +104,14 @@ export function createInput(canvas, options) {
     busy: () => pointers.size > 0,
     /** The last mouse or pen position with no button down, or null */
     hoverPoint: () => hover,
+    /**
+     * A tap that came from somewhere else than a pointer (a key): the app's listeners, then the
+     * handlers, see it like any tap. `hit` is {node, row, ...}.
+     */
+    tap(hit, fields) {
+      let e = new ViewEvent('tap', hit, fields);
+      return dispatch('tap', e, true);
+    },
     /** The first handler (not the camera) that would claim a press like `p`, or null */
     claimant(p) {
       for (let h of handlers) {
@@ -168,7 +184,7 @@ export function createInput(canvas, options) {
     if (p.pointerType !== 'touch') group.touch = false;
     pointers.set(p.id, p);
 
-    offer(p, 0);
+    if (!(p.multi && p.pointerType === 'touch' && pinch(p))) offer(p, 0);
     if (p.owner) call(p.owner, 'down', p);
     if (!p.multi && wantsLongPress()) {
       p.timer = env.setTimeout(() => longPress(p), settings.longPressTime);
@@ -259,8 +275,34 @@ export function createInput(canvas, options) {
     return false;
   }
 
+  // Finger `p` landed while other fingers are down: they all go to the camera, unless one of
+  // them is committed to a gesture of its own. True when the camera took `p`.
+  function pinch(p) {
+    let camera = handlers.find(h => h.priority === Infinity);
+    if (!camera) return false;
+    let fingers = [];
+    let others = 0;
+    for (let q of pointers.values()) {
+      if (q === p || q.pointerType !== 'touch' || q.state === CANCELLED) continue;
+      others += 1;
+      if (q.owner === camera) continue;
+      if (q.longPressed || (q.state === DRAGGING && env.now() - q.dragTime >= settings.pinchTime)) return false;
+      fingers.push(q);
+    }
+    if (!others) return false;
+    fingers.forEach(q => {
+      // A node grabbed a moment ago goes back where it was
+      if (q.owner) call(q.owner, 'cancel', q);
+      q.owner = camera;
+      call(camera, 'down', q);
+    });
+    p.owner = camera;
+    return true;
+  }
+
   function startDrag(p) {
     p.state = DRAGGING;
+    p.dragTime = env.now();
     while (p.owner) {
       let owner = p.owner;
       if (!owner.dragstart || owner.dragstart(p) !== false) {
@@ -460,6 +502,7 @@ class Pointer {
     this.owner = null;
     this.multi = false;
     this.longPressed = false;
+    this.dragTime = 0;
     this.timer = 0;
     this.event = e;
     this.shiftKey = !!e.shiftKey;

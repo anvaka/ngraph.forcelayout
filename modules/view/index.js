@@ -20,13 +20,23 @@ import {getCapabilities, setBufferData, createFloatTexture} from './gl.js';
 import {createNodeProgram, createEdgeProgram} from './programs.js';
 import {TEXTURE_WIDTH, textureRows, packPositions, collectNodes, collectEdges} from './positions.js';
 import {createProjector, ORIGIN, Z_NORMAL} from './math.js';
-import {pickNode, nodesInRect} from './pick.js';
+import {pickNode, nodesInRect, projectAll} from './pick.js';
 import {createFlags, layoutFlags, SELECTED, HOVERED} from './flags.js';
 import * as FLAGS from './flags.js';
 import {createInput, ViewEvent} from './input.js';
 import {createCamera} from './camera.js';
+import {createVisibility} from './visible.js';
 
 const DEFAULTS = {
+  // The text that stands for a node: in tooltips, search, announcements and labels
+  nodeLabel: node => {
+    let data = node.data;
+    if (data && typeof data === 'object') {
+      if (data.label !== undefined && data.label !== null) return String(data.label);
+      if (data.name !== undefined && data.name !== null) return String(data.name);
+    }
+    return String(node.id);
+  },
   nodeColor: 0x90f8fcff,
   linkColor: 0xffffff10,
   linkWidth: 2,
@@ -65,10 +75,16 @@ const ON_TOP_LIMITS = {nodes: 1000, links: 100000};
  * - `linkColor`: 0xRRGGBBAA, or `link => color`.
  * - `nodeSize`: a number, or `node => size` in scene units (default: `node.data.size` or 1).
  * - `linkWidth`: width of links in pixels.
+ * - `nodeLabel`: `node => text` that stands for a node in tooltips, search and announcements
+ *   (default: `data.label`, `data.name`, or the id).
  * - `styles`: how flagged nodes look (STYLES above).
  * - `camera`: camera input options (see camera.js), `input`: thresholds (see input.js), or
  *   `input: false` to leave the scene's own controls alone (no modules then).
  * - `reach`: picking reach in pixels per pointer type (REACH above).
+ * - `occlusion`: what hides parts of the canvas, so the camera brings nodes out from under it
+ *   (see visible.js). true (default): any element on top of the canvas (a settings panel) or
+ *   outside the window, found by hit testing; false: only the canvas edges; or a function
+ *   `(x, y) => boolean` that says whether a canvas point (CSS pixels) is hidden.
  *
  * Functions are called once per node or link when the view builds its buffers (the first frame,
  * graph changes, setLayout(), setNodeColor(), refresh()), never on every frame.
@@ -81,7 +97,7 @@ export default function createView(scene, options = {}) {
   let canvas = scene.getDrawContext().canvas;
 
   let settings = {...DEFAULTS};
-  ['nodeColor', 'linkColor', 'linkWidth', 'nodeSize'].forEach(name => {
+  ['nodeColor', 'linkColor', 'linkWidth', 'nodeSize', 'nodeLabel'].forEach(name => {
     if (options[name] !== undefined) settings[name] = options[name];
   });
   let styles = {...STYLES, ...(options.styles || {})};
@@ -125,6 +141,9 @@ export default function createView(scene, options = {}) {
   let projector = createProjector();
   let frameHooks = new Set();
   let cameraHooks = new Set();
+  // APIs modules share with each other (ctx.provide / ctx.get)
+  let services = new Map();
+  let revealFrame = 0;
   let modules = [];
   let savedCursor = canvas.style ? canvas.style.cursor : '';
 
@@ -133,6 +152,9 @@ export default function createView(scene, options = {}) {
   element.draw = draw;
   element.dispose = disposeGL;
   scene.appendChild(element);
+
+  let visibility = options.occlusion === false ? null :
+    createVisibility(canvas, typeof options.occlusion === 'function' ? options.occlusion : null);
 
   let camera = null, input = null;
   if (options.input !== false) {
@@ -165,6 +187,9 @@ export default function createView(scene, options = {}) {
     off: (name, fn) => { events.off(name, fn); return api; },
     pick,
     flags,
+    labelOf,
+    reveal,
+    visibleArea,
     toScreen,
     getLayout: () => layout,
     getCamera: () => camera && camera.controls,
@@ -273,8 +298,30 @@ export default function createView(scene, options = {}) {
         busy: () => input.busy(),
         claimant: p => input.claimant(p),
         hoverPoint: () => input.hoverPoint(),
+        /**
+         * A tap on `node` that came from somewhere else than a pointer (Enter on a focused node):
+         * the app and every module see it as a tap. `fields` adds modifier keys and the like.
+         */
+        tap(node, fields) {
+          let row = rowOf(node.id);
+          let at = row >= 0 ? toScreenOf(node) : null;
+          return input.tap({node, row, inside: true, clear: true}, Object.assign({
+            x: at ? at.x : 0, y: at ? at.y : 0, pointerType: 'keyboard', button: 0
+          }, fields));
+        },
         settings: input.settings
       },
+      labelOf,
+      reveal,
+      visibleArea,
+      /** Every node's place on the canvas this frame: {nodes, x, y, onScreen} (see screenPositions) */
+      screenPositions,
+      /** Makes `api` available to other modules as `ctx.get(name)` while this module is attached */
+      provide(name, value) {
+        services.set(name, value);
+        cleanups.push(() => { if (services.get(name) === value) services.delete(name); });
+      },
+      get: name => services.get(name) || null,
       pick,
       nodesInRect: (x0, y0, x1, y1) => {
         let state = pickState();
@@ -379,6 +426,113 @@ export default function createView(scene, options = {}) {
   function rowOf(id) {
     let body = layout && layout.getBody(id);
     return body && body.index < nodes.count ? body.index : -1;
+  }
+
+  /**
+   * Pans the camera so `node` is in view: inside the canvas and out from under what covers it (a
+   * panel over the canvas, see the `occlusion` option), `margin` (a share of the smaller side,
+   * 0.15) away from both. It glides there (about 200 ms) unless the user prefers reduced motion
+   * or `animate` is false. Returns false when the node was in view already.
+   *
+   * The camera pans the plane z = 0; a node at another depth moves by a different amount, so
+   * every step measures again where the node is and how far it still has to go.
+   */
+  function reveal(node, revealOptions = {}) {
+    let controls = camera && camera.controls;
+    if (!controls || !node) return false;
+    let margin = revealOptions.margin !== undefined ? revealOptions.margin : 0.15;
+    let area = coversNear(node, margin) ? visibility.area() : null;
+    let first = remaining(node, margin, area);
+    if (!first || (!first.x && !first.y)) return false;
+    if (revealFrame) cancelAnimationFrame(revealFrame);
+    revealFrame = 0;
+    let reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduced || revealOptions.animate === false) {
+      for (let i = 0, left = first; i < 6 && left && (Math.abs(left.x) > 0.5 || Math.abs(left.y) > 0.5); ++i) {
+        controls.panByAbsoluteOffset(left.x, left.y);
+        controls.redraw();
+        left = remaining(node, margin, area);
+      }
+      return true;
+    }
+    let frames = 0;
+    let step = () => {
+      let left = remaining(node, margin, area);
+      frames += 1;
+      if (!left || (Math.abs(left.x) <= 0.5 && Math.abs(left.y) <= 0.5) || frames > 40) {
+        if (left && (left.x || left.y)) {
+          controls.panByAbsoluteOffset(left.x, left.y);
+          controls.redraw();
+        }
+        revealFrame = 0;
+        return;
+      }
+      // A third of the way each frame: about 200 ms to arrive at 60 fps
+      controls.panByAbsoluteOffset(left.x / 3, left.y / 3);
+      controls.redraw();
+      revealFrame = requestAnimationFrame(step);
+    };
+    revealFrame = requestAnimationFrame(step);
+    return true;
+  }
+
+  // How far (pixels) the camera still has to move `node` to have it `margin` inside the canvas,
+  // and, with the visible `area`, as far from what covers it
+  function remaining(node, margin, area) {
+    let at = toScreenOf(node);
+    if (!at) return null;
+    let rect = canvas.getBoundingClientRect();
+    let inset = Math.min(rect.width, rect.height) * margin;
+    let spot = area && area.anyHidden ? area.nearest(at.x, at.y, inset) : null;
+    if (!spot) spot = {x: clamp(at.x, inset, rect.width - inset), y: clamp(at.y, inset, rect.height - inset)};
+    return {x: spot.x - at.x, y: spot.y - at.y};
+  }
+
+  // Whether something covers the canvas near where `node` would go without covers: a quick look
+  // (25 points) before measuring the whole visible area
+  function coversNear(node, margin) {
+    if (!visibility) return false;
+    let at = toScreenOf(node);
+    if (!at) return false;
+    let rect = canvas.getBoundingClientRect();
+    let inset = Math.min(rect.width, rect.height) * margin;
+    let x = clamp(at.x, inset, rect.width - inset), y = clamp(at.y, inset, rect.height - inset);
+    let around = Math.max(inset, 8);
+    return visibility.coveredIn(Math.max(0, x - around), Math.max(0, y - around),
+      Math.min(rect.width, x + around), Math.min(rect.height, y + around), around / 2);
+  }
+
+  /**
+   * The part of the canvas the user can see (see visible.js): {isHidden(x, y), nearest(x, y,
+   * margin), center(), anyHidden, ...}, measured by hit testing (about 3 ms) or a moment ago.
+   * Null with `occlusion: false`.
+   */
+  function visibleArea() {
+    return visibility ? visibility.area() : null;
+  }
+
+  function labelOf(node) {
+    let label = settings.nodeLabel(node);
+    return label === undefined || label === null || label === '' ? String(node.id) : String(label);
+  }
+
+  /** Where a node is on the canvas now: {x, y} in CSS pixels, or null */
+  function toScreenOf(node) {
+    let pos = layout && layout.getBody(node.id) ? layout.getNodePosition(node.id) : null;
+    return pos ? toScreen(pos.x, pos.y || 0, pos.z || 0) : null;
+  }
+
+  /**
+   * Where every node is on the canvas: {nodes, x, y, onScreen, width, height}. `x`, `y` (CSS
+   * pixels) are per row; `onScreen[row]` is 1 when the node is in front of the camera and inside
+   * the canvas. One pass over the nodes (about 0.6 ms at 100k).
+   */
+  function screenPositions() {
+    let state = pickState();
+    if (!state) return {nodes: [], x: new Float32Array(0), y: new Float32Array(0), onScreen: new Uint8Array(0), width: 0, height: 0};
+    let projected = projectAll(state);
+    projected.nodes = nodeData.nodes;
+    return projected;
   }
 
   /** Where a point of the scene is on the canvas: {x, y} in CSS pixels, or null behind the camera */
@@ -619,6 +773,7 @@ export default function createView(scene, options = {}) {
   }
 
   function dispose() {
+    if (revealFrame) cancelAnimationFrame(revealFrame);
     modules.slice().reverse().forEach(record => record.result ? record.result.dispose() : release(record));
     if (input) input.dispose();
     if (camera) camera.dispose();
@@ -629,6 +784,10 @@ export default function createView(scene, options = {}) {
     scene.removeChild(element);
     disposeGL();
   }
+}
+
+function clamp(value, min, max) {
+  return value < min ? min : value > max ? max : value;
 }
 
 function toRGBA(color, out) {
@@ -672,3 +831,5 @@ export {default as hoverNodes} from './modules/hover.js';
 export {default as dragNodes} from './modules/drag.js';
 export {default as selectNodes} from './modules/select.js';
 export {default as inspectNodes, describeNode} from './modules/inspect.js';
+export {default as navigateNodes, nearestInDirection, neighboursOf} from './modules/navigate.js';
+export {default as searchNodes, buildSearchIndex, findNodes} from './modules/search.js';

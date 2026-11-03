@@ -8,6 +8,8 @@ var flags = import('../modules/view/flags.js');
 var input = import('../modules/view/input.js');
 var select = import('../modules/view/modules/select.js');
 var inspect = import('../modules/view/modules/inspect.js');
+var navigate = import('../modules/view/modules/navigate.js');
+var search = import('../modules/view/modules/search.js');
 
 // A camera 100 units above the origin, looking down, 90° field of view, on an 800 x 600 canvas:
 // the plane z = 0 shows 3 CSS pixels per unit, and the origin is at (400, 300).
@@ -401,6 +403,79 @@ test('input: two fingers make no taps, and a quick two-finger tap is one gesture
   });
 });
 
+test('input: two fingers pinch, also when the first landed on a node', function (t) {
+  return input.then(function (i) {
+    var s = setup(i);
+    var touch = {pointerType: 'touch'};
+    s.core.add(s.recorder('nodes', 20, function (p) { return !!p.node; }));
+
+    // The first finger on a node, the second anywhere: the camera takes both
+    s.down(1, 100, 100, touch);
+    s.advance(40);
+    s.down(2, 300, 300, touch);
+    t.same(s.log, ['nodes.down', 'nodes.cancel', 'camera.down', 'camera.down']);
+    s.move(1, 80, 100, touch);
+    s.move(2, 340, 300, touch);
+    t.same(s.log.slice(4), ['camera.dragstart', 'camera.drag', 'camera.dragstart', 'camera.drag'], 'they move the camera');
+    s.up(1, 80, 100, touch);
+    s.up(2, 340, 300, touch);
+
+    // The other way round: the first on the background, the second on a node
+    s.log.length = 0;
+    s.down(1, 300, 300, touch);
+    s.down(2, 100, 100, touch);
+    t.same(s.log, ['camera.down', 'camera.down']);
+    s.up(1, 300, 300, touch);
+    s.up(2, 100, 100, touch);
+
+    // A drag that has just started joins the pinch: it is cancelled (the node goes back)
+    s.log.length = 0;
+    s.down(1, 100, 100, touch);
+    s.move(1, 115, 100, touch);
+    s.advance(100);
+    s.down(2, 300, 300, touch);
+    t.same(s.log, ['nodes.down', 'nodes.dragstart', 'nodes.drag', 'nodes.cancel', 'camera.down', 'camera.down']);
+    s.move(1, 130, 100, touch);
+    t.equal(s.log[s.log.length - 1], 'camera.drag', 'the camera moves with it now');
+    s.up(1, 130, 100, touch);
+    s.up(2, 300, 300, touch);
+  });
+});
+
+test('input: a finger that committed to a drag keeps it; the next finger is offered as usual', function (t) {
+  return input.then(function (i) {
+    var s = setup(i);
+    var touch = {pointerType: 'touch'};
+    s.core.add(s.recorder('nodes', 20, function (p) { return !!p.node; }, {
+      longpress: function (p) { s.log.push('nodes.longpress'); return !!p.node; }
+    }));
+
+    // Dragged for longer than pinchTime
+    s.down(1, 100, 100, touch);
+    s.move(1, 115, 100, touch);
+    s.advance(300);
+    s.down(2, 300, 300, touch);
+    t.same(s.log, ['nodes.down', 'nodes.dragstart', 'nodes.drag', 'camera.down'], 'the node stays; the new finger pans');
+    s.up(2, 300, 300, touch);
+    s.up(1, 115, 100, touch);
+
+    // Taken by a long press
+    s.log.length = 0;
+    s.down(1, 100, 100, touch);
+    s.advance(500);
+    s.down(2, 300, 300, touch);
+    t.same(s.log, ['nodes.down', 'nodes.longpress', 'camera.down']);
+    s.up(2, 300, 300, touch);
+    s.up(1, 100, 100, touch);
+
+    // A mouse and a finger don't pinch
+    s.log.length = 0;
+    s.down(1, 300, 300);
+    s.down(2, 100, 100, touch);
+    t.same(s.log, ['camera.down', 'nodes.down']);
+  });
+});
+
 test('input: cancels end the gesture once, and the pointer is ignored until it lifts', function (t) {
   return input.then(function (i) {
     var s = setup(i);
@@ -570,5 +645,137 @@ test('describeNode: id, links and data fields as text', function (t) {
     var e = m.describeNode(graph.getNode('e'), graph);
     t.equal(e.rows.length, 1 + 12 + 1);
     t.same(e.rows[13], ['…', '8 more']);
+  });
+});
+
+test('nearestInDirection: the nearest node in a cone, off-axis counts double', function (t) {
+  return navigate.then(function (m) {
+    // 0 at the centre; 1 right; 2 farther right; 3 up-right; 4 left; 5 behind the camera
+    var screen = {
+      x: new Float32Array([100, 140, 200, 130, 60, NaN]),
+      y: new Float32Array([100, 100, 100, 70, 100, NaN])
+    };
+    var right = {x: 1, y: 0}, left = {x: -1, y: 0}, up = {x: 0, y: -1}, down = {x: 0, y: 1};
+    t.equal(m.nearestInDirection(screen, 0, right), 1);
+    t.equal(m.nearestInDirection(screen, 0, left), 4);
+    t.equal(m.nearestInDirection(screen, 0, up), 3, 'up-right is within the cone going up');
+    t.equal(m.nearestInDirection(screen, 0, down), -1, 'nothing below');
+    t.equal(m.nearestInDirection(screen, 1, right), 2);
+    // 3 is 30 px right and 30 px up of 0: along 30 + 2 * 30 = 90, against 1 at 40
+    t.equal(m.nearestInDirection(screen, 4, right), 0);
+  });
+});
+
+test('neighboursOf: strongest link first, then more links, then label; each neighbour once', function (t) {
+  return navigate.then(function (m) {
+    var graph = createGraph();
+    graph.addLink('a', 'b', {weight: 1});
+    graph.addLink('a', 'c', {weight: 5});
+    graph.addLink('a', 'd');
+    graph.addLink('a', 'e');
+    graph.addLink('e', 'x');
+    graph.addLink('b', 'a', {weight: 7}); // a second link to b, stronger
+    graph.addLink('a', 'a');              // a loop is not a neighbour
+    var list = m.neighboursOf(graph, graph.getNode('a'), function (node) { return String(node.id); });
+    t.same(list.map(function (e) { return e.node.id; }), ['b', 'c', 'e', 'd']);
+    t.equal(list[0].weight, 7, 'the strongest of two links');
+    t.equal(list[2].weight, null);
+  });
+});
+
+test('findNodes: label starts, then word starts, then contains, then ids; more links first', function (t) {
+  return search.then(function (m) {
+    var graph = createGraph();
+    graph.addNode('n1', {name: 'Valjean'});
+    graph.addNode('n2', {name: 'Mlle Vaubois'});
+    graph.addNode('n3', {name: 'Gervais'});
+    graph.addNode('va-id');
+    graph.addNode('n4', {name: 'Valentine'});
+    graph.addLink('n4', 'n2');
+    graph.addLink('n4', 'n3');
+    var labelOf = function (node) { return node.data && node.data.name ? node.data.name : String(node.id); };
+    var index = m.buildSearchIndex(graph, labelOf);
+    var found = m.findNodes(index, 'va', 10);
+    t.same(found.map(function (f) { return f.label; }), ['Valentine', 'va-id', 'Valjean', 'Mlle Vaubois', 'Gervais']);
+    t.same(found.map(function (f) { return f.rank; }), [0, 0, 0, 1, 2]);
+    t.equal(found.total, 5);
+    t.same(m.findNodes(index, 'n3', 10).map(function (f) { return f.label; }), ['Gervais'], 'ids match too, last');
+    var two = m.findNodes(index, 'va', 2);
+    t.same(two.map(function (f) { return f.label; }), ['Valentine', 'va-id'], 'the best two');
+    t.equal(two.total, 5, 'and how many there were');
+    t.same(m.findNodes(index, '  ', 10), [], 'nothing for blank text');
+  });
+});
+
+test('input: a tap from a key reaches the app first, then the handlers', function (t) {
+  return input.then(function (i) {
+    var s = setup(i);
+    var seen = [];
+    s.listeners.tap = [function (e) { seen.push('app:' + e.pointerType + ':' + e.node.id); }];
+    s.core.add({priority: 10, tap: function (e) { seen.push('module:' + (e.shiftKey ? 'shift' : '')); }});
+    s.core.tap({node: s.node, row: 0}, {pointerType: 'keyboard', button: 0, shiftKey: true});
+    t.same(seen, ['app:keyboard:n', 'module:shift']);
+  });
+});
+
+var visible = import('../modules/view/visible.js');
+
+test('measureArea: what covers the canvas, the nearest visible spot, the middle of what shows', function (t) {
+  return visible.then(function (v) {
+    // A 400 x 300 canvas; a panel covers x < 100, y < 200
+    var area = v.measureArea(400, 300, function (x, y) { return x < 100 && y < 200; }, 20);
+    t.equal(area.cols, 20);
+    t.equal(area.rows, 15);
+    t.ok(area.anyHidden);
+    t.ok(area.isHidden(50, 50), 'under the panel');
+    t.notOk(area.isHidden(50, 250), 'below it');
+    t.ok(area.isHidden(-1, 10), 'outside the canvas');
+
+    // A point under the panel goes right out of it, `margin` from its edge
+    var spot = area.nearest(60, 100, 40);
+    t.same(spot, {x: 140, y: 100}, 'to the right of the panel, 40 px away');
+    spot = area.nearest(60, 190, 40);
+    t.same(spot, {x: 60, y: 240}, 'below it when that is nearer');
+    t.same(area.nearest(300, 150, 40), {x: 300, y: 150}, 'a visible point stays');
+    t.same(area.nearest(390, 150, 40), {x: 360, y: 150}, 'the canvas edges count too');
+
+    // With no room for the margin, a smaller one
+    spot = area.nearest(60, 100, 200);
+    t.ok(spot && !area.isHidden(spot.x, spot.y), 'somewhere visible all the same');
+
+    var middle = area.center();
+    t.notOk(area.isHidden(middle.x, middle.y), 'the middle of what shows is visible');
+    t.ok(middle.x > 200, 'away from the panel', middle);
+
+    var none = v.measureArea(400, 300, function () { return false; }, 20);
+    t.notOk(none.anyHidden);
+    t.same(none.nearest(10, 10, 40), {x: 40, y: 40}, 'just the canvas edges');
+    var c = none.center();
+    t.ok(Math.abs(c.x - 200) <= 10 && Math.abs(c.y - 150) <= 10, 'the middle of the canvas, within half a cell', c);
+
+    var all = v.measureArea(400, 300, function () { return true; }, 20);
+    t.ok(all.allHidden);
+    t.equal(all.nearest(10, 10, 40), null, 'nothing to go by');
+    t.equal(all.center(), null);
+  });
+});
+
+test('createVisibility: a function can say what is hidden; the area is measured once for a moment', function (t) {
+  return visible.then(function (v) {
+    var calls = 0;
+    var canvas = {getBoundingClientRect: function () { return {left: 0, top: 0, width: 400, height: 300}; }};
+    var visibility = v.createVisibility(canvas, function (x) { calls += 1; return x < 100; });
+    t.ok(visibility.covered(50, 50));
+    t.notOk(visibility.covered(150, 50));
+    t.ok(visibility.coveredIn(80, 0, 200, 100, 50), 'a lattice that reaches under the cover');
+    t.notOk(visibility.coveredIn(150, 0, 300, 100, 50));
+    calls = 0;
+    var first = visibility.area();
+    var measured = calls;
+    t.ok(measured > 100, 'about 1500 cells at most');
+    t.equal(visibility.area(), first, 'the same area right after');
+    t.equal(calls, measured, 'no new hit tests');
+    visibility.forget();
+    t.not(visibility.area(), first, 'measured again once forgotten');
   });
 });

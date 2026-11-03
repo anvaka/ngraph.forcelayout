@@ -1,17 +1,19 @@
-// inspect: a tooltip with what is known about a node: its id, its number of links and its data.
+// inspect: a tooltip with what is known about a node: its label, id, number of links and data.
 //
 //   view.use(hoverNodes);      // tooltips while a mouse or pen hovers a node
 //   view.use(inspectNodes);    // a tap (mouse, pen or finger) keeps one open
 //   view.use(inspectNodes, {content: node => node.data.title});
 //
 // Hovering a node shows its tooltip while the pointer stays on the node or on the tooltip (so its
-// text can be read and selected). A tap on a node keeps the tooltip open until a tap elsewhere or
-// Escape; that is how touch shows it. The tooltip follows its node as the layout and the camera
+// text can be read and selected). Keyboard focus (the navigate module) shows it too, while the
+// node has focus. A tap on a node, or Enter on a focused one, keeps the tooltip open until a tap
+// elsewhere or Escape; that is how touch shows it. The tooltip follows its node as the layout and the camera
 // move, beside the node rather than over it, inside the canvas.
 //
 // Options:
 // - `content(node)`: what to show, as text (a string) or an element; null shows nothing. The
-//   default is `describeNode()`: the id, the number of links, and the fields of `node.data`.
+//   default is `describeNode()`: the label (and the id when it differs), the number of links,
+//   and the fields of `node.data`.
 //   Strings are always text, never HTML.
 // - `hover` (true): show tooltips on hover (needs the hover module). `tap` (true): keep one open
 //   on tap.
@@ -33,21 +35,26 @@ const MAX_VALUE = 120;
 export default {
   name: 'inspect',
   attach(ctx, options = {}) {
-    let content = options.content || (node => describeNode(node, ctx.graph));
+    let content = options.content || (node => describeNode(node, ctx.graph, ctx.labelOf ? ctx.labelOf(node) : undefined));
     let card = null;
-    // What is shown: {node, pinned}
+    // What is shown: {node, pinned, source} (source: 'hover', 'focus' or 'tap')
     let shown = null;
     let overCard = false;
     let hoverNode = null;
     let lingering = 0;
 
     if (options.hover !== false) ctx.on('hover', onHover);
+    ctx.on('focus', e => {
+      if (shown && shown.pinned) return;
+      if (e.node) show(e.node, false, 'focus');
+      else if (shown && shown.source === 'focus') hide();
+    });
     ctx.input.add({
       name: 'inspect',
       priority: 25,
       tap(e) {
         if (options.tap === false || e.button !== 0) return false;
-        if (e.node) show(e.node, true);
+        if (e.node) show(e.node, true, 'tap');
         else if (shown) hide();
         return false;
       },
@@ -62,7 +69,7 @@ export default {
     ctx.graph.on('changed', onGraphChanged);
 
     return {
-      show: node => show(node, true),
+      show: node => show(node, true, 'api'),
       hide,
       get: () => shown ? shown.node : null,
       dispose() {
@@ -79,21 +86,21 @@ export default {
       if (shown && shown.pinned) return;
       clearTimeout(lingering);
       if (e.node) {
-        show(e.node, false);
-      } else if (shown) {
+        show(e.node, false, 'hover');
+      } else if (shown && shown.source === 'hover') {
         lingering = setTimeout(() => {
-          if (!overCard && !hoverNode && shown && !shown.pinned) hide();
+          if (!overCard && !hoverNode && shown && shown.source === 'hover') hide();
         }, LINGER);
       }
     }
 
-    function show(node, pinned) {
+    function show(node, pinned, source) {
       if (!node) return hide();
       let body = content(node);
       if (body === null || body === undefined) return hide();
       ensureCard();
       if (!shown || shown.node !== node) fill(body);
-      shown = {node, pinned};
+      shown = {node, pinned, source};
       place();
     }
 
@@ -162,13 +169,15 @@ export default {
       if (card) return;
       card = document.createElement('div');
       card.setAttribute('role', 'tooltip');
+      // It moves with the node it describes: it doesn't hide the canvas (see visible.js)
+      card.setAttribute('data-graph-overlay', '');
       card.style.cssText = STYLE + (options.style || '');
       if (options.className) card.className = options.className;
       // The pointer can move onto the tooltip without it closing
       card.addEventListener('pointerenter', () => { overCard = true; clearTimeout(lingering); });
       card.addEventListener('pointerleave', () => {
         overCard = false;
-        if (shown && !shown.pinned && !hoverNode) hide();
+        if (shown && shown.source === 'hover' && !hoverNode) hide();
       });
       document.body.appendChild(card);
     }
@@ -183,11 +192,14 @@ export default {
 };
 
 /**
- * What the default tooltip shows: {title, rows}, with rows of [name, value] text: the number of
- * links, then the fields of `node.data` (or `data` itself when it isn't an object).
+ * What the default tooltip shows: {title, rows}, with rows of [name, value] text: the id when the
+ * title (`label`, default the id) is something else, the number of links, then the fields of
+ * `node.data` (or `data` itself when it isn't an object).
  */
-export function describeNode(node, graph) {
+export function describeNode(node, graph, label) {
   let rows = [];
+  let title = label === undefined || label === null ? String(node.id) : String(label);
+  if (title !== String(node.id)) rows.push(['id', String(node.id)]);
   let links = 0;
   if (graph && graph.forEachLinkedNode) graph.forEachLinkedNode(node.id, () => { links += 1; });
   rows.push(['links', String(links)]);
@@ -201,7 +213,7 @@ export function describeNode(node, graph) {
       rows.push(['data', valueText(data)]);
     }
   }
-  return {title: String(node.id), rows};
+  return {title, rows};
 }
 
 function valueText(value) {
