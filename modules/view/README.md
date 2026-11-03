@@ -439,7 +439,7 @@ framed (a few far pieces don't shrink the rest), labels get room at the sides, a
 tilted once, and a settled 2D drawing turns to the screen's long side. It snaps under
 `prefers-reduced-motion`. API: `fit()` (back to the whole drawing, following again; also the `0`
 key), `follow(on)`, `following()`, `on(fn)` (`fn(following)`), `zoomTo(node, {linkPixels,
-duration})` (bring a node close: its links about `linkPixels` long, 60).
+duration})` (bring a node close: its links about `linkPixels` long, 40).
 
 ### Writing a module
 

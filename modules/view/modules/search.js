@@ -41,6 +41,11 @@ export default {
     let canvas = ctx.scene.getDrawContext().canvas;
     let index = null;
     let box = null;
+    // The last pointer on the page: after a touch or a pen, Enter is a soft keyboard's Go key, and
+    // the canvas takes focus without the keyboard's ring (as after a tap on a result)
+    let lastPointer = 'mouse';
+    let notePointer = e => { lastPointer = e.pointerType || 'mouse'; };
+    window.addEventListener('pointerdown', notePointer, true);
     let listId = 'graph-search-' + (++searchBoxes);
 
     ctx.input.add({
@@ -68,6 +73,7 @@ export default {
         close(false);
         ctx.graph.off('changed', forget);
         window.removeEventListener('resize', onResize);
+        window.removeEventListener('pointerdown', notePointer, true);
       }
     };
 
@@ -204,7 +210,7 @@ export default {
         highlight();
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        if (box.active >= 0) pick(box.active);
+        if (box.active >= 0) pick(box.active, lastPointer === 'touch' || lastPointer === 'pen');
       } else if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();

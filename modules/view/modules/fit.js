@@ -66,9 +66,21 @@ export default {
     let areaTimer = setInterval(checkArea, 400);
     let turning = 0;          // the animation frame of a turn
     let gliding = 0;          // the animation frame of a glide to a node (zoomTo)
+    let tracking = null;      // after zoomTo: () => where the camera looks to keep the node in place
 
     ctx.onFrame(change => {
       watch(ctx.layout);
+      if (tracking && !gliding) {
+        // After zoomTo: the camera stays on the node while the layout still moves it, until the
+        // user moves the camera
+        if (mine && moved()) {
+          tracking = null;
+        } else if (change.positions) {
+          place(tracking(), distance());
+          mine = cameraState();
+          ctx.animate();
+        }
+      }
       if (!following) return;
       if (mine && moved()) {
         setFollowing(false);
@@ -105,6 +117,7 @@ export default {
       /** Fits the layout now, and follows it again until the user moves the camera */
       fit() {
         stopCamera();
+        tracking = null;
         pending = true;
         mine = null;
         setFollowing(true);
@@ -242,7 +255,7 @@ export default {
       if (cam && cam.rotateAnimation) cam.rotateAnimation.cancel();
     }
 
-    function zoomTo(node, {linkPixels = 60, duration = 450} = {}) {
+    function zoomTo(node, {linkPixels = 40, duration = 450} = {}) {
       let cam = controls(), layout = ctx.layout;
       if (!cam || !layout || !node || !layout.getBody(node.id)) return false;
       let p = layout.getNodePosition(node.id);
@@ -279,6 +292,7 @@ export default {
       };
       setFollowing(false);
       stopCamera();
+      tracking = null;
       if (gliding) cancelAnimationFrame(gliding);
       let start = performance.now();
       let time = reduced && reduced.matches ? 0 : duration;
@@ -288,7 +302,12 @@ export default {
         let e = t < 1 ? 1 - Math.pow(1 - t, 3) : 1;
         let to = target();
         place(from.center.map((v, i) => v + (to[i] - v) * e), from.r * Math.pow(r / from.r, e));
-        if (t < 1) gliding = requestAnimationFrame(step);
+        if (t < 1) {
+          gliding = requestAnimationFrame(step);
+        } else {
+          tracking = target;
+          mine = cameraState();
+        }
       };
       step();
       return true;
