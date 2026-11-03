@@ -818,6 +818,7 @@ export default function createView(scene, options = {}) {
     modules.slice().reverse().forEach(record => record.result ? record.result.dispose() : release(record));
     if (input) input.dispose();
     if (camera) camera.dispose();
+    if (visibility) visibility.dispose();
     if (canvas.style) canvas.style.cursor = savedCursor;
     scene.off('transform', onTransform);
     graph.off('changed', onGraphChanged);

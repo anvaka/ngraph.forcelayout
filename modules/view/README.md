@@ -169,9 +169,12 @@ The camera uses this when it brings a node into view (`reveal()`, so keyboard fo
 a node under the panel comes out, `margin` from the panel's edge as from the canvas's. Enter
 starts on the node nearest the middle of what shows.
 
-Hit testing costs about 2 µs a point. `reveal()` first looks at 25 points around where the node
+Hit testing costs a few µs a point. `reveal()` first looks at 25 points around where the node
 would go; only when one of them is covered does it measure the whole visible area, on a grid of
-about 1500 cells (30 px on a 1440 × 900 canvas, about 3 ms), kept for 300 ms.
+about 1500 cells (30 px on a 1440 × 900 canvas, 3 to 12 ms). What covers the canvas changes almost
+only when the visitor does something, so the area is kept until a click, a key, a resize, a
+scroll or the end of a transition, and at most a second. Labels use the same area: none goes
+under the panel.
 
 Elements marked `data-graph-overlay` don't count as covering (the view's tooltip, search box and
 help card have it: they move with what they show), nor do elements with `pointer-events: none`.
@@ -266,6 +269,9 @@ node labels that stay put while the layout moves.
   moves, and once more when they stop. Labels placed last time go first, on the side of their
   node they had. Hovered, focused, dragged and selected nodes are always labelled, then the
   selection's neighbours. Labels fade in and out over 300 ms (`fade`), in the shader.
+* **Out of the way.** No label goes where something covers the canvas (see "What the user
+  sees" above), and nodes that are equally important get the same text size: on a grid, where
+  every node is alike, labels spread over the whole drawing and none looks more important.
 * **Cheap.** Between placements every label follows its node on the GPU: a label is a quad that
   keeps its node's row and its side, and the shader reads the node's position. A running layout
   costs the CPU nothing per frame for labels. A placement takes about 1 ms on 77 nodes and 3 ms at
@@ -411,7 +417,6 @@ use the same copy of w-gl (the demo's `vite.config.js` dedupes it).
 
 ## Not done yet
 
-Labels that make way for what covers the canvas (they are placed under a panel now),
-group (cluster) labels over the node labels, zoom ranges fixed once the layout settles (so
+Group (cluster) labels over the node labels, zoom ranges fixed once the layout settles (so
 zooming in never removes a label), clicking on label text, picking links, and cooperative
 gestures for graphs embedded in a scrolling page.

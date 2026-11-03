@@ -8,15 +8,20 @@
 // card move with what they show. Elements with `pointer-events: none` don't count either, since
 // the browser looks through them.
 //
-// Hit testing a point costs about 2 µs, so the visible area is measured on a grid of about 1500
-// cells (30 px on a 1440×900 canvas, about 3 ms) only when asked, and kept for a moment.
+// Hit testing a point costs a few µs (more when the page has to lay itself out first), so the
+// visible area is measured on a grid of about 1500 cells (30 px on a 1440×900 canvas, 3 to 12 ms)
+// only when asked. What covers the canvas changes almost only when the visitor does something
+// (a click, a key, a resize, a scroll) or when a transition ends, so a measured area is kept
+// until one of those happens, and at most a second (for pages that change on their own).
 
 export const OVERLAY_ATTRIBUTE = 'data-graph-overlay';
 
 const CELLS = 1500;
 const MIN_CELL = 16;
-// How long a measured area is trusted (ms): repeated keys reuse it, a panel that opens is seen
-const MAX_AGE = 300;
+// How long a measured area is trusted (ms) when nothing that could change it happened
+const MAX_AGE = 1000;
+// What makes a measured area stale: the visitor acted, the page moved or a transition ended
+const STALE_ON = ['pointerup', 'keyup', 'click', 'scroll', 'transitionend', 'animationend'];
 
 /**
  * `canvas`: the element. `covered`: `(x, y) => boolean` in canvas CSS pixels, to say yourself
@@ -25,6 +30,12 @@ const MAX_AGE = 300;
 export function createVisibility(canvas, covered) {
   let test = covered || hitTest(canvas);
   let cached = null;
+  let forget = () => { cached = null; };
+  let doc = typeof document !== 'undefined' ? document : null;
+  let win = typeof window !== 'undefined' ? window : null;
+  // Capture: a panel's own handlers may stop the event from bubbling
+  if (doc && doc.addEventListener) STALE_ON.forEach(name => doc.addEventListener(name, forget, true));
+  if (win && win.addEventListener) win.addEventListener('resize', forget);
 
   return {
     /** True when the canvas point (CSS pixels) is hidden */
@@ -52,8 +63,11 @@ export function createVisibility(canvas, covered) {
       }
       return cached;
     },
-    forget() {
+    forget,
+    dispose() {
       cached = null;
+      if (doc && doc.removeEventListener) STALE_ON.forEach(name => doc.removeEventListener(name, forget, true));
+      if (win && win.removeEventListener) win.removeEventListener('resize', forget);
     }
   };
 
