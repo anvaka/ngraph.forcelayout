@@ -3,6 +3,10 @@
   <!-- The program that makes this drawing. Every value is an input named after its option; what
        you change, the layout uses at once, and Copy takes the program home. -->
   <div class='code' role='group' aria-label='Settings, written as the code that makes this layout'>
+    <!-- On a phone the lines before the options fold, so the values are what shows first -->
+    <button type='button' class='line comment fold' :aria-expanded='preambleOpen ? "true" : "false"' aria-controls='code-preamble'
+      @click='preambleOpen = !preambleOpen'>// {{preambleOpen ? '▾' : '▸'}} install, imports and a small graph</button>
+    <div id='code-preamble' class='preamble' :class='{open: preambleOpen}'>
     <div class='line comment'>// {{installLine}} ngraph.graph</div>
     <div class='line comment' v-if='installNote'>// {{installNote}}</div>
     <div class='line'><span class='kw'>import</span> createGraph <span class='kw'>from</span> <span class='str'>'ngraph.graph'</span>;</div>
@@ -17,6 +21,7 @@
     <div class='line'><span class='kw'>const</span> graph = createGraph(); <span class='comment'>// or yours</span></div>
     <div class='line'>graph.addLink(<span class='str'>'a'</span>, <span class='str'>'b'</span>); graph.addLink(<span class='str'>'b'</span>, <span class='str'>'c'</span>); graph.addLink(<span class='str'>'c'</span>, <span class='str'>'a'</span>);</div>
     <div class='line blank'></div>
+    </div>
     <div class='line'><span class='kw'>const</span> layout = createLayout(graph, {</div>
     <template v-for='option in options' :key='option.key'>
       <div class='line indent' :class='{changed: isChanged(option), unused: !!unusedReason(option)}'>
@@ -113,7 +118,7 @@ export default {
     libraryDefaultLabel: String
   },
   data() {
-    return {options: OPTIONS, focused: '', copied: false, copyFailed: false, repo: REPO};
+    return {options: OPTIONS, focused: '', copied: false, copyFailed: false, repo: REPO, preambleOpen: false};
   },
   computed: {
     stepsText() {

@@ -266,6 +266,25 @@ body.drag-over::after {
   margin: 0 6px 0 0;
   vertical-align: -2px;
 }
+/* The fold for the lines before the options shows only on a phone */
+.code .fold {
+  display: none;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+@media (max-width: 500px) {
+  .code .fold {
+    display: block;
+  }
+  .code .preamble:not(.open) {
+    display: none;
+  }
+}
 /* A finger needs bigger targets: taller lines, values at least 32 px each way */
 @media (pointer: coarse) {
   .code {
@@ -378,5 +397,8 @@ body.drag-over::after {
     overflow-y: auto;
     overscroll-behavior: contain;
     z-index: 3;
+    padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px));
+    background: var(--panel, rgb(12, 41, 82));
+    border-top: 1px solid var(--line, rgba(255, 255, 255, 0.35));
   }
 }
