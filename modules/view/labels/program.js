@@ -23,7 +23,8 @@ const VERTEX = `
   uniform vec2 rings;
   ${POSITION_OF}
   attribute vec2 corner; // per vertex, 0..1
-  // row, diameter in scene units, side (0 right, 1 left, 2 above, 3 below), 1 for a label in front
+  // row, diameter in scene units, side (0 right, 1 left, 2 above, 3 below), and the text's tone
+  // (0 to 1), or below 0 for a label in front: -1 at its own place, -2 over the others on a plate
   attribute vec4 node;
   attribute vec2 box;    // width, height in CSS pixels
   attribute vec4 uv;     // the image in the atlas: left, top, right, bottom
@@ -31,6 +32,7 @@ const VERTEX = `
 
   varying vec2 vUv;
   varying float vAlpha;
+  varying float vTone;
   void main() {
     vec4 position = positionOf(node.x);
     vec4 clip = modelViewProjection * vec4(position.xyz, 1.0);
@@ -46,7 +48,8 @@ const VERTEX = `
     if (hasFlag(flags, 2.0) > 0.5) diameter = max(diameter * selectedSize.x, selectedSize.y);
     // A pointed node is drawn larger; its label makes room only once it is in front, so a pointer
     // passing over nodes doesn't nudge their labels
-    float pointed = isPointed(flags) * step(0.5, node.w);
+    float front = 1.0 - step(-0.5, node.w);
+    float pointed = isPointed(flags) * front;
     if (pointed > 0.5) diameter = max(diameter * pointedSize.x, pointedSize.y);
     float ring = pointed > 0.5 && rings.x > 0.0 ? rings.x : hasFlag(flags, 2.0) > 0.5 ? rings.y : 0.0;
     float r = 0.5 * diameter + ring + gap * pixelRatio;
@@ -68,6 +71,9 @@ const VERTEX = `
     float alpha = mix(fade.y, fade.z, t);
     if (isPointed(flags) + hasFlag(flags, 2.0) + hasFlag(flags, 16.0) < 0.5) alpha *= dimAlpha;
     vAlpha = alpha;
+    // Pointed and selected nodes' labels at full brightness; others at their tier's tone. A label
+    // over the others (-2) is at full brightness on a plate (vTone -1)
+    vTone = node.w < -1.5 ? -1.0 : front > 0.5 || isPointed(flags) + hasFlag(flags, 2.0) > 0.5 ? 1.0 : node.w;
   }`;
 
 const FRAGMENT = `
@@ -77,14 +83,19 @@ const FRAGMENT = `
   uniform vec4 haloColor;
   varying vec2 vUv;
   varying float vAlpha;
+  varying float vTone;
   void main() {
     // Premultiplied: red is the text's coverage, green the halo's where the text isn't
     vec4 texel = texture2D(atlas, vUv);
     float text = texel.r;
-    float halo = texel.g * haloColor.a;
+    // A label over the others sits on a plate: its whole box in the halo's color
+    float plate = vTone < 0.0 ? 1.0 : 0.0;
+    float halo = max(texel.g * haloColor.a, plate * (1.0 - text));
     float alpha = text + halo;
     if (alpha <= 0.0) discard;
-    vec3 color = (textColor.rgb * text + haloColor.rgb * halo) / alpha;
+    // A dimmer tone mixes the text toward the halo (the background): a grey, not a see-through
+    vec3 ink = mix(haloColor.rgb, textColor.rgb, abs(vTone));
+    vec3 color = (ink * text + haloColor.rgb * halo) / alpha;
     gl_FragColor = vec4(color, alpha * textColor.a * vAlpha);
   }`;
 

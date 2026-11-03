@@ -17,9 +17,10 @@
 // - Labels placed last time go first, on the side of their node they had, so they don't jump.
 // - Selected nodes are always labelled, then the selection's neighbours.
 // - Hover never places again (as on a map, hover changes how things look, never where labels
-//   go). The node the pointer rests on (see the hover module), the focused node and dragged ones
-//   get their label in front: drawn last, larger (the top tier), where their label is, or else on
-//   the side that covers the fewest labels. Labels under it stay where they are, behind it.
+//   go). The hovered node (the hover module's: the pointer rests on it), the focused node and
+//   dragged ones get their label in front: drawn last, where their own label is (at its size; a
+//   focused node's in the top tier), or else on the side that covers the fewest labels, on a
+//   plate. Labels under it stay where they are, behind it, and show again when it goes.
 // - A label's text is part of its node: the view's pick() takes a point on a label as its node
 //   (so the label you reach for is what you hover and tap).
 // - Labels make way for what covers the canvas (a settings panel, a toolbar): the view measures
@@ -34,10 +35,18 @@
 //
 // Options:
 // - `importance` ('degree'): 'degree', 'pagerank', a field name of node.data, or `node => number`.
-// - `max`: labels at most (besides forced ones). Default: one per 3,500 square pixels of canvas,
-//   between 30 and 400.
-// - `tiers`: text sizes by rank, [{share, min, size, weight}] from the most important; a node
-//   whose rank is below `share` of all nodes (and at least `min`) takes that tier.
+// - `max`: labels at most (besides forced ones). Default: one per `area` (14,000) square pixels of
+//   canvas, between 20 and 150, so about as many at every zoom.
+// - `padding` (8): pixels kept free around each label, so a dense part of the drawing reads as
+//   labels with the drawing between them, not a wall of text.
+// - `spacing` (null): {x, y} pixels the nodes of two labels must be apart, as an ellipse, for a
+//   sparser and more even spread (a label on screen needs only 0.7 of it to stay).
+// - `tiers`: text sizes by rank, [{count, share, min, size, weight, tone}] from the most important;
+//   a node ranked below `count` and below `share` of all nodes (but at least `min`) takes that
+//   tier. Default: the top 20 at 16 px semibold, the next to 200 at 13 px, the rest at 12 px.
+//   `tone` (0 to 1) dims a tier's text toward the halo: small labels recede and the drawing's
+//   colors lead (the default tones are 1, 0.85, 0.68); pointed and selected nodes' labels are
+//   always at full brightness.
 // - `text`: `node => string`, the label's text (default: the view's `labelOf`). Return '' for
 //   nodes that should have no label, e.g. nodes that have only an id.
 // - `font` (system-ui and friends), `color` (0xffffffff), `halo` (0x0c2952e6), `haloWidth` (2 px),
@@ -56,11 +65,22 @@ import {HOVERED, SELECTED, DRAGGED, FOCUSED} from '../flags.js';
 const DEFAULTS = {
   importance: 'degree',
   max: 0,
+  // Text sizes by rank: a tier holds the nodes ranked below `count` (and below `share` of all
+  // nodes), so a big graph has as few big labels as a small one. `tone` is the text's brightness:
+  // the small labels recede and the big ones read first, as on a map.
   tiers: [
-    {share: 0.01, min: 5, size: 15, weight: 600},
-    {share: 0.1, min: 20, size: 13, weight: 500},
-    {share: 1, min: 0, size: 12, weight: 400}
+    {count: 20, share: 0.05, min: 3, size: 16, weight: 600, tone: 1},
+    {count: 200, share: 0.3, min: 10, size: 13, weight: 500, tone: 0.85},
+    {share: 1, min: 0, size: 12, weight: 400, tone: 0.68}
   ],
+  // How far apart the nodes of two labels must be ({x, y} CSS pixels, an ellipse), for a sparser,
+  // more even spread than padding gives. Off by default
+  spacing: null,
+  // One label per this many square CSS pixels of canvas at most (20 to 150): about as many at
+  // every zoom, so zooming in brings other names, not more of them
+  area: 14000,
+  // Pixels kept free around each label: room to breathe, so dense parts aren't a wall of text
+  padding: 8,
   font: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
   color: 0xffffffff,
   halo: 0x0c2952e6,
@@ -139,7 +159,7 @@ export default {
     // What is labelled for sure changes with the selection: place again at the next frame
     ctx.on('select', soon);
     // Pointed nodes change which labels are in front, without placing again
-    ['hover', 'rest', 'focus', 'dragstart', 'dragend'].forEach(name => ctx.on(name, () => {
+    ['hover', 'focus', 'dragstart', 'dragend'].forEach(name => ctx.on(name, () => {
       frontDirty = true;
       ctx.requestFrame();
     }));
@@ -271,11 +291,15 @@ export default {
       }
       nodeSizes = screen.sizes;
       if (!ranked || ranked.count !== screen.x.length) ranked = rank(screen.x.length);
-      let max = settings.max || Math.round(Math.min(400, Math.max(30, screen.width * screen.height / 3500)));
+      let max = settings.max || Math.round(Math.min(150, Math.max(20, screen.width * screen.height / settings.area)));
 
+      let covered = coveredTest(ctx.visibleArea());
+      let fadingOut = fadingBoxes(screen, now);
       let placed = placeLabels(candidates(screen, max), {
-        width: screen.width, height: screen.height, gap: settings.gap, padding: 3, slack: SLACK, max,
-        blocked: coveredTest(ctx.visibleArea())
+        width: screen.width, height: screen.height, gap: settings.gap, padding: settings.padding, slack: SLACK, max,
+        spacing: settings.spacing,
+        // No new name prints over one still fading out
+        blocked: fadingOut.length ? box => (covered && covered(box)) || overlapsAny(box, fadingOut) : covered
       });
       canvasSize.width = screen.width;
       canvasSize.height = screen.height;
@@ -307,7 +331,7 @@ export default {
         list.push({
           row, node, tier, x: screen.x[row], y: screen.y[row], radius,
           width: size.width, height: size.height,
-          anchor: previous && previous.to > 0 ? previous.anchor : null,
+          anchor: previous && previous.to > 0 && !previous.frontOnly ? previous.anchor : null,
           forced
         });
       };
@@ -320,6 +344,14 @@ export default {
           neighbours += 1;
           add(other, false);
         });
+      }
+      // Landmarks first: the top tier's nodes on screen, before the labels placed last time, so the
+      // biggest names arrive at once and stay while the layout runs
+      let topCount = 0;
+      while (topCount < ranked.order.length && ranked.tier[ranked.order[topCount]] === 0) topCount += 1;
+      for (let i = 0; i < topCount; ++i) {
+        let row = ranked.order[i];
+        if (screen.onScreen[row]) add(screen.nodes[row], false);
       }
       let now = performance.now();
       let before = [];
@@ -363,7 +395,12 @@ export default {
         }
         label.anchor = p.anchor;
         label.frontOnly = false;
-        setTier(label, label.front ? 0 : ranked.tier[p.row]);
+        setTier(label, label.front ? frontTier(node) : ranked.tier[p.row]);
+        // Where its box sits beside its node (CSS pixels), for the fade-out test
+        label.ox = p.x - screen.x[p.row];
+        label.oy = p.y - screen.y[p.row];
+        label.w = p.width;
+        label.h = p.height;
       });
       shown.forEach((label, id) => {
         if (keep.has(id)) return;
@@ -389,11 +426,8 @@ export default {
     function updateFront(now) {
       frontDirty = false;
       let time = (now - epoch) / 1000;
-      let hover = ctx.get('hover');
-      let rests = hover && hover.resting ? hover.resting() : null;
-      let ids = new Set(ctx.flags.ids(FOCUSED).concat(ctx.flags.ids(DRAGGED)));
-      // Without the hover module's resting, a hovered node is pointed at once
-      ctx.flags.ids(HOVERED).forEach(id => { if (!hover || !hover.resting || (rests && rests.id === id)) ids.add(id); });
+      // The hover module flags a node once the pointer rests on it
+      let ids = new Set(ctx.flags.ids(FOCUSED).concat(ctx.flags.ids(DRAGGED), ctx.flags.ids(HOVERED)));
       shown.forEach((label, id) => {
         if (!label.front || ids.has(id)) return;
         label.front = false;
@@ -428,7 +462,7 @@ export default {
           if (!label.front || !label.anchor) {
             if (!others) others = currentBoxes().filter(b => !b.label.front);
             let disc = ctx.discsOf([node])[0];
-            let size = sizeOf(node, 0);
+            let size = sizeOf(node, frontTier(node));
             label.anchor = disc ? frontSide({x: disc.x, y: disc.y, radius: drawnRadius(node, disc.radius, true),
               width: size.width, height: size.height}, others, {
               gap: settings.gap, width: canvasSize.width, height: canvasSize.height,
@@ -438,9 +472,15 @@ export default {
           label.frontOnly = true;
         }
         label.front = true;
-        setTier(label, 0);
+        setTier(label, frontTier(node));
       });
       boxCache = null;
+    }
+
+    // A label in front keeps its own size (labels don't grow and shrink under the pointer), but a
+    // focused (or found) node's is in the top tier, so it reads among the labels around it
+    function frontTier(node) {
+      return ctx.flags.has(node.id, FOCUSED) || !ranked ? 0 : ranked.tier[rowOf(node)];
     }
 
     // A label's text size (tier); its image is drawn again when that changes
@@ -508,7 +548,11 @@ export default {
         data[o] = body.index;
         data[o + 1] = nodeSizes && body.index < nodeSizes.length ? nodeSizes[body.index] : 1;
         data[o + 2] = ANCHOR_INDEX[label.anchor] || 0;
-        data[o + 3] = label.front ? 1 : 0;
+        let tier = settings.tiers[label.tier] || settings.tiers[settings.tiers.length - 1];
+        // How bright the text is: its tier's tone (the shader shows pointed and selected nodes' at
+        // full). Below 0, a label in front (a pointed node's): -1 where its own label is, -2 drawn
+        // over the others, on a plate of the halo's color that hides what is under it
+        data[o + 3] = label.front ? (label.frontOnly ? -2 : -1) : tier.tone === undefined ? 1 : tier.tone;
         data[o + 4] = e.width / ratio;
         data[o + 5] = e.height / ratio;
         data[o + 6] = e.x / atlas.width;
@@ -594,7 +638,11 @@ export default {
       for (let i = 0; i < order.length; ++i) position[order[i]] = i;
       let tier = new Uint8Array(rows);
       let nodes = graph.getNodesCount();
-      let bounds = settings.tiers.map(t => Math.max(t.min || 0, Math.ceil((t.share === undefined ? 1 : t.share) * nodes)));
+      let bounds = settings.tiers.map(t => {
+        let bound = Math.ceil((t.share === undefined ? 1 : t.share) * nodes);
+        if (t.count !== undefined) bound = Math.min(bound, t.count);
+        return Math.max(t.min || 0, bound);
+      });
       for (let i = 0; i < order.length; ++i) {
         let t = 0;
         while (t < bounds.length - 1 && i >= bounds[t]) t += 1;
@@ -609,6 +657,18 @@ export default {
         start = i;
       }
       return {count: rows, order, position, tier};
+    }
+
+    // Boxes of labels still fading out, where they are now: a new label waits for them to go
+    function fadingBoxes(screen, now) {
+      let time = (now - epoch) / 1000, fade = settings.fade / 1000, list = [];
+      shown.forEach(label => {
+        if (label.to !== 0 || time - label.start >= fade || label.ox === undefined) return;
+        let body = ctx.layout.getBody(label.node.id);
+        if (!body || body.index >= screen.x.length || !screen.onScreen[body.index]) return;
+        list.push(screen.x[body.index] + label.ox, screen.y[body.index] + label.oy, label.w, label.h);
+      });
+      return list;
     }
 
     function fading(now) {
@@ -640,6 +700,13 @@ function coveredTest(area) {
   };
 }
 
+function overlapsAny(box, list) {
+  for (let i = 0; i < list.length; i += 4) {
+    if (box.x < list[i] + list[i + 2] && box.x + box.width > list[i] && box.y < list[i + 1] + list[i + 3] && box.y + box.height > list[i + 1]) return true;
+  }
+  return false;
+}
+
 function alphaAt(label, time, fade) {
   let t = Math.min(1, Math.max(0, (time - label.start) / fade));
   return label.from + (label.to - label.from) * t;
@@ -652,7 +719,7 @@ function ringOf(styles, ring) {
 
 function merge(options) {
   let settings = Object.assign({}, DEFAULTS, options);
-  settings.tiers = (options.tiers || DEFAULTS.tiers).map(t => Object.assign({share: 1, min: 0, size: 12, weight: 400}, t));
+  settings.tiers = (options.tiers || DEFAULTS.tiers).map(t => Object.assign({share: 1, min: 0, size: 12, weight: 400, tone: 1}, t));
   return settings;
 }
 

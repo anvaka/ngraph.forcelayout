@@ -214,8 +214,7 @@ that lets clicks through, or `occlusion: false`.
 | `doubletap` | after the second `tap` | |
 | `longpress` | 500 ms without moving | |
 | `contextmenu` | a right click, on release | |
-| `hover` | the hovered node changed (hover module) | `previous` |
-| `rest` | the pointer came to rest on the hovered node, or moved on (node null) (hover module) | `previous` |
+| `hover` | the hovered node changed: the pointer rests on a node, or left it (hover module) | `previous` |
 | `dragstart`, `drag`, `dragend` | a node drag (drag module) | `nodes`, `cancelled` on `dragend` |
 | `select` | the selection is about to change (select module) | `nodes`, `added`, `removed` |
 
@@ -345,11 +344,10 @@ node labels that stay put while the layout moves.
   in and out over 300 ms (`fade`), in the shader.
 * **Hover never moves a label.** As on a map, where hover changes how things look and never where
   labels go (MapLibre's `feature-state` drives paint properties only), pointing places nothing
-  again. The node the pointer rests on (the hover module's `rest`), the focused node and dragged
-  ones have their label in front: drawn last, in the top tier, where their own label is, or else
-  on the side that covers the fewest others. The labels under it stay where they are, behind it,
-  and are there again when the pointer moves on. A pointer passing over nodes on its way to a
-  label lights them up and changes nothing else.
+  again. The hovered node (the pointer rests on it, see hover), the focused node and dragged ones
+  have their label in front: drawn last, where their own label is and at its size (a focused
+  node's in the top tier), or else on the side that covers the fewest others, on a plate of the
+  halo's color. The labels under it stay where they are, behind it, and show again when it goes.
 * **Labels are targets.** Pointing at or tapping a label's text is pointing at its node (see
   [Picking](#picking)), so the label you reach for is the one you get.
 * **Out of the way.** No label goes where something covers the canvas (see "What the user
@@ -369,17 +367,22 @@ front}`), `stats()`.
 
 ### hover
 
-`view.use(hoverNodes, {holdStill, rest})`: the node under a mouse or pen (or its label) gets
-`HOVERED` and the cursor shows what a press would do there (grab, a box's crosshair, or a pointer
-over a node a tap would pick). Fires `hover`. Touch never hovers. The node is picked again after
-every frame in which the layout or the camera moved, since nodes move under a still pointer.
-`holdStill: true` pins the hovered node (it changes the physics, so it is off).
+`view.use(hoverNodes, {holdStill, rest, stillReach})`: the node a mouse or pen rests on (or on
+its label) gets `HOVERED`, and `hover` fires. The cursor shows at once what a press would do
+(grab, a box's crosshair, or a pointer over a node a tap would pick). Touch never hovers.
 
-Hover lights a node up at once; what it adds to the picture waits until the pointer rests on the
-node: it moved less than 6 px in 100 ms (`rest: {distance, time}`; `rest: false` rests at once),
-the rule of [hoverIntent](https://briancherne.github.io/jquery-hoverIntent/). Then `rest` fires,
-and the labels module brings the node's label in front and the inspect module opens its tooltip.
-A pointer on its way to a label opens nothing over it. API: `get()`, `resting()`.
+The pointer rests when it stayed within 3 px of a point (6 for a pen, which shakes in the air)
+for 120 ms (`rest: {distance, time}`; `rest: false` hovers at once): Windows' hover rectangle
+([TrackMouseEvent](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-trackmouseevent))
+and [hoverIntent](https://briancherne.github.io/jquery-hoverIntent/) work the same way, and 120 ms
+is about the 0.1 s that still feels instant. So a pointer on its way to a label crosses other nodes
+without lighting them, bringing their labels in front or opening their tooltips: nothing it passes
+changes the picture. Leaving the hovered node puts it out at once.
+
+The node is picked again after every frame in which the layout or the camera moved, since nodes
+move under a still pointer; a still pointer keeps its node while the node stays within
+`stillReach` (20 px) of it or the pointer is on its label, so it doesn't hop between neighbours.
+`holdStill: true` pins the hovered node (it changes the physics, so it is off). API: `get()`.
 
 ### drag
 
@@ -408,10 +411,13 @@ before a change is kept. API: `get()`, `set(nodesOrIds)`, `clear()`, `has(nodeOr
 
 ### inspect
 
-`view.use(inspectNodes, {content, hover, tap, style, className})`: a tooltip with the node's id,
-its number of links and the fields of `node.data` (`describeNode()`). Hovering a node shows it
-once the pointer rests on the node (see hover), while the pointer stays on the node or on the
-tooltip, beside the node but never over its label; a tap (mouse, pen or finger) keeps it open
+`view.use(inspectNodes, {content, hover, tap, delay, style, className})`: a tooltip with the node's id,
+its number of links and the fields of `node.data` (`describeNode()`). Hovering a node (see hover)
+shows it `delay` (280) ms later, about Windows' 400 ms
+[hover time](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-trackmouseevent)
+from when the pointer stopped, since a card covers more than a label (once a card is open, the
+next one opens at once). It stays while the pointer is on the node or on the tooltip, beside the
+node but never over its label; a tap (mouse, pen or finger) keeps it open
 until a tap elsewhere or Escape. It follows its node as the layout and the camera move, beside the
 node and inside the canvas. The wheel over it zooms the drawing, as it would without the tooltip,
 unless the tooltip has more to scroll. `content(node)` returns text (never parsed as HTML), an element, or

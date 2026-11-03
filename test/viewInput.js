@@ -731,6 +731,31 @@ test('input: a tap from a key reaches the app first, then the handlers', functio
 var place = import('../modules/view/labels/place.js');
 var importance = import('../modules/view/labels/importance.js');
 
+test('placeLabels: spacing keeps the nodes of labels apart, wider than tall', function (t) {
+  return place.then(function (m) {
+    var label = function (row, x, y, extra) {
+      return Object.assign({row: row, x: x, y: y, radius: 2, width: 40, height: 14, anchor: null, forced: false}, extra);
+    };
+    var options = {width: 800, height: 600, gap: 3, padding: 2, spacing: {x: 100, y: 40}};
+    // In a row 60 px apart: every other node gets a label
+    var row = [0, 1, 2, 3, 4].map(function (i) { return label(i, 100 + 60 * i, 300); });
+    t.same(m.placeLabels(row, options).map(function (p) { return p.row; }), [0, 2, 4], 'horizontal: 60 px is too near');
+    // In a column 60 px apart: all of them (the ellipse is 40 px tall)
+    var column = [0, 1, 2, 3].map(function (i) { return label(i, 300, 100 + 60 * i); });
+    t.equal(m.placeLabels(column, options).length, 4, 'vertical: 60 px is far enough');
+    // A label shown last time needs only 0.7 of the spacing to stay
+    var near = [label(0, 100, 300), label(1, 175, 300, {anchor: 'right'})];
+    t.equal(m.placeLabels(near, options).length, 2, 'one shown before stays at 75 px');
+    near[1].anchor = null;
+    t.equal(m.placeLabels(near, options).length, 1, 'a new one does not');
+    // Forced labels ignore it
+    near[1].forced = true;
+    t.equal(m.placeLabels(near, options).length, 2, 'forced');
+    // Without spacing, as before
+    t.equal(m.placeLabels(row, {width: 800, height: 600, gap: 3, padding: 2}).length, 5);
+  });
+});
+
 test('placeLabels: in order, beside the node, never overlapping unless forced', function (t) {
   return place.then(function (m) {
     var options = {width: 400, height: 300, gap: 3, padding: 2};
@@ -805,13 +830,13 @@ test('frontSide: the side that covers the fewest labels, inside the canvas; labe
   });
 });
 
-test('hover: rests once the pointer is still on a node, not while it passes over nodes', function (t) {
+test('hover: a node lights up once the pointer rests on it, not while the pointer passes over nodes', function (t) {
   return Promise.all([import('../modules/view/modules/hover.js'), flags]).then(function (loaded) {
     var hoverModule = loaded[0].default, f = loaded[1];
     var frames = [];
     global.requestAnimationFrame = function (fn) { frames.push(fn); return frames.length; };
     global.cancelAnimationFrame = function () {};
-    var events = [], handler = null, provided = {};
+    var events = [], handler = null, cursors = [];
     var nodes = {a: {id: 'a'}, b: {id: 'b'}};
     var ctx = {
       input: {add: function (h) { handler = h; }, dragging: function () { return false; }, claimant: function () { return null; }},
@@ -819,18 +844,16 @@ test('hover: rests once the pointer is still on a node, not while it passes over
       // Node a left of x = 100, b right of it
       pick: function (x) { return {node: x < 100 ? nodes.a : nodes.b, row: 0}; },
       flags: f.createFlags(function () {}),
-      setCursor: function () {},
-      emit: function (name, fields) { events.push([name, fields.node ? fields.node.id : null]); return {defaultPrevented: false}; },
-      provide: function (name, value) { provided[name] = value; }
+      setCursor: function (c) { cursors.push(c); },
+      emit: function (name, fields) { events.push([name, fields.node ? fields.node.id : null]); return {defaultPrevented: false}; }
     };
-    var api = hoverModule.attach(ctx, {rest: {distance: 6, time: 30}});
+    var api = hoverModule.attach(ctx, {rest: {distance: 3, time: 30}});
     var move = function (x) {
       handler.hover({x: x, y: 50, pointerType: 'mouse'});
       while (frames.length) frames.shift()();
     };
     var wait = function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); };
-    t.equal(provided.hover, api, 'other modules find it as ctx.get(\'hover\')');
-    // Passing: a over to b, 20 px every 10 ms
+    // Passing over a and b: 20 px every 10 ms
     move(60);
     return wait(10).then(function () {
       move(80); return wait(10);
@@ -839,19 +862,24 @@ test('hover: rests once the pointer is still on a node, not while it passes over
     }).then(function () {
       move(130); return wait(10);
     }).then(function () {
-      t.same(events.filter(function (e) { return e[0] === 'rest'; }), [], 'no rest while it moves');
-      t.equal(api.get().id, 'b', 'but the hover follows at once');
-      return wait(50);
+      t.same(events, [], 'nothing lights up while it moves');
+      t.equal(cursors[cursors.length - 1], 'pointer', 'but the cursor shows a node is under it');
+      return wait(60);
     }).then(function () {
-      t.equal(api.resting().id, 'b', 'still on b: it rests there');
-      t.same(events[events.length - 1], ['rest', 'b']);
+      t.equal(api.get().id, 'b', 'still on b: b is hovered');
+      t.same(events, [['hover', 'b']]);
+      t.ok(ctx.flags.has('b', f.HOVERED));
       move(132);
-      t.equal(api.resting().id, 'b', 'a small move keeps the rest');
+      t.equal(api.get().id, 'b', 'a small move keeps it');
       move(50);
-      t.equal(api.resting(), null, 'another node: no rest until it is still again');
-      t.same(events.slice(-2), [['rest', null], ['hover', 'a']]);
+      t.equal(api.get(), null, 'off to a: b goes out at once, a waits for a rest');
+      t.notOk(ctx.flags.has('b', f.HOVERED));
+      return wait(60);
+    }).then(function () {
+      t.equal(api.get().id, 'a', 'rested on a');
       handler.hover(null);
-      t.equal(api.resting(), null);
+      while (frames.length) frames.shift()();
+      t.equal(api.get(), null, 'the pointer left');
       api.dispose();
       delete global.requestAnimationFrame;
       delete global.cancelAnimationFrame;
