@@ -120,10 +120,11 @@ h2 .sub { color: var(--text-3); font-weight: 400; }
 }
 .install:hover { background: var(--field-hover); color: var(--text); }
 .install code { font: inherit; }
-/* The name and the install line share a row: the line gives way (ellipsis) before it wraps */
-.title-row .name-line { flex-wrap: nowrap; min-width: 0; }
+/* The install line doesn't fit beside the name in a 360 px panel without cutting the repository
+   name: it takes the line under the name, at the panel's left edge, whole */
+.title-row .name-line { flex-wrap: wrap; gap: 4px 8px; }
 .title-row .name-line h2 { flex: none; }
-.title-row .install { min-width: 0; flex: 0 1 auto; border: none; }
+.title-row .install { margin-left: 0; flex: none; max-width: 100%; border: none; }
 .install::after {
   content: '';
   flex: none;
