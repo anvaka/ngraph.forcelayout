@@ -100,6 +100,7 @@
       <code-settings :settings='layoutSettings' :steps-per-frame='stepsPerFrame' :auto-now='stats ? stats.stepsPerFrame : 0'
         :frame-budget='device.frameBudget' :placement='placement' :backend='backend' :gpu-available='gpuAvailable !== false'
         :gpu-message='gpuMessage' :install-line='installLine' :install-note='installNote' :library-default-label='libraryDefaultLabel'
+        :describe='describeProgram' :program-key='programKey'
         @set='setSetting' @reset='resetSettings' @speedups='useDeviceDefaults'></code-settings>
 
       <template v-if='prototypes.length && !prototype'>
@@ -303,6 +304,9 @@ export default {
       return parts.join(' ');
     },
     // The legend's first entries (the most common values), and how many more there are
+    programKey() {
+      return `${this.selectedGraph}|${this.fileName}|${this.loading}|${this.legendData ? 1 : 0}`;
+    },
     // Settings that differ from what the page starts with (the button says so while closed)
     changedCount() {
       let physics = PHYSICS.filter(key => this.layoutSettings[key] !== DEFAULTS[key]).length;
@@ -405,6 +409,15 @@ export default {
         return;
       }
       this.backend = 'webgpu';
+    },
+
+    // What the copied program needs to load and draw the graph on screen as the demo does
+    describeProgram() {
+      let state = this.scene && this.scene.getDrawingState ? this.scene.getDrawingState() : {};
+      return Object.assign({
+        name: this.selectedGraph, fileName: this.fileName,
+        base: new URL(import.meta.env.BASE_URL, location.href).href
+      }, state);
     },
 
     copyInstall() {

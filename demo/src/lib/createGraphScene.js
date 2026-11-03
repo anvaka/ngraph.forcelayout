@@ -74,6 +74,12 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     restart,
     getStats,
     getLegend,
+    // The graph and what the drawing picked for it now (for the copied program)
+    getDrawingState: () => ({
+      graph,
+      linkAlpha: drawing && drawing.linkAlpha ? drawing.linkAlpha() : undefined,
+      nodeMinSize: drawing && drawing.nodeMinSize ? drawing.nodeMinSize() : undefined
+    }),
   };
 
   function loadGraph(newGraph, desiredLayout) {

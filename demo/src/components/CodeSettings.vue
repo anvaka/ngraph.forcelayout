@@ -5,22 +5,10 @@
   <div class='code' role='group' aria-label='Settings, written as the code that makes this layout'>
     <!-- The lines before the options fold, so the values are what shows first -->
     <button type='button' class='line comment fold' :aria-expanded='preambleOpen ? "true" : "false"' aria-controls='code-preamble'
-      @click='preambleOpen = !preambleOpen'>// {{preambleOpen ? '▾' : '▸'}} install, imports and a small graph</button>
+      @click='preambleOpen = !preambleOpen'>// {{preambleOpen ? '▾' : '▸'}} install, imports and this graph</button>
     <div id='code-preamble' class='preamble' :class='{open: preambleOpen}'>
-    <div class='line comment'>// {{installLine}} ngraph.graph</div>
-    <div class='line comment' v-if='installNote'>// {{installNote}}</div>
-    <div class='line'><span class='kw'>import</span> createGraph <span class='kw'>from</span> <span class='str'>'ngraph.graph'</span>;</div>
-    <div class='line'><span class='kw'>import</span> createLayout <span class='kw'>from</span> <span class='str'>'ngraph.forcelayout'</span>;</div>
-    <template v-if='placement === "pivot" || backend === "webgpu"'>
-      <div class='line comment'>// add-ons, not on npm: git clone {{repo}},</div>
-      <div class='line comment'>// then npm i {{addonFolders}}</div>
-      <div class='line' v-if='placement === "pivot"'><span class='kw'>import</span> placeNodes <span class='kw'>from</span> <span class='str'>'ngraph.forcelayout.pivot'</span>;</div>
-      <div class='line' v-if='backend === "webgpu"'><span class='kw'>import</span> {createWebGPUBackend, runOnGpu} <span class='kw'>from</span> <span class='str'>'ngraph.forcelayout.gpu'</span>;</div>
-    </template>
-    <div class='line blank'></div>
-    <div class='line'><span class='kw'>const</span> graph = createGraph(); <span class='comment'>// or yours</span></div>
-    <div class='line'>graph.addLink(<span class='str'>'a'</span>, <span class='str'>'b'</span>); graph.addLink(<span class='str'>'b'</span>, <span class='str'>'c'</span>); graph.addLink(<span class='str'>'c'</span>, <span class='str'>'a'</span>);</div>
-    <div class='line blank'></div>
+      <div class='line' v-for='(line, i) in parts.head' :key='"h" + i' :class='{comment: line.startsWith("//"), blank: !line}'>{{line}}</div>
+      <div class='line blank'></div>
     </div>
     <div class='line'><span class='kw'>const</span> layout = createLayout(graph, {</div>
     <template v-for='option in options' :key='option.key'>
@@ -54,9 +42,17 @@
       <span v-else class='comment'>// const gpu = await runOnGpu(layout, ...); WebGPU (add-on){{gpuAvailable ? '' : ': not in this browser'}}</span>
     </label>
     <div class='line blank'></div>
-    <div class='line'><span class='kw'>let</span> settled = <span class='kw'>false</span>;</div>
-    <div class='line'>layout.on(<span class='str'>'stable'</span>, isStable =&gt; { settled = isStable; });</div>
+    <!-- How the demo draws it, folded: the same colours, sizes, labels and camera -->
+    <button type='button' class='line comment fold' :aria-expanded='drawingOpen ? "true" : "false"' aria-controls='code-drawing'
+      @click='drawingOpen = !drawingOpen'>// {{drawingOpen ? '▾' : '▸'}} draw it as the demo does: colours, sizes, labels</button>
+    <div id='code-drawing' class='preamble' :class='{open: drawingOpen}'>
+      <div class='line' v-for='(line, i) in parts.drawing' :key='"d" + i' :class='{comment: line.startsWith("//")}'>{{line}}</div>
+    </div>
+    <div class='line blank'></div>
+    <div class='line'><span class='kw'>let</span> settled = <span class='kw'>false</span>; <span class='comment'>// it stops when the layout settles, and wakes when you drag a node</span></div>
+    <div class='line'>layout.on(<span class='str'>'stable'</span>, isStable =&gt; { settled = isStable; <span class='kw'>if</span> (!isStable) requestAnimationFrame(frame); });</div>
     <div class='line'><span class='kw'>function</span> frame() {</div>
+    <div class='line indent'><span class='kw'>if</span> (settled) <span class='kw'>return</span>;</div>
     <div class='line indent' v-if='backend === "webgpu"'>gpu.step(<span class='hit'><input class='value' id='code-steps' type='text' inputmode='numeric'
       aria-label='steps per frame' aria-describedby='code-help-steps' :value='stepsText' :style='widthOf(stepsText)'
       @input='setSteps($event)' @change='revertSteps($event)' @focus='focus("steps", $event)' @blur='blur("steps")'></span>);</div>
@@ -64,11 +60,10 @@
       aria-label='steps per frame' aria-describedby='code-help-steps' :value='stepsText' :style='widthOf(stepsText)'
       @input='setSteps($event)' @change='revertSteps($event)' @focus='focus("steps", $event)' @blur='blur("steps")'></span>; ++i) layout.step();</div>
     <div id='code-help-steps' class='line indent comment help' :hidden='focused !== "steps"'>// Steps per frame. "auto" (0): as many as fit in {{frameBudget}} ms ({{autoNow}} now)</div>
-    <div class='line indent'><span class='kw'>if</span> (!settled) requestAnimationFrame(frame); <span class='comment'>// draw here</span></div>
-    <div class='line indent' v-if='backend === "webgpu"'><span class='kw'>else</span> gpu.stop().then(() =&gt; console.log(layout.getNodePosition(<span class='str'>'a'</span>)));</div>
-    <div class='line indent' v-else><span class='kw'>else</span> console.log(layout.getNodePosition(<span class='str'>'a'</span>));</div>
+    <div class='line indent'>requestAnimationFrame(frame); <span class='comment'>// the view draws every step</span></div>
     <div class='line'>}</div>
     <div class='line'>frame();</div>
+    <div class='line comment' v-if='parts.helpers.length'>// … and {{helperNames}} (in the copy)</div>
   </div>
   <div class='code-actions'>
     <button type='button' class='copy' @click='copy'>{{copied ? 'Copied' : 'Copy code'}}</button>
@@ -85,6 +80,9 @@
 </template>
 
 <script>
+import {graphProgram, drawingProgram, installLines, COMMIT} from '../lib/programText.js';
+import {RELEASED} from '../lib/release.js';
+
 // The library's defaults on main (lib/createPhysicsSimulator.js): changed values are lit, and
 // only they are copied
 const OPTIONS = [
@@ -115,22 +113,29 @@ export default {
     gpuMessage: String,
     installLine: String,
     installNote: String,
-    libraryDefaultLabel: String
+    libraryDefaultLabel: String,
+    // () => {name, fileName, graph, base, linkAlpha, nodeMinSize}: what is on screen, for the
+    // parts of the program that load and draw the same graph
+    describe: Function,
+    // changes when the graph on screen changes (the program is read again)
+    programKey: String
   },
   data() {
-    return {options: OPTIONS, focused: '', copied: false, copyFailed: false, repo: REPO, preambleOpen: false};
+    return {options: OPTIONS, focused: '', copied: false, copyFailed: false, repo: REPO, preambleOpen: false, drawingOpen: false};
   },
   computed: {
+    // The program's parts around the options: {head, drawing, helpers} (lines)
+    parts() {
+      // eslint-disable-next-line no-unused-expressions
+      this.programKey;
+      return this.program();
+    },
+    helperNames() {
+      return this.parts.helpers.filter(line => /^(async )?function /.test(line)).map(line => line.replace(/^(async )?function (\w+).*/, '$2()')).join(', ');
+    },
     stepsText() {
       return this.stepsPerFrame === 0 ? 'auto' : String(this.stepsPerFrame);
     },
-    // "./ngraph.forcelayout/modules/pivot ./ngraph.forcelayout/modules/gpu"
-    addonFolders() {
-      let folders = [];
-      if (this.placement === 'pivot') folders.push('pivot');
-      if (this.backend === 'webgpu') folders.push('gpu');
-      return folders.map(name => `./ngraph.forcelayout/modules/${name}`).join(' ');
-    }
   },
   methods: {
     // An input as wide as its text, like the code around it
@@ -183,30 +188,50 @@ export default {
     blur(key) {
       if (this.focused === key) this.focused = '';
     },
+    // Where the graph comes from, how it is drawn, what to install: from what is on screen
+    program() {
+      let gpu = this.backend === 'webgpu', pivot = this.placement === 'pivot';
+      let d = this.describe ? this.describe() : {};
+      let graphPart = graphProgram(d.name || '', d.fileName || '', d.base || '');
+      let drawing = drawingProgram(d.graph, {
+        springLength: this.settings.springLength, dimensions: this.settings.dimensions,
+        linkAlpha: d.linkAlpha, nodeMinSize: d.nodeMinSize
+      });
+      let core = {packages: [], addons: [], imports: [`import createLayout from 'ngraph.forcelayout';`]};
+      if (pivot) {
+        core.addons.push('pivot');
+        core.imports.push(`import placeNodes from 'ngraph.forcelayout.pivot';`);
+      }
+      if (gpu) {
+        core.addons.push('gpu');
+        core.imports.push(`import {createWebGPUBackend, runOnGpu} from 'ngraph.forcelayout.gpu';`);
+      }
+      let parts = [graphPart, core, drawing];
+      let head = installLines(parts, this.installLine, REPO, RELEASED);
+      if (!RELEASED && COMMIT) head.push(`// npm’s 3.3.1 (2022) has no dual tree, FIRE or maxVelocity: this installs the commit that drew this page`);
+      else if (this.installNote) head.push(`// ${this.installNote}`);
+      head.push(`// Runs in a page as an ES module (Vite, esbuild…): it awaits at the top level.`);
+      head.push(...graphPart.imports, ...core.imports, ...drawing.imports, '', ...graphPart.lines);
+      return {head, drawing: drawing.lines, helpers: graphPart.helpers};
+    },
     // The program as it reads, for Copy: only the changed options, and the add-ons that are on
     code() {
       let gpu = this.backend === 'webgpu', pivot = this.placement === 'pivot';
       let changed = OPTIONS.filter(option => this.isChanged(option) && !(gpu && (option.key === 'theta' || option.key === 'nbody')))
         .map(option => `  ${option.key}: ${option.choices ? `'${this.settings[option.key]}'` : this.settings[option.key]},`);
       let steps = this.stepsPerFrame === 0 ? Math.max(1, this.autoNow || 1) : this.stepsPerFrame;
-      let lines = [`// ${this.installLine} ngraph.graph`];
-      if (this.installNote) lines.push(`// ${this.installNote}`);
-      lines.push(`import createGraph from 'ngraph.graph';`, `import createLayout from 'ngraph.forcelayout';`);
-      if (pivot || gpu) {
-        lines.push(`// add-ons, not on npm: git clone ${REPO},`, `// then npm i ${this.addonFolders}`);
-        if (pivot) lines.push(`import placeNodes from 'ngraph.forcelayout.pivot';`);
-        if (gpu) lines.push(`import {createWebGPUBackend, runOnGpu} from 'ngraph.forcelayout.gpu';`);
-      }
-      lines.push(``, `const graph = createGraph(); // or yours`,
-        `graph.addLink('a', 'b'); graph.addLink('b', 'c'); graph.addLink('c', 'a');`, ``,
-        changed.length ? `const layout = createLayout(graph, {\n${changed.join('\n')}\n});` : `const layout = createLayout(graph);`);
+      let parts = this.program();
+      let lines = [...parts.head, ''];
+      lines.push(changed.length ? `const layout = createLayout(graph, {\n${changed.join('\n')}\n});` : `const layout = createLayout(graph);`);
       if (pivot) lines.push(this.settings.dimensions !== 2 ? `placeNodes(graph, layout, {dimensions: ${this.settings.dimensions}});` : `placeNodes(graph, layout);`);
       if (gpu) lines.push(`const gpu = await runOnGpu(layout, await createWebGPUBackend());`);
-      lines.push(``, `let settled = false;`, `layout.on('stable', isStable => { settled = isStable; });`, `function frame() {`);
+      lines.push('', ...parts.drawing, '');
+      lines.push(`let settled = false; // it stops when the layout settles, and wakes when you drag a node`,
+        `layout.on('stable', isStable => { settled = isStable; if (!isStable) requestAnimationFrame(frame); });`,
+        `function frame() {`, `  if (settled) return;`);
       lines.push(gpu ? `  gpu.step(${steps});` : `  for (let i = 0; i < ${steps}; ++i) layout.step();`);
-      lines.push(`  if (!settled) requestAnimationFrame(frame); // draw here`);
-      lines.push(gpu ? `  else gpu.stop().then(() => console.log(layout.getNodePosition('a')));` : `  else console.log(layout.getNodePosition('a'));`);
-      lines.push(`}`, `frame();`);
+      lines.push(`  requestAnimationFrame(frame); // the view draws every step`, `}`, `frame();`);
+      lines.push(...parts.helpers);
       return lines.join('\n');
     },
     copy() {
