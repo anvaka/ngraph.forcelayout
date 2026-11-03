@@ -64,6 +64,10 @@ const YOUNG = 1000;
 const FORCED_SELECTED = 50, NEIGHBOURS = 200;
 // How many candidates (per label wanted) a placement looks at before it stops
 const LOOK_AT = 12;
+// Pixels a label on screen may come closer to others before it gives way: a running layout
+// jiggles nodes by a few pixels, and without this the labels packed tightest blink out and
+// back, or jump to another side, as their neighbours move
+const SLACK = 6;
 
 export default {
   name: 'labels',
@@ -195,7 +199,7 @@ export default {
       let max = settings.max || Math.round(Math.min(400, Math.max(30, screen.width * screen.height / 3500)));
 
       let placed = placeLabels(candidates(screen, max), {
-        width: screen.width, height: screen.height, gap: settings.gap, padding: 3, max,
+        width: screen.width, height: screen.height, gap: settings.gap, padding: 3, slack: SLACK, max,
         blocked: coveredTest(ctx.visibleArea())
       });
       apply(placed, screen, now);
