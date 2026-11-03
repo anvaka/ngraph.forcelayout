@@ -398,6 +398,23 @@ export default function createView(scene, options = {}) {
       },
       toScreen,
       fromScreen,
+      /**
+       * Where `nodes` are drawn now, for a few of them (one read of the camera for all):
+       * [{x, y, radius} or null], in CSS pixels; `radius` is the disc's as sized (not as flags
+       * enlarge it). Null behind the camera or for nodes that have no row.
+       */
+      discsOf(list) {
+        updateProjector();
+        let out = {x: 0, y: 0, w: 0};
+        return list.map(node => {
+          let row = rowOf(node.id);
+          if (row < 0 || !layout) return null;
+          let pos = layout.getNodePosition(node.id);
+          if (!pos || !projector.toScreen(pos.x, pos.y || 0, pos.z || 0, out)) return null;
+          let size = row < nodeData.sizes.length ? nodeData.sizes[row] : 1;
+          return {x: out.x, y: out.y, radius: size * 0.5 * projector.pixelsPerUnit(out.w)};
+        });
+      },
       /** An event for the app's listeners (returned, so the module can check defaultPrevented) */
       emit(name, fields) {
         let e = new ViewEvent(name, null, fields);
@@ -474,9 +491,12 @@ export default function createView(scene, options = {}) {
   /**
    * The node under a canvas point (CSS pixels from its top left corner), or null. `options`:
    * `pointerType` ('mouse', 'pen', 'touch') and `width` (contact width) set the reach; `reach`
-   * sets it in pixels; `sticky` (a node) gets a few more pixels.
+   * sets it in pixels; `sticky` (a node) gets a few more pixels; `labels: false` looks at the
+   * discs only (a label module makes each label's text pick its node).
    *
-   * Returns {node, row, distance, inside, covers, clear, gap, x, y, radius}: `distance` from the
+   * Returns {node, row, distance, inside, covers, clear, gap, x, y, radius, label}: `label` is true
+   * when the point is on the node's label and not right on a disc (then `clear` is false: a press there
+   * moves the camera, a tap picks the node, a long press grabs it). `distance` from the
    * disc's edge in pixels, the disc on the canvas. `clear`: the point is on this disc and no
    * other, or the next nearest node is at least half the reach farther (`gap` pixels). Where nodes
    * crowd or overlap, a pick is not clear. The same for every pointer: hovering (`sticky`) helps a
@@ -489,6 +509,20 @@ export default function createView(scene, options = {}) {
     let margin = distance / 2;
     let stickyRow = pickOptions.sticky ? rowOf(pickOptions.sticky.id) : -1;
     let hit = pickNode(state, x, y, distance, stickyRow, stickyRow >= 0 ? STICKY : 0, margin);
+    // A label is part of its node: a point on a label's text picks that node, unless it is right
+    // on a disc that shows through the text (the inner half of it: a dot under a letter doesn't
+    // take the word). A label in front (the pointed node's) is above everything. Not clear: a
+    // press on a label moves the camera, as on a map
+    let labels = pickOptions.labels === false ? null : services.get('labelTargets');
+    let labelled = labels ? labels.at(x, y) : null;
+    let onDisc = hit && hit.inside && Math.hypot(x - hit.x, y - hit.y) <= Math.max(1.5, hit.radius * 0.5);
+    if (labelled && (labelled.front || !onDisc)) {
+      let row = rowOf(labelled.node.id);
+      if (row >= 0 && nodeData.nodes[row]) {
+        return {node: nodeData.nodes[row], row, distance: 0, inside: true, covers: 1, clear: false, gap: 0,
+          x: labelled.x, y: labelled.y, radius: labelled.radius, label: true};
+      }
+    }
     if (!hit) return null;
     hit.node = nodeData.nodes[hit.row];
     hit.clear = (hit.inside && hit.covers === 1) || hit.gap >= margin;

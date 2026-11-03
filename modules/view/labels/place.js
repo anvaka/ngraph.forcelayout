@@ -18,7 +18,10 @@ export const ANCHOR_INDEX = {right: 0, left: 1, above: 2, below: 3};
  * padding (pixels kept free around each label, 2), margin (pixels past the canvas edges where
  * labels may still go, 0), max (labels at most, not counting forced ones), cell (grid cell, 32),
  * blocked (`box => boolean`: true where a label can't go, such as under a panel; optional), slack
- * (pixels a label shown last time may overlap the padding and others, 0).
+ * (pixels a label shown last time may overlap the padding and others, 0), spacing ({x, y}: how
+ * far apart, in pixels, the nodes of two labels must be; an ellipse, wider than tall as labels
+ * are. Labels spread over the drawing instead of packing a crowded part solid. A label shown
+ * last time, or a forced one, needs only `keep` (0.7) of it. Optional).
  *
  * Returns [{row, anchor, x, y, width, height}]: the placed labels' boxes (top left corner).
  */
@@ -30,31 +33,94 @@ export function placeLabels(candidates, options) {
   let blocked = options.blocked;
   let slack = options.slack || 0;
   let grid = createGrid(options.width, options.height, options.cell || 32, margin);
+  let spacing = options.spacing && options.spacing.x > 0 && options.spacing.y > 0 ? createSpacing(options.spacing, options.keep || 0.7) : null;
   let placed = [];
   let free = 0;
   let box = {x: 0, y: 0, width: 0, height: 0};
   for (let i = 0; i < candidates.length; ++i) {
     let c = candidates[i];
     if (!c.forced && free >= max) break;
+    // Too near the node of a label placed already (more important, or shown last time)
+    if (spacing && !c.forced && spacing.near(c.x, c.y, !!c.anchor)) continue;
     let first = c.anchor && ANCHOR_INDEX[c.anchor] !== undefined ? c.anchor : null;
-    for (let k = first ? -1 : 0; k < ANCHORS.length; ++k) {
-      let anchor = k < 0 ? first : ANCHORS[k];
-      if (k >= 0 && anchor === first) continue;
+    // A forced label goes anyway, but where it fits if it can: clear of the others, else inside
+    // the canvas (a selected node's name isn't cut at the edge), else on its first side
+    for (let level = 2; level >= (c.forced ? 0 : 2); --level) {
+      let anchor = sideThatFits(c, first, level);
+      if (!anchor) continue;
       boxBeside(c, anchor, gap, box);
-      if (!c.forced) {
-        if (box.x < -margin || box.y < -margin || box.x + box.width > options.width + margin ||
-            box.y + box.height > options.height + margin) continue;
-        // Only on the side it had: a label that has to move is placed like a new one
-        if (grid.collides(box, anchor === first ? padding - slack : padding)) continue;
-        if (blocked && blocked(box)) continue;
-      }
       grid.add(box);
+      if (spacing) spacing.add(c.x, c.y);
       placed.push({row: c.row, anchor, x: box.x, y: box.y, width: box.width, height: box.height});
       if (!c.forced) free += 1;
       break;
     }
   }
   return placed;
+
+  // The first side (the one it had first) where the label fits: level 2 clear of everything,
+  // 1 inside the canvas and not blocked, 0 anywhere
+  function sideThatFits(c, first, level) {
+    for (let k = first ? -1 : 0; k < ANCHORS.length; ++k) {
+      let anchor = k < 0 ? first : ANCHORS[k];
+      if (k >= 0 && anchor === first) continue;
+      if (level === 0) return anchor;
+      boxBeside(c, anchor, gap, box);
+      if (box.x < -margin || box.y < -margin || box.x + box.width > options.width + margin ||
+          box.y + box.height > options.height + margin) continue;
+      if (blocked && blocked(box)) continue;
+      // Only on the side it had: a label that has to move is placed like a new one
+      if (level === 2 && grid.collides(box, anchor === first ? padding - slack : padding)) continue;
+      return anchor;
+    }
+    return null;
+  }
+}
+
+/**
+ * The side for a label drawn in front of the others (a pointed node's): the one whose box covers
+ * the least of `others` ([{x, y, width, height, weight}]: a covered pixel counts `weight` times,
+ * 1 by default, so a landmark's name is covered last), inside the canvas and not `blocked` if it
+ * can.
+ * `c`: {x, y, radius, width, height}; `options`: gap, width, height (the canvas), blocked.
+ * Ties go to the first side in ANCHORS.
+ */
+export function frontSide(c, others, options = {}) {
+  let gap = options.gap !== undefined ? options.gap : 3;
+  let box = {x: 0, y: 0, width: 0, height: 0};
+  let best = ANCHORS[0], bestCost = Infinity;
+  for (let k = 0; k < ANCHORS.length; ++k) {
+    boxBeside(c, ANCHORS[k], gap, box);
+    let cost = 0;
+    let outside = options.width > 0 && (box.x < 0 || box.y < 0 || box.x + box.width > options.width || box.y + box.height > options.height);
+    if (outside || (options.blocked && options.blocked(box))) cost += 1e12;
+    for (let i = 0; i < others.length; ++i) {
+      let o = others[i];
+      let w = Math.min(box.x + box.width, o.x + o.width) - Math.max(box.x, o.x);
+      let h = Math.min(box.y + box.height, o.y + o.height) - Math.max(box.y, o.y);
+      if (w > 0 && h > 0) cost += w * h * (o.weight || 1);
+    }
+    if (cost < bestCost) {
+      bestCost = cost;
+      best = ANCHORS[k];
+    }
+  }
+  return best;
+}
+
+/**
+ * The label under a point: the last of `boxes` (in drawing order, so the one on top) that holds
+ * (x, y), as {node, x, y, radius, front} (its node's disc, and whether it is a label in front), or
+ * null. `boxes`: [{node, x, y, width, height, disc: {x, y, radius}, front}].
+ */
+export function labelAt(boxes, x, y) {
+  for (let i = boxes.length - 1; i >= 0; --i) {
+    let b = boxes[i];
+    if (x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height) {
+      return {node: b.node, x: b.disc ? b.disc.x : x, y: b.disc ? b.disc.y : y, radius: b.disc ? b.disc.radius : 0, front: !!b.front};
+    }
+  }
+  return null;
 }
 
 /** The box (top left corner and size) of a label on `anchor` side of its node, into `out` */
@@ -111,6 +177,41 @@ function createGrid(width, height, cell, margin) {
     }
     return false;
   }
+}
+
+// The nodes of placed labels, hashed by cells as big as the spacing: near(x, y) looks at the 3 x 3
+// cells around. Distances are measured in the spacing's ellipse, so it is the same everywhere
+// on the screen (no cell edges for labels to pop at as the camera pans).
+function createSpacing(spacing, keep) {
+  let sx = spacing.x, sy = spacing.y;
+  let cells = new Map();
+  return {
+    add(x, y) {
+      let key = keyOf(Math.floor(x / sx), Math.floor(y / sy));
+      let list = cells.get(key);
+      if (!list) cells.set(key, list = []);
+      list.push(x, y);
+    },
+    near(x, y, shownBefore) {
+      let limit = shownBefore ? keep * keep : 1;
+      let cx = Math.floor(x / sx), cy = Math.floor(y / sy);
+      for (let i = -1; i <= 1; ++i) {
+        for (let j = -1; j <= 1; ++j) {
+          let list = cells.get(keyOf(cx + i, cy + j));
+          if (!list) continue;
+          for (let k = 0; k < list.length; k += 2) {
+            let dx = (list[k] - x) / sx, dy = (list[k + 1] - y) / sy;
+            if (dx * dx + dy * dy < limit) return true;
+          }
+        }
+      }
+      return false;
+    }
+  };
+}
+
+function keyOf(i, j) {
+  return i * 100003 + j;
 }
 
 function clamp(value, count) {

@@ -731,6 +731,31 @@ test('input: a tap from a key reaches the app first, then the handlers', functio
 var place = import('../modules/view/labels/place.js');
 var importance = import('../modules/view/labels/importance.js');
 
+test('placeLabels: spacing keeps the nodes of labels apart, wider than tall', function (t) {
+  return place.then(function (m) {
+    var label = function (row, x, y, extra) {
+      return Object.assign({row: row, x: x, y: y, radius: 2, width: 40, height: 14, anchor: null, forced: false}, extra);
+    };
+    var options = {width: 800, height: 600, gap: 3, padding: 2, spacing: {x: 100, y: 40}};
+    // In a row 60 px apart: every other node gets a label
+    var row = [0, 1, 2, 3, 4].map(function (i) { return label(i, 100 + 60 * i, 300); });
+    t.same(m.placeLabels(row, options).map(function (p) { return p.row; }), [0, 2, 4], 'horizontal: 60 px is too near');
+    // In a column 60 px apart: all of them (the ellipse is 40 px tall)
+    var column = [0, 1, 2, 3].map(function (i) { return label(i, 300, 100 + 60 * i); });
+    t.equal(m.placeLabels(column, options).length, 4, 'vertical: 60 px is far enough');
+    // A label shown last time needs only 0.7 of the spacing to stay
+    var near = [label(0, 100, 300), label(1, 175, 300, {anchor: 'right'})];
+    t.equal(m.placeLabels(near, options).length, 2, 'one shown before stays at 75 px');
+    near[1].anchor = null;
+    t.equal(m.placeLabels(near, options).length, 1, 'a new one does not');
+    // Forced labels ignore it
+    near[1].forced = true;
+    t.equal(m.placeLabels(near, options).length, 2, 'forced');
+    // Without spacing, as before
+    t.equal(m.placeLabels(row, {width: 800, height: 600, gap: 3, padding: 2}).length, 5);
+  });
+});
+
 test('placeLabels: in order, beside the node, never overlapping unless forced', function (t) {
   return place.then(function (m) {
     var options = {width: 400, height: 300, gap: 3, padding: 2};
@@ -766,6 +791,11 @@ test('placeLabels: in order, beside the node, never overlapping unless forced', 
     t.same(placed.map(function (p) { return [p.row, p.anchor]; }), [[0, 'right']], 'right of the cover, none under it');
     placed = m.placeLabels([label(0, 100, 200, {forced: true})], Object.assign({blocked: blocked}, options));
     t.equal(placed.length, 1, 'a forced label goes anyway');
+    // A forced label takes a side where it fits: not cut at the canvas edge, clear of others
+    placed = m.placeLabels([label(0, 395, 150, {forced: true})], options);
+    t.equal(placed[0].anchor, 'left', 'a selected node at the right edge: its name goes left');
+    placed = m.placeLabels([label(0, 100, 100), label(1, 110, 100, {forced: true})], options);
+    t.same(placed.map(function (p) { return p.anchor; }), ['right', 'left'], 'and clear of a label placed already');
 
     // A layout jiggles: two labels shown last time end up 1 px apart (padding asks for 2)
     var near = [label(0, 100, 100, {anchor: 'right'}), label(1, 100, 117, {anchor: 'right'})];
@@ -773,6 +803,97 @@ test('placeLabels: in order, beside the node, never overlapping unless forced', 
     t.same(m.placeLabels(near, Object.assign({slack: 3}, options)).map(function (p) { return p.anchor; }), ['right', 'right'], 'with slack it stays');
     var fresh = [label(0, 100, 100, {anchor: 'right'}), label(1, 100, 117)];
     t.same(m.placeLabels(fresh, Object.assign({slack: 3}, options)).map(function (p) { return p.anchor; }), ['right', 'left'], 'a new label gets no slack');
+  });
+});
+
+test('frontSide: the side that covers the fewest labels, inside the canvas; labelAt: the one on top', function (t) {
+  return place.then(function (m) {
+    var c = {x: 200, y: 150, radius: 5, width: 60, height: 16};
+    var options = {gap: 3, width: 400, height: 300};
+    t.equal(m.frontSide(c, [], options), 'right', 'nothing around: the first side');
+    // A label to the right of the node: the left is free
+    var right = {x: 210, y: 142, width: 50, height: 16};
+    t.equal(m.frontSide(c, [right], options), 'left');
+    // Labels left and right, a small one above: above covers least
+    var left = {x: 140, y: 142, width: 50, height: 16};
+    var above = {x: 195, y: 126, width: 10, height: 10};
+    var below = {x: 170, y: 160, width: 60, height: 16};
+    t.equal(m.frontSide(c, [right, left, above, below], options), 'above');
+    // A landmark's name counts more: rather a small name covered than a big one
+    var small = {x: 210, y: 142, width: 50, height: 16};
+    var big = {x: 140, y: 142, width: 40, height: 16, weight: 10};
+    var rest = [{x: 170, y: 126, width: 60, height: 16}, {x: 170, y: 158, width: 60, height: 16}];
+    t.equal(m.frontSide(c, [big, small].concat(rest), options), 'right', 'over the small name, not the landmark');
+    // At the right edge of the canvas the right side is out
+    t.equal(m.frontSide({x: 390, y: 150, radius: 5, width: 60, height: 16}, [], options), 'left', 'inside the canvas');
+    t.equal(m.frontSide(c, [], Object.assign({blocked: function (box) { return box.x > 200; }}, options)), 'left', 'not under a cover');
+
+    var node = function (id) { return {id: id}; };
+    var boxes = [
+      {node: node('a'), x: 100, y: 100, width: 60, height: 16, disc: {x: 95, y: 108, radius: 2}},
+      {node: node('b'), x: 140, y: 104, width: 60, height: 16, disc: {x: 135, y: 112, radius: 2}, front: true}
+    ];
+    t.equal(m.labelAt(boxes, 120, 108).node.id, 'a', 'on one label');
+    var top = m.labelAt(boxes, 150, 110);
+    t.same([top.node.id, top.front, top.x, top.y], ['b', true, 135, 112], 'where two overlap, the one drawn last, with its node\'s disc');
+    t.equal(m.labelAt(boxes, 300, 300), null, 'off every label');
+  });
+});
+
+test('hover: a node lights up once the pointer rests on it, not while the pointer passes over nodes', function (t) {
+  return Promise.all([import('../modules/view/modules/hover.js'), flags]).then(function (loaded) {
+    var hoverModule = loaded[0].default, f = loaded[1];
+    var frames = [];
+    global.requestAnimationFrame = function (fn) { frames.push(fn); return frames.length; };
+    global.cancelAnimationFrame = function () {};
+    var events = [], handler = null, cursors = [];
+    var nodes = {a: {id: 'a'}, b: {id: 'b'}};
+    var ctx = {
+      input: {add: function (h) { handler = h; }, dragging: function () { return false; }, claimant: function () { return null; }},
+      onFrame: function () {},
+      // Node a left of x = 100, b right of it
+      pick: function (x) { return {node: x < 100 ? nodes.a : nodes.b, row: 0}; },
+      flags: f.createFlags(function () {}),
+      setCursor: function (c) { cursors.push(c); },
+      emit: function (name, fields) { events.push([name, fields.node ? fields.node.id : null]); return {defaultPrevented: false}; }
+    };
+    var api = hoverModule.attach(ctx, {rest: {distance: 3, time: 30}});
+    var move = function (x) {
+      handler.hover({x: x, y: 50, pointerType: 'mouse'});
+      while (frames.length) frames.shift()();
+    };
+    var wait = function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); };
+    // Passing over a and b: 20 px every 10 ms
+    move(60);
+    return wait(10).then(function () {
+      move(80); return wait(10);
+    }).then(function () {
+      move(110); return wait(10);
+    }).then(function () {
+      move(130); return wait(10);
+    }).then(function () {
+      t.same(events, [], 'nothing lights up while it moves');
+      t.equal(cursors[cursors.length - 1], 'pointer', 'but the cursor shows a node is under it');
+      return wait(60);
+    }).then(function () {
+      t.equal(api.get().id, 'b', 'still on b: b is hovered');
+      t.same(events, [['hover', 'b']]);
+      t.ok(ctx.flags.has('b', f.HOVERED));
+      move(132);
+      t.equal(api.get().id, 'b', 'a small move keeps it');
+      move(50);
+      t.equal(api.get(), null, 'off to a: b goes out at once, a waits for a rest');
+      t.notOk(ctx.flags.has('b', f.HOVERED));
+      return wait(60);
+    }).then(function () {
+      t.equal(api.get().id, 'a', 'rested on a');
+      handler.hover(null);
+      while (frames.length) frames.shift()();
+      t.equal(api.get(), null, 'the pointer left');
+      api.dispose();
+      delete global.requestAnimationFrame;
+      delete global.cancelAnimationFrame;
+    });
   });
 });
 

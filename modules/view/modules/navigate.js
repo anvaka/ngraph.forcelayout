@@ -3,7 +3,8 @@
 //   view.use(navigateNodes);
 //
 // The canvas is one tab stop. On it:
-//   Enter        focuses the node nearest the middle of what shows (or the selected one); on a
+//   Enter        focuses the selected node, the hovered one, or else the labelled node nearest
+//                the middle of what shows (a name the visitor can see); on a
 //                focused node it is a tap: it selects (Shift adds, Cmd/Ctrl toggles) and keeps
 //                its tooltip open, exactly as a click or a tap would
 //   arrows       move focus to the nearest node in that direction (with no node focused, the
@@ -32,7 +33,7 @@
 // - `announce` (true): speak through a live region.
 //
 // API: focus(node), get(), clear(), announce(text).
-import {FOCUSED, SELECTED, DRAGGED} from '../flags.js';
+import {FOCUSED, SELECTED, DRAGGED, HOVERED} from '../flags.js';
 import {placeOverCanvas} from '../visible.js';
 
 const DIRECTIONS = {
@@ -46,10 +47,10 @@ const STEP = 10, FINE_STEP = 1;
 
 // Pointer gestures: the same for a mouse, a pen and a finger (only the reach differs)
 const GESTURES = [
-  ['Drag', 'a node moves it; the background pans'],
+  ['Drag', 'a node moves it; a label or the background pans'],
   ['Pinch or wheel', 'zoom'],
   ['Double tap', 'zoom in; a two-finger tap zooms out'],
-  ['Tap a node', 'its details and neighbours; tap the background to clear'],
+  ['Tap a node or its label', 'its details and neighbours; tap the background to clear'],
   ['Long press', 'on a node: grab it where nodes crowd; on the background: drag a box to select'],
   ['Twist, or right drag', 'rotate (3D)']
 ];
@@ -259,12 +260,18 @@ export default {
       showing = false;
     }
 
-    // Where Enter starts: the selected node, else the hovered one, else the one nearest the middle
-    // of what the user sees (a panel may cover part of the canvas)
+    // Where Enter starts: the selected node, else the hovered one, else the labelled node nearest
+    // the middle of what the user sees (a name they can read, not a dot among thousands), else
+    // any node nearest the middle (a panel may cover part of the canvas)
     function entryNode() {
       let selected = ctx.flags.ids(SELECTED);
       if (selected.length === 1 && graph.getNode(selected[0])) return graph.getNode(selected[0]);
+      let hovered = ctx.flags.ids(HOVERED);
+      if (hovered.length === 1 && graph.getNode(hovered[0])) return graph.getNode(hovered[0]);
       let screen = ctx.screenPositions();
+      let labels = ctx.get('labelTargets');
+      let named = labels ? new Set(labels.labelled().map(node => node.id)) : null;
+      if (named && !named.size) named = null;
       let best = -1, bestDistance = Infinity;
       let cx = screen.width / 2, cy = screen.height / 2;
       let area = ctx.visibleArea();
@@ -275,10 +282,13 @@ export default {
       } else {
         area = null;
       }
-      for (let i = 0; i < screen.x.length; ++i) {
-        if (!screen.onScreen[i] || (area && area.isHidden(screen.x[i], screen.y[i]))) continue;
-        let d = (screen.x[i] - cx) * (screen.x[i] - cx) + (screen.y[i] - cy) * (screen.y[i] - cy);
-        if (d < bestDistance) { bestDistance = d; best = i; }
+      for (let pass = named ? 0 : 1; pass < 2 && best < 0; ++pass) {
+        for (let i = 0; i < screen.x.length; ++i) {
+          if (!screen.onScreen[i] || (area && area.isHidden(screen.x[i], screen.y[i]))) continue;
+          if (pass === 0 && !(screen.nodes[i] && named.has(screen.nodes[i].id))) continue;
+          let d = (screen.x[i] - cx) * (screen.x[i] - cx) + (screen.y[i] - cy) * (screen.y[i] - cy);
+          if (d < bestDistance) { bestDistance = d; best = i; }
+        }
       }
       if (best >= 0) return screen.nodes[best];
       // Nothing in view: the node with the most links

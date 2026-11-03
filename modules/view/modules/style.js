@@ -133,7 +133,9 @@ export default {
       let labels = view.getModule && view.getModule('labels');
       if (!labels) return;
       labelsStyled = true;
-      labels.update({color: 0xe6ebf2ff, halo: (toRGBA(settings.background) & 0xffffff00 | 0xf2) >>> 0, haloWidth: 3});
+      // A thin, part-see-through halo: enough to lift the text off links and dots, without
+      // punching dark boxes into the drawing
+      labels.update({color: 0xe6ebf2ff, halo: (toRGBA(settings.background) & 0xffffff00 | 0xb3) >>> 0, haloWidth: 2});
     }
 
     function schedule() {

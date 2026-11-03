@@ -1,38 +1,70 @@
-// hover: tracks the node under a mouse or pen, flags it HOVERED, sets the cursor, and fires
-// 'hover' with the node and the previous one (node null: nothing is hovered now).
+// hover: the node a mouse or pen rests on is flagged HOVERED, and 'hover' fires with the node and
+// the previous one (node null: nothing is hovered now). The cursor shows at once what a press
+// would do there.
 //
 //   view.use(hoverNodes);
 //   view.on('hover', e => tooltip(e.node));
 //
-// Touch never hovers. A pointer move picks once per animation frame, and the node is picked again
-// after every frame in which the layout or the camera moved, since nodes move under a still
-// pointer. Nothing is hovered while something is being dragged. e.preventDefault() on 'hover'
-// keeps the node from lighting up.
+// Resting: a node lights up (and its label comes in front, its tooltip opens) once the pointer
+// rests on it: it stayed within `rest.distance` pixels of a point for `rest.time` ms (as Windows'
+// hover rectangle, and hoverIntent).
+// A pointer on its way somewhere crosses other nodes without lighting them up, so nothing it
+// passes changes the picture; leaving the hovered node puts its light out at once. A label's text
+// counts as its node (see the labels module).
+//
+// While the pointer rests, nodes move under it (a running layout, a zoom): the hovered node stays
+// hovered while it stays near the pointer (`stillReach` pixels from its disc, or on its label),
+// so a still pointer doesn't hop between neighbours. Touch never hovers. Nothing is hovered while
+// something is being dragged. e.preventDefault() on 'hover' keeps the node from lighting up.
 //
 // Options:
 // - `holdStill` (false): pin the hovered node, so it doesn't drift away from the pointer. Off by
 //   default because it changes the layout's physics.
+// - `rest` ({distance: {mouse: 3, pen: 6}, time: 120}): how still a pointer rests (a pen hovering
+//   in the air shakes more); false: it rests at once, and a node lights up as soon as the pointer
+//   is over it.
+// - `stillReach` (20): pixels from the hovered node's disc within which a still pointer keeps it.
 import {HOVERED} from '../flags.js';
+
+const REST = {distance: {mouse: 3, pen: 6}, time: 120};
+const STILL_REACH = 20;
 
 export default {
   name: 'hover',
   attach(ctx, options = {}) {
     let point = null;
-    // The current hit: {node, row, distance, inside, x, y, radius}
+    // The hovered hit: {node, row, distance, inside, x, y, radius}
     let hovered = null;
     let frame = 0;
     let held = null; // {node, wasPinned}
+    let rest = options.rest === false ? null : Object.assign({}, REST, options.rest || {});
+    let stillReach = options.stillReach !== undefined ? options.stillReach : STILL_REACH;
+    // The pointer rests: it has stayed near `anchor` ({x, y, t}) since `anchor.t` for `rest.time`
+    let still = !rest;
+    let anchor = null;
+    let restTimer = 0;
 
     ctx.input.add({
       name: 'hover',
       priority: 0,
       hover(newPoint) {
         point = newPoint;
+        if (!point) {
+          still = !rest;
+          anchor = null;
+          stopWatching();
+        } else if (rest) {
+          if (!anchor || Math.hypot(point.x - anchor.x, point.y - anchor.y) >= restDistance(point)) {
+            anchor = {x: point.x, y: point.y, t: performance.now()};
+            still = false;
+          }
+          if (!still) watchRest();
+        }
         if (!frame) frame = requestAnimationFrame(onFrame);
       }
     });
     ctx.onFrame(change => {
-      if (point && (change.positions || change.camera || change.structure)) update();
+      if (point && (change.positions || change.camera || change.structure)) update(true);
     });
 
     return {
@@ -41,6 +73,7 @@ export default {
       dispose() {
         if (frame) cancelAnimationFrame(frame);
         frame = 0;
+        stopWatching();
         point = null;
         set(null);
       }
@@ -48,22 +81,68 @@ export default {
 
     function onFrame() {
       frame = 0;
-      update();
+      update(false);
     }
 
-    function update() {
-      let hit = null;
+    // `moved`: the nodes or the camera moved under the pointer (not the pointer itself)
+    function update(moved) {
+      let hit = null, plain = false;
       if (point && !ctx.input.dragging()) {
-        hit = ctx.pick(point.x, point.y, {
-          pointerType: point.pointerType,
-          width: point.width,
-          sticky: hovered ? hovered.node : null
-        });
+        if (moved && still && hovered && near(hovered.node)) {
+          hit = hovered;
+        } else {
+          plain = !hovered;
+          hit = ctx.pick(point.x, point.y, {
+            pointerType: point.pointerType,
+            width: point.width,
+            sticky: hovered ? hovered.node : null
+          });
+        }
       }
-      set(hit);
+      if (hit && hovered && hit.node === hovered.node) hovered = hit;
+      // A resting pointer hovers what it is on; a moving one only lets go of what it left
+      else if (still || !hit) set(hit);
+      else set(null);
       // The cursor shows what a press would do, and a press is picked without the hover's bonus
-      let pressHit = hit && hovered ? ctx.pick(point.x, point.y, {pointerType: point.pointerType, width: point.width}) : hit;
+      let pressHit = plain || !point || ctx.input.dragging() ? hit : ctx.pick(point.x, point.y, {pointerType: point.pointerType, width: point.width});
       updateCursor(pressHit);
+    }
+
+    // The still pointer is near `node`: on its label, or within `stillReach` of its disc
+    function near(node) {
+      let labels = ctx.get ? ctx.get('labelTargets') : null;
+      let box = labels ? labels.boxOf(node) : null;
+      if (box && point.x >= box.x && point.x <= box.x + box.width && point.y >= box.y && point.y <= box.y + box.height) return true;
+      let disc = ctx.discsOf ? ctx.discsOf([node])[0] : null;
+      return !!disc && Math.hypot(disc.x - point.x, disc.y - point.y) - disc.radius <= stillReach;
+    }
+
+    function restDistance(p) {
+      let d = rest.distance;
+      if (typeof d === 'number') return d;
+      return d[p.pointerType] || d.mouse || 3;
+    }
+
+    // Checks, once the pointer has had `rest.time` to settle, whether it stayed near its anchor
+    function watchRest() {
+      if (restTimer) return;
+      restTimer = setTimeout(checkRest, Math.max(10, anchor.t + rest.time - performance.now()));
+    }
+
+    function stopWatching() {
+      clearTimeout(restTimer);
+      restTimer = 0;
+    }
+
+    function checkRest() {
+      restTimer = 0;
+      if (!point || !anchor || still) return;
+      if (performance.now() - anchor.t >= rest.time - 1) {
+        still = true;
+        update(false);
+      } else {
+        watchRest();
+      }
     }
 
     function set(hit) {

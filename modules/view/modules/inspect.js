@@ -4,8 +4,11 @@
 //   view.use(inspectNodes);    // a tap (mouse, pen or finger) keeps one open
 //   view.use(inspectNodes, {content: node => node.data.title});
 //
-// Hovering a node shows its tooltip while the pointer stays on the node or on the tooltip (so its
-// text can be read and selected). Keyboard focus (the navigate module) shows it too, while the
+// Hovering a node (the hover module's: the pointer rests on it, so a pointer on its way elsewhere
+// opens no cards over what it reaches for) shows its tooltip `delay` ms later, while the pointer
+// stays on the node or on the tooltip (so its text can be read and selected). A card covers more
+// than a label, so it waits longer: with the hover module's rest, about Windows' 400 ms hover
+// time. Once one card is open, the next node's opens at once. Keyboard focus (the navigate module) shows it too, while the
 // node has focus. A tap on a node, or Enter on a focused one, keeps the tooltip open until a tap
 // elsewhere or Escape; that is how touch shows it. The tooltip follows its node as the layout and the camera
 // move, beside the node rather than over it, inside the canvas.
@@ -21,7 +24,7 @@
 //   and the fields of `node.data`.
 //   Strings are always text, never HTML.
 // - `hover` (true): show tooltips on hover (needs the hover module). `tap` (true): keep one open
-//   on tap.
+//   on tap. `delay` (280): ms a hovered node waits for its card.
 // - `style`: CSS added to the tooltip's own. `className`: a class for it.
 //
 // API: show(node), hide(), get() (the node shown, or null).
@@ -37,6 +40,9 @@ const STYLE = 'position:fixed;z-index:2147483646;max-width:280px;padding:6px 8px
 const OFFSET = 14;
 // After the pointer leaves a node, how long the tooltip waits for it to reach the tooltip
 const LINGER = 200;
+// A hovered node's card opens this long after the hover, unless a card was open less than WARM ms
+// ago (then at once: the visitor is reading cards)
+const DELAY = 280, WARM = 300;
 const MAX_FIELDS = 12;
 const MAX_VALUE = 120;
 // The sides of a node a tooltip may take, in the order they are tried
@@ -108,6 +114,10 @@ export default {
     let overCard = false;
     let hoverNode = null;
     let lingering = 0;
+    let opening = 0;
+    // When a hover card was last on screen
+    let lastSeen = -Infinity;
+    let delay = options.delay !== undefined ? options.delay : DELAY;
 
     if (options.hover !== false) ctx.on('hover', onHover);
     ctx.on('focus', e => {
@@ -148,6 +158,7 @@ export default {
       get: () => shown ? shown.node : null,
       dispose() {
         clearTimeout(lingering);
+        clearTimeout(opening);
         ctx.graph.off('changed', onGraphChanged);
         if (card && card.parentNode) card.parentNode.removeChild(card);
         card = null;
@@ -159,9 +170,19 @@ export default {
       hoverNode = e.node;
       if (shown && shown.pinned) return;
       clearTimeout(lingering);
+      clearTimeout(opening);
       if (e.node) {
-        show(e.node, false, 'hover');
+        let warm = (shown && shown.source === 'hover') || performance.now() - lastSeen < WARM;
+        if (warm || delay <= 0) {
+          show(e.node, false, 'hover');
+        } else {
+          let node = e.node;
+          opening = setTimeout(() => {
+            if (hoverNode === node && !(shown && shown.pinned)) show(node, false, 'hover');
+          }, delay);
+        }
       } else if (shown && shown.source === 'hover') {
+        // The card goes a moment later: the pointer may be on its way to it
         lingering = setTimeout(() => {
           if (!overCard && !hoverNode && shown && shown.source === 'hover') hide();
         }, LINGER);
@@ -181,6 +202,7 @@ export default {
 
     function hide() {
       clearTimeout(lingering);
+      if (shown && shown.source === 'hover') lastSeen = performance.now();
       shown = null;
       if (card) card.style.display = 'none';
     }
@@ -246,14 +268,18 @@ export default {
       let area = ctx.visibleArea ? ctx.visibleArea() : null;
       if (area && (area.allHidden || area.width !== rect.width || area.height !== rect.height)) area = null;
       let points = neighbourPoints(shown.node);
-      // The view's other overlays (a search box, the keys card) stay uncovered too
+      // The view's other overlays (a search box, the keys card) stay uncovered too, and so does
+      // the node's own label: the pointer may rest on it
       let others = overlayBoxes(rect, card);
+      let labels = ctx.get('labelTargets');
+      let own = labels ? labels.boxOf(shown.node) : null;
+      let avoid = own ? others.concat([own]) : others;
       let sizes = cardSizes(rect, narrow);
       let best = null;
       // A card that had to shrink stays small until what shows changes (see onVisibleAreaChange)
       for (let i = Math.min(shown.size || 0, sizes.length - 1); i < sizes.length && !best; ++i) {
         setSize(sizes[i]);
-        best = bestBox(at, rect, area, points, others, narrow);
+        best = bestBox(at, rect, area, points, avoid, narrow);
         shown.size = i;
       }
       if (!best && others.length) {
