@@ -1,5 +1,6 @@
 import addSoftCore from './softCore.js';
 import addSoftStep from '../pe-1-soft-step/softStep.js';
+import addGatedSoftStep from './gatedSoftStep.js';
 
 export default {
   id: 'soft-core',
@@ -23,7 +24,11 @@ each other), 1/r² past about twice <b>Slab size</b> spring lengths.</p>
     { key: 'plummer', label: 'Plummer size', value: 1, step: '0.1',
       help: 'Times the length the step allows, (2 |gravity| timeStep² · mean charge)^(1/3). Larger softens more and lets fans and crowds pack tighter.' },
     { key: 'calm', label: 'Calm crowds', value: 0, step: '1',
-      help: '1: also give each node the soft step (pe-1): a node whose force swings as it moves takes the implicit step. With the soft core, what still shakes is crowds stirred by the force approximation error; this damps them.' },
+      help: '1: also give every node the soft step (pe-1): a node whose force swings as it moves takes the implicit step. With the soft core, what still shakes is crowds stirred by the force approximation error; this damps them. 2: the same, but only for nodes that keep shaking: whose recent motion goes back and forth (over Shake threshold spring lengths a step) and is not dying down over Shake memory steps, after the first Shake memory steps.' },
+    { key: 'shake', label: 'Shake threshold', value: 0.01, step: '0.001',
+      help: 'Calm crowds 2 only: how much back-and-forth motion, in spring lengths per step, opens a node\'s soft step.' },
+    { key: 'settle', label: 'Shake memory', value: 256, step: '64',
+      help: 'Calm crowds 2 only: steps over which a node\'s shaking must not have died down for its soft step to open; also the steps at the start when it never opens.' },
     { key: 'slab', label: 'Slab size', value: 1.5, step: '0.1',
       help: 'Half the slab thickness, in spring lengths. Larger calms bigger cores but shrinks them.' }
   ],
@@ -35,7 +40,9 @@ each other), 1/r² past about twice <b>Slab size</b> spring lengths.</p>
       plummer: Math.max(0.01, Number(params.plummer) || 1),
       slab: Math.max(0.01, Number(params.slab) || 1.5)
     });
-    const removeCalm = Number(params.calm) === 1 ? addSoftStep(layout.simulator, 'soft-core-calm', { strength: 1, release: 0.9, cap: 50 }) : null;
+    const calm = Number(params.calm);
+    const removeCalm = calm === 1 ? addSoftStep(layout.simulator, 'soft-core-calm', { strength: 1, release: 0.9, cap: 50 }) :
+      calm === 2 ? addGatedSoftStep(layout.simulator, 'soft-core-calm', { release: 0.9, cap: 50, window: 32, slow: Math.max(32, Number(params.settle) || 256), persist: 0.9, on: Math.max(0, Number(params.shake) || 0.01), decay: 0.995 }) : null;
     return { dispose() { if (removeCalm) removeCalm(); core.dispose(); } };
   }
 };
