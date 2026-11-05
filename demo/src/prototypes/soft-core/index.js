@@ -1,4 +1,5 @@
 import addSoftCore from './softCore.js';
+import addSoftStep from '../pe-1-soft-step/softStep.js';
 
 export default {
   id: 'soft-core',
@@ -21,16 +22,20 @@ each other), 1/r² past about twice <b>Slab size</b> spring lengths.</p>
       help: '0: Plummer softening (the push levels off up close). 1: slab (1/r up close, still growing).' },
     { key: 'plummer', label: 'Plummer size', value: 1, step: '0.1',
       help: 'Times the length the step allows, (2 |gravity| timeStep² · mean charge)^(1/3). Larger softens more and lets fans and crowds pack tighter.' },
+    { key: 'calm', label: 'Calm crowds', value: 0, step: '1',
+      help: '1: also give each node the soft step (pe-1): a node whose force swings as it moves takes the implicit step. With the soft core, what still shakes is crowds stirred by the force approximation error; this damps them.' },
     { key: 'slab', label: 'Slab size', value: 1.5, step: '0.1',
       help: 'Half the slab thickness, in spring lengths. Larger calms bigger cores but shrinks them.' }
   ],
 
   attach({ layout, params }) {
     const law = Number(params.law) === 1 ? 1 : 0;
-    return addSoftCore(layout.simulator, {
+    const core = addSoftCore(layout.simulator, {
       law,
       plummer: Math.max(0.01, Number(params.plummer) || 1),
       slab: Math.max(0.01, Number(params.slab) || 1.5)
     });
+    const removeCalm = Number(params.calm) === 1 ? addSoftStep(layout.simulator, 'soft-core-calm', { strength: 1, release: 0.9, cap: 50 }) : null;
+    return { dispose() { if (removeCalm) removeCalm(); core.dispose(); } };
   }
 };
