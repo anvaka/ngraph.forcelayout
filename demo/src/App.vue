@@ -25,7 +25,9 @@
           <select v-model='graphChoice' ref='graphSelect' @keydown='pickerKey = $event.key' @pointerdown='pickerKey = ""'>
             <option v-if='fileName' value='__file__'>{{fileName}}</option>
             <option value='__open__'>Your graph: open a .dot or .json file…</option>
-            <optgroup v-for='group in graphGroups' :key='group.label' :label='group.label'>
+            <!-- v-memo: the app re-renders 4 times a second (the stats), and Vue sets each option's value
+                 attribute on every patch; Firefox closes an open dropdown when its options change -->
+            <optgroup v-for='group in graphGroups' :key='group.label' :label='group.label' v-memo='[group]'>
               <option v-for='graph in group.graphs' :key='graph' :value='graph'>{{graphTitle(graph)}}</option>
             </optgroup>
           </select>
@@ -37,7 +39,7 @@
       <div class='buttons idea-bar' v-if='prototype'>
         <label class='graph-picker' title='Layout idea to try'>
           <select v-model='prototypeId'>
-            <option v-for='option in prototypeOptions' :key='option.value' :value='option.value'>{{option.label}}</option>
+            <option v-for='option in prototypeOptions' :key='option.value' :value='option.value' v-memo='[option.value, option.label]'>{{option.label}}</option>
           </select>
         </label>
         <label class='idea-toggle' :class='{inactive: !prototype}'
