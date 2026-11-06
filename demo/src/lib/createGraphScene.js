@@ -55,6 +55,9 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
   let stats = createStats();
 
   bus.on('load-graph', loadGraph);
+  // Browser zoom (Ctrl +/-) or a move to a screen of another density changes devicePixelRatio;
+  // w-gl reads it once, so without this the canvas keeps its old resolution (blurry, or too big)
+  let stopWatchingRatio = watchPixelRatio(ratio => { if (scene) scene.setPixelRatio(ratio); });
 
   return {
     dispose,
@@ -469,7 +472,25 @@ export default function createGraphScene(canvas, layoutSettings = {}, sceneSetti
     if (view) view.dispose();
     scene.dispose();
     bus.off('load-graph', loadGraph);
+    stopWatchingRatio();
   }
+}
+
+// Calls `onChange(ratio)` whenever window.devicePixelRatio changes. Returns a function that stops.
+function watchPixelRatio(onChange) {
+  if (typeof matchMedia !== 'function') return () => {};
+  let query = null;
+  let listen = () => {
+    // Matches only the current ratio: it stops matching once the ratio changes
+    query = matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    query.addEventListener('change', changed, {once: true});
+  };
+  let changed = () => {
+    listen();
+    onChange(window.devicePixelRatio);
+  };
+  listen();
+  return () => query.removeEventListener('change', changed);
 }
 
 // Average time per layout step over the last frames; steps and frames per second over the last
