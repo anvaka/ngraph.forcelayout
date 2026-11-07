@@ -5,51 +5,55 @@
 //   view.use(dragNodes);
 //   view.on('dragend', e => console.log(e.node.id, e.nodes.length, e.cancelled));
 //
-// The same rule holds for a mouse, a pen and a finger; only the picking reach differs (8, 10 and
-// 16+ pixels). A press grabs a node when it clearly lands on it: on its drawn disc, or nearer to it
-// than to any other node by at least half the reach. Where nodes crowd (a dense graph at a small
-// zoom, where every point is near several nodes) the press moves the camera instead, and a long
-// press grabs the nearest node.
+// One rule for a mouse, a pen and a finger: a press on a node takes it, a press anywhere else
+// moves the camera. On a node means on its dot as drawn, on its label, or within the pointer's
+// reach of the dot (8 pixels for a mouse, 10 for a pen, 16 or the finger's half width for a
+// finger); where several nodes are within reach, the nearest takes the press, and a mouse or pen
+// takes the node it highlighted. What lights up is what moves.
 //
-// The node stays under the pointer while the camera moves (other fingers can pan and zoom), and
-// keeps its offset from the pointer. In 3D it moves on the plane through it that faces the
-// camera. It works the same with the layout on the CPU or on WebGPU (through setNodePosition()),
-// and with the layout paused.
+// The node lifts (flagged DRAGGED: drawn larger, with a ring, its label in front) the moment the
+// press lands, before it moves, so a finger sees what it holds; the cursor is a grabbing hand. A
+// press that lifts without moving is a tap.
+//
+// The node stays under the pointer while the camera moves (keys, inertia), and keeps its offset
+// from the pointer. A second finger always pinches: while it is down the camera has both fingers
+// (input.js lends it the holding one), and the node stays where it is in the drawing, still held;
+// when the second finger lifts, the first drags the node on from where it is. In 3D the node moves
+// on the plane through it that faces the camera. It works the same with the layout on the CPU or
+// on WebGPU (through setNodePosition()), and with the layout paused.
 //
 // Events: 'dragstart' (e.preventDefault() leaves the press to the camera), 'drag', 'dragend'
 // ({cancelled}). Each has `node` (the one under the pointer) and `nodes` (all that move).
 //
 // Options:
 // - `pinOnDrop` (false): leave dropped nodes pinned. Nodes that were pinned stay pinned either way.
-// - `longPress` (true): a long press near a node grabs it, also where nodes crowd.
 import {DRAGGED, SELECTED} from '../flags.js';
 
 export default {
   name: 'drag',
   attach(ctx, options = {}) {
     let pinOnDrop = !!options.pinOnDrop;
-    let longPress = options.longPress !== false;
     // Pointer id -> drag in progress
     let drags = new Map();
-    // Pointer id -> node taken by a long press, not moved yet
+    // Pointer id -> node lifted by a press, not moved yet
     let taken = new Map();
 
     ctx.input.add({
       name: 'drag',
       priority: 20,
       cursor: 'grab',
-      press: p => grabs(p) && !!p.hit && p.hit.clear,
-      longpress(p) {
-        if (!longPress || !grabs(p) || !p.node) return false;
+      press: p => grabs(p) && !!p.node,
+      // The press landed: the node lifts at once
+      down(p) {
+        if (!p.node || taken.has(p.id) || drags.has(p.id)) return;
         taken.set(p.id, p.node);
         ctx.flags.set(p.node.id, DRAGGED, true);
         updateCursor();
-        return true;
       },
       dragstart: begin,
       drag(p) {
         let drag = drags.get(p.id);
-        if (!drag) return;
+        if (!drag || drag.lent) return;
         drag.x = p.x;
         drag.y = p.y;
         move(drag);
@@ -58,14 +62,27 @@ export default {
       dragend: p => end(p, false),
       cancel: p => end(p, true),
       up: p => letGoTaken(p.id),
+      // A second finger: the camera has this one for the pinch, the node stays where it is
+      suspend(p) {
+        let drag = drags.get(p.id);
+        if (drag) drag.lent = true;
+      },
+      // The pinch is over: this finger drags the node on from where the node is now
+      resume(p) {
+        let drag = drags.get(p.id);
+        if (!drag || !drag.lent) return;
+        drag.lent = false;
+        rebase(drag, p);
+      },
       key(e) {
         if (e.key !== 'Escape' || (!drags.size && !taken.size)) return false;
         Array.from(drags.keys()).concat(Array.from(taken.keys())).forEach(ctx.input.cancel);
         return true;
       }
     });
-    // Other fingers (or keys, or inertia) move the camera: keep the nodes under their pointers
-    ctx.onCamera(() => drags.forEach(move));
+    // Keys or inertia move the camera: keep the nodes under their pointers (not during a pinch:
+    // the camera follows the fingers then, and the node stays in place)
+    ctx.onCamera(() => drags.forEach(drag => { if (!drag.lent) move(drag); }));
 
     return {
       /** Nodes being dragged now */
@@ -139,6 +156,17 @@ export default {
       let delta = [target[0] - anchor.start[0], D > 1 ? target[1] - anchor.start[1] : 0, D > 2 ? target[2] - anchor.start[2] : 0];
       drag.items.forEach(item => place(drag.layout, item, delta));
       ctx.view.invalidate();
+    }
+
+    // The pointer is at `p` and the node where it is now: the node keeps that offset from now on
+    function rebase(drag, p) {
+      let D = drag.D, pos = drag.items[0].body.pos, o = pos.offset;
+      let onScreen = ctx.toScreen(pos.array[o], D > 1 ? pos.array[o + 1] : 0, D > 2 ? pos.array[o + 2] : 0);
+      drag.x = p.x;
+      drag.y = p.y;
+      if (!onScreen) return;
+      drag.offsetX = onScreen.x - p.x;
+      drag.offsetY = onScreen.y - p.y;
     }
 
     function place(layout, item, delta) {

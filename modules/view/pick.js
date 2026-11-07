@@ -6,6 +6,10 @@
 // discs go to the node drawn last in 2D, and to the nearest one in 3D. The result also says how
 // clearly it won (`gap`): how much farther the next node is.
 //
+// A disc is the one drawn: at least `minPixels` wide (wider for larger nodes, by the square root
+// of their size, as the node shader draws them), and no wider than its room where nodes crowd.
+// So the dot that shows is the dot that picks, at any zoom.
+//
 // In 2D the point becomes a point of the scene and the positions are scanned there, with no
 // projection (0.1 ms at 100k nodes, 0.9 ms at 1M on an M4 Max). Only the few nodes near it are
 // projected, to measure them in pixels. In 3D every node is projected (0.6 ms at 100k, 5 ms at 1M).
@@ -19,7 +23,10 @@ const planePoint = [0, 0, 0], stepX = [0, 0, 0], stepY = [0, 0, 0];
  * - `pos`, `D`: the layout's `store.pos`, `D` numbers per row;
  * - `count`: rows to look at;
  * - `sizes`: diameter of each row's disc in scene units, and `maxSize` the largest of them;
- * - `projector`: the camera of this frame (see math.js).
+ * - `projector`: the camera of this frame (see math.js);
+ * - optional, as the view draws the discs: `minPixels` (the smallest drawn diameter in pixels),
+ *   `baseSize` (the size drawn `minPixels` wide; larger sizes grow by the square root) and
+ *   `rooms` (each row's largest diameter in scene units where nodes crowd; 0: no limit).
  *
  * `sx`, `sy`: the point, in CSS pixels of the canvas. `reach`: pixels from a disc's edge within
  * which a node still counts. Row `sticky` (the hovered node, or -1) gets `bonus` more pixels.
@@ -57,11 +64,11 @@ export function pickNode(state, sx, sy, reach, sticky = -1, bonus = 0, margin = 
 export function nodesInRect(state, x0, y0, x1, y1) {
   let left = Math.min(x0, x1), right = Math.max(x0, x1);
   let top = Math.min(y0, y1), bottom = Math.max(y0, y1);
-  let {pos, D, count, sizes, projector} = state;
+  let {pos, D, count, projector} = state;
   let rows = [];
   for (let i = 0, j = 0; i < count; ++i, j += D) {
     if (!projector.toScreen(pos[j], D > 1 ? pos[j + 1] : 0, D > 2 ? pos[j + 2] : 0, onScreen)) continue;
-    let radius = sizes[i] * 0.5 * projector.pixelsPerUnit(onScreen.w);
+    let radius = discRadius(state, i, projector.pixelsPerUnit(onScreen.w));
     let dx = onScreen.x < left ? left - onScreen.x : (onScreen.x > right ? onScreen.x - right : 0);
     let dy = onScreen.y < top ? top - onScreen.y : (onScreen.y > bottom ? onScreen.y - bottom : 0);
     if (dx * dx + dy * dy <= radius * radius) rows.push(i);
@@ -107,7 +114,8 @@ function scanPlane(state, sx, sy, reach, around, sticky, bonus, best) {
   if (!Number.isFinite(unitsPerPixel)) return false;
 
   let near = around * unitsPerPixel;
-  let limit = near + state.maxSize * 0.5;
+  // The widest a disc can be drawn here, in scene units (the room only makes discs smaller)
+  let limit = near + Math.max(state.maxSize, minDiameter(state, state.maxSize) * unitsPerPixel) * 0.5;
   let {pos, D, count, sizes} = state;
   let cx = planePoint[0], cy = planePoint[1];
   for (let i = 0, j = 0; i < count; ++i, j += D) {
@@ -116,16 +124,16 @@ function scanPlane(state, sx, sy, reach, around, sticky, bonus, best) {
     let y = D > 1 ? pos[j + 1] : 0;
     let dy = y - cy;
     if (dy > limit || dy < -limit) continue;
-    let within = near + sizes[i] * 0.5;
+    let within = near + Math.max(sizes[i], minDiameter(state, sizes[i]) * unitsPerPixel) * 0.5;
     if (dx * dx + dy * dy > within * within) continue;
     if (!projector.toScreen(pos[j], y, 0, onScreen)) continue;
-    rank(best, i, sizes[i] * 0.5 * projector.pixelsPerUnit(onScreen.w), sx, sy, reach, sticky, bonus, false);
+    rank(best, i, discRadius(state, i, projector.pixelsPerUnit(onScreen.w)), sx, sy, reach, sticky, bonus, false);
   }
   return true;
 }
 
 function scanAll(state, sx, sy, reach, around, sticky, bonus, best, depth) {
-  let {pos, D, count, sizes, projector} = state;
+  let {pos, D, count, projector} = state;
   let m = projector.mvp, width = projector.width, height = projector.height;
   let far = around;
   for (let i = 0, j = 0; i < count; ++i, j += D) {
@@ -133,7 +141,7 @@ function scanAll(state, sx, sy, reach, around, sticky, bonus, best, depth) {
     let w = m[3] * x + m[7] * y + m[11] * z + m[15];
     if (!(w > 0)) continue;
     let px = ((m[0] * x + m[4] * y + m[8] * z + m[12]) / w + 1) * 0.5 * width;
-    let radius = sizes[i] * 0.5 * projector.pixelsPerUnit(w);
+    let radius = discRadius(state, i, projector.pixelsPerUnit(w));
     let limit = far + radius;
     if (px - sx > limit || sx - px > limit) continue;
     let py = (1 - (m[1] * x + m[5] * y + m[9] * z + m[13]) / w) * 0.5 * height;
@@ -180,6 +188,25 @@ function keep(best, row, distance, radius) {
   best.y = onScreen.y;
   best.w = onScreen.w;
   best.radius = radius;
+}
+
+/**
+ * The radius in pixels of row `row`'s disc as drawn, `pixelsPerUnit` where it is: its size, at
+ * least the smallest drawn diameter (grown by the square root of its size), at most its room.
+ * Flags (hovered, selected) draw it larger still; picking doesn't count that.
+ */
+export function discRadius(state, row, pixelsPerUnit) {
+  let size = state.sizes[row];
+  let diameter = Math.max(size * pixelsPerUnit, minDiameter(state, size));
+  let rooms = state.rooms;
+  if (rooms && rooms[row] > 0) diameter = Math.min(diameter, rooms[row] * pixelsPerUnit);
+  return diameter * 0.5;
+}
+
+// The smallest diameter in pixels the view draws a node of `size` at (the node shader's rule)
+function minDiameter(state, size) {
+  let min = state.minPixels;
+  return min > 0 ? min * Math.sqrt(Math.max(size / (state.baseSize || 1), 1)) : 0;
 }
 
 function distance3(a, b) {

@@ -66,6 +66,9 @@ export default {
     ctx.onFrame(change => {
       if (point && (change.positions || change.camera || change.structure)) update(true);
     });
+    // A press of this pointer takes the node that is lit (index.js asks): what lights up is what
+    // a press takes, also when the node drifted from a still pointer (`stillReach`)
+    ctx.provide('litAt', (x, y) => hovered && point && Math.hypot(x - point.x, y - point.y) <= restDistance(point) ? hovered : null);
 
     return {
       /** The hovered node, or null */
@@ -86,12 +89,11 @@ export default {
 
     // `moved`: the nodes or the camera moved under the pointer (not the pointer itself)
     function update(moved) {
-      let hit = null, plain = false;
+      let hit = null;
       if (point && !ctx.input.dragging()) {
         if (moved && still && hovered && near(hovered.node)) {
           hit = hovered;
         } else {
-          plain = !hovered;
           hit = ctx.pick(point.x, point.y, {
             pointerType: point.pointerType,
             width: point.width,
@@ -103,9 +105,8 @@ export default {
       // A resting pointer hovers what it is on; a moving one only lets go of what it left
       else if (still || !hit) set(hit);
       else set(null);
-      // The cursor shows what a press would do, and a press is picked without the hover's bonus
-      let pressHit = plain || !point || ctx.input.dragging() ? hit : ctx.pick(point.x, point.y, {pointerType: point.pointerType, width: point.width});
-      updateCursor(pressHit);
+      // The cursor shows what a press would do: a press takes what is lit (see index.js)
+      updateCursor(hit);
     }
 
     // The still pointer is near `node`: on its label, or within `stillReach` of its disc

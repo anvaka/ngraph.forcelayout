@@ -125,16 +125,24 @@ The view takes over camera input from the scene. Pointers (mouse, pen, touch), t
 go through one input layer that the camera and the modules share, so they never fight over a
 gesture:
 
+* **It is all Pointer Events, and every rule follows the pointer at hand**: each event's
+  `pointerType` decides its reach, drag distance and long press, never the kind of device. On a
+  laptop with a touch screen, or a tablet with a pen and a mouse, each pointer behaves as what it is.
 * **Every pointer has one owner**, decided when it goes down. Modules are asked in priority order
   whether they want it, with the node under it already picked; the camera takes the rest.
-* **Two fingers pinch**, wherever they land. A finger that lands while another is down goes to
-  the camera, and takes that other finger along, even from a node it was about to drag (the
-  node goes back). Only a finger that has committed to a gesture of its own keeps it: one that
-  long-pressed, or that has dragged for `pinchTime`. So one finger can hold a node while another
-  pans.
+* **What lights up is what a press takes.** A press on a node (its dot as drawn, its label, or
+  within the pointer's reach of the dot) takes that node, and the node lifts at once, before the
+  pointer moves; anywhere else the press moves the camera. A mouse or pen takes the node it lit.
+  There are no hidden modes: no timing decides between moving a node and moving the camera.
+* **Two fingers always pinch**, wherever they land. A finger that lands while another is down goes
+  to the camera, and so does the other finger. A finger that holds a node (and has been down for
+  `pinchTime`) keeps holding it: the camera borrows that finger for the pinch, the node stays where
+  it is in the drawing, and when the other finger lifts, the first one drags the node on. A finger
+  that went down a moment before is part of the pinch: what it lifted is let go.
 * **A press stays undecided** until it moves past a small distance (then it is a drag for its
-  owner) or lifts (then it is a tap). A long press is offered to every module while the press is
-  undecided. Taps fire on release, at once: a double tap doesn't make single taps wait.
+  owner) or lifts (then it is a tap). A long press of a finger or a pen is offered to every module
+  while the press is undecided; a mouse has Shift and its other buttons instead, and a slow click
+  is a click. Taps fire on release, at once: a double tap doesn't make single taps wait.
 * **Every drag ends once**, with an end or a cancel: pointercancel, lost capture, leaving the
   window, a release outside the window, or Escape.
 
@@ -146,17 +154,22 @@ listen on a detached element, and the view drives them.
 
 | Input | Does |
 |---|---|
-| Drag on the background | pans; with the right button or Alt it rotates and tilts |
-| Wheel | zooms about the pointer (`camera: {wheel: 'pan'}`: pans, and Cmd/Ctrl + wheel zooms) |
+| Drag on the background | pans; so does a middle drag, and in 2D a right or Alt drag. In 3D a right or Alt drag rotates and tilts |
+| Wheel | a mouse wheel zooms about the pointer; a trackpad's two-finger scroll that moves sideways pans (`camera: {wheel}`: 'auto', 'zoom' or 'pan') |
 | Trackpad pinch (Ctrl + wheel) | zooms, in finer steps |
-| Two fingers | pinch zooms about their centre and pans; a twist rotates (after 25 px of arc); a level two-finger move up or down tilts |
+| Two fingers | pinch zooms about their centre and pans. In 3D a twist rotates (after 25 px of arc) and a level two-finger move up or down tilts |
 | Double tap | zooms in (not with Shift, Ctrl, Cmd or Alt) |
 | Two-finger tap | zooms out |
-| Arrows or WASD, + and −, Q and E, R and F | pan, zoom, rotate, tilt while held |
+| Arrows or WASD, + and −, Q and E, R and F | pan, zoom, and in 3D rotate and tilt, while held |
 
-Rotation and tilt work only where the scene allows rotation. `camera` options: `wheel` ('zoom'),
-`rotate` (true), `doubleTapZoom` (true), `twoFingerTapZoom` (true), `inertia` (true), `keys` (true),
-`rotateArc` (25).
+A 2D drawing doesn't turn under the user's hands (the fit module may still turn it to the
+screen's shape). Rotation and tilt work only where the scene allows rotation. The zoom of a double
+tap eases in, and a fling glides on, unless the user prefers reduced motion. Browsers don't say
+which device scrolled, so `wheel: 'auto'` tells a trackpad by its sideways movement: a scroll
+gesture (events less than 200 ms apart) that moves sideways pans from then on, and one that goes
+only up or down zooms, as a mouse wheel does. `camera` options: `wheel` ('auto'), `rotate` (true;
+'always' turns a 2D view too), `doubleTapZoom` (true), `twoFingerTapZoom` (true), `inertia` (true),
+`keys` (true), `rotateArc` (25).
 
 ### Gestures
 
@@ -164,10 +177,11 @@ Rotation and tilt work only where the scene allows rotation. `camera` options: `
 
 * `dragDistance` (`{mouse: 3, pen: 6, touch: 10}`): pixels a press moves before it is a drag.
 * `doubleTapTime` (300 ms) and `doubleTapDistance` (`{mouse: 10, pen: 30, touch: 30}`).
-* `longPressTime` (500 ms).
+* `longPressTime` (500 ms), and `longPressFor` (`{mouse: false, pen: true, touch: true}`): which
+  pointers long-press.
 * `twoFingerTapTime` (400 ms).
-* `pinchTime` (250 ms): a finger that has dragged for less than this joins a pinch when another
-  one lands.
+* `pinchTime` (250 ms): a finger down for less than this when another lands joins the pinch, and
+  what it held is let go; one down longer keeps holding it through the pinch.
 
 The canvas gets `touch-action: none` (so the browser leaves gestures to the view), no text
 selection or iOS callout, and `tabindex="0"` so it takes keys after a press. Only keys a handler
@@ -212,7 +226,7 @@ that lets clicks through, or `occlusion: false`.
 |---|---|---|
 | `tap` | a press lifted before it moved (left button, touch, pen) | `count`: 2 for the second of a double tap |
 | `doubletap` | after the second `tap` | |
-| `longpress` | 500 ms without moving | |
+| `longpress` | a finger or pen, 500 ms without moving | |
 | `contextmenu` | a right click, on release | |
 | `hover` | the hovered node changed: the pointer rests on a node, or left it (hover module) | `previous` |
 | `dragstart`, `drag`, `dragend` | a node drag (drag module) | `nodes`, `cancelled` on `dragend` |
@@ -230,18 +244,23 @@ pixels from the disc's edge (0 inside it), and the disc on the canvas. `clear` s
 unambiguous: the point is on the disc, or the next nearest node is at least half the reach farther
 (`gap` pixels).
 
-With the labels module, a label's text is part of its node, as on a map: a point on a label picks
-its node (`label: true`), unless it is on the inner half of a disc that shows through the text (a
-dot under a letter doesn't take the word). A label in front (the pointed node's, see labels) wins
-over discs too. Such a pick is not `clear`: a press on
-a label moves the camera, a tap picks its node, a long press grabs it. `labels: false` looks at
-the discs only.
+The disc is the one drawn: at least `nodeMinSize` pixels wide (larger nodes by the square root of
+their size, as the node shader draws them) and no wider than its room (`nodeRoom`). So the dot
+that shows is the dot that picks, at any zoom; flags that draw a node larger (hovered, selected)
+don't count.
+
+With the labels module, a label's text is part of its node: a point on a label picks its node
+(`label: true`), unless it is on the inner half of a disc that shows through the text (a dot under
+a letter doesn't take the word). A label in front (the pointed node's, see labels) wins over discs
+too. A press on a label takes its node, as a press on its dot does. `labels: false` looks at the
+discs only.
 
 It works as a bubble cursor with a capped reach. A point inside a node's disc picks that node
 (overlaps go to the node drawn last in 2D, the nearest one in 3D). Otherwise the node whose disc
 edge is nearest wins, within `reach`: 8 px for a mouse, 10 for a pen, 16 for touch (or half the
 finger's contact width, up to 32). The `sticky` node (the hovered one) reaches 4 px farther, so
-hover doesn't flicker between neighbours.
+hover doesn't flicker between neighbours. A press of a mouse or pen takes the node the hover
+module lit, so what lights up is what a press takes.
 
 Picking runs on the CPU from the layout's own positions, and only when asked. In 2D the point is
 mapped to the plane of the graph and the positions are scanned there (0.27 ms per pick at 100k
@@ -387,25 +406,28 @@ move under a still pointer; a still pointer keeps its node while the node stays 
 
 ### drag
 
-`view.use(dragNodes, {pinOnDrop, longPress})`: moves nodes. The node is pinned while it moves and
-goes back to the layout when dropped (`pinOnDrop: true` leaves it pinned; a node that was pinned
-stays pinned). Dragging a selected node moves the whole selection. Escape puts the nodes back.
+`view.use(dragNodes, {pinOnDrop})`: moves nodes. The node is pinned while it moves and goes back
+to the layout when dropped (`pinOnDrop: true` leaves it pinned; a node that was pinned stays
+pinned). Dragging a selected node moves the whole selection. Escape puts the nodes back.
 
-A press grabs a node when the pick is clear: on the node's disc, or clearly nearer to it than to
-any other node. Where nodes crowd (a dense graph at a small zoom, where every point is near
-several nodes) a press moves the camera instead, and a long press grabs the nearest node. The
-hover cursor shows which one a press will do: `grab` or `pointer`.
+One rule for a mouse, a pen and a finger: a press on a node takes it, a press anywhere else moves
+the camera. On a node means on its dot as drawn, on its label, or within the pointer's reach of the
+dot (see [Picking](#picking)); where several nodes are within reach the nearest takes the press,
+and a mouse or pen takes the node it lit. The node lifts (`DRAGGED`: drawn larger, with a ring,
+its label in front) the moment the press lands, so a finger sees what it holds before it moves,
+and the hover cursor (`grab`) says it before a mouse presses. A press that lifts without moving is
+a tap. To pan where nodes crowd, zoom in, use two fingers, or a right or middle drag.
 
-The node keeps its offset from the pointer, and stays under it while the camera moves (another
-finger can pan). Two fingers that land together pinch, also when the first landed on a node (see
-[Input](#input)). In 3D it moves on the plane through it that faces the camera. It works
-with the layout on the CPU or on WebGPU (through `setNodePosition()`), running or paused. API:
-`get()` (the nodes being dragged).
+The node keeps its offset from the pointer, and stays under it while the camera moves (keys,
+inertia). A second finger pinches: the node stays where it is in the drawing, still held, and when
+the second finger lifts, the first drags it on (see [Input](#input)). In 3D it moves on the plane
+through it that faces the camera. It works with the layout on the CPU or on WebGPU (through
+`setNodePosition()`), running or paused. API: `get()` (the nodes being dragged).
 
 ### select
 
 `view.use(selectNodes, {box})`: a tap selects a node; Shift adds, Cmd or Ctrl toggles. A tap on
-the background or Escape clears. A long press on the background, then a drag, draws a box that
+the background or Escape clears. A long press of a finger or pen on the background, then a drag, draws a box that
 selects the nodes whose disc touches it (a ring shows when the long press takes); Shift-drag
 draws one right away. With Shift, Cmd or Ctrl held the box adds to the selection. Fires `select`
 before a change is kept. API: `get()`, `set(nodesOrIds)`, `clear()`, `has(nodeOrId)`.
@@ -472,7 +494,9 @@ tilted once, and a settled 2D drawing turns to the screen's long side (not while
 points at a node: it doesn't turn under a resting pointer, a focus or a selection). A free area smaller than
 `minRoom` (120 px) each way, such as the strip above a soft keyboard, doesn't move the camera, and
 neither does a free area that grows a little without making the drawing bigger (a line of a
-phone's panel folding away), so the labels stay where they are. It snaps under
+phone's panel folding away), so the labels stay where they are. While a node is dragged the
+camera holds still, so the drawing doesn't shrink under the hand that moves it; it catches up
+when the node is let go. It snaps under
 `prefers-reduced-motion`. API: `fit()` (back to the whole drawing, following again; also the `0`
 key), `follow(on)`, `following()`, `on(fn)` (`fn(following)`), `zoomTo(node, {linkPixels,
 duration})` (bring a node close: its links about `linkPixels` long, 40).

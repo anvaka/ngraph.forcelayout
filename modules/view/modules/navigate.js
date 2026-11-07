@@ -47,12 +47,14 @@ const STEP = 10, FINE_STEP = 1;
 
 // Pointer gestures: the same for a mouse, a pen and a finger (only the reach differs)
 const GESTURES = [
-  ['Drag', 'a node moves it; a label or the background pans'],
-  ['Pinch or wheel', 'zoom'],
-  ['Double tap', 'zoom in; a two-finger tap zooms out'],
-  ['Tap a node or its label', 'its details and neighbours; tap the background to clear'],
-  ['Long press', 'on a node: grab it where nodes crowd; on the background: drag a box to select'],
-  ['Twist, or right drag', 'rotate (3D)']
+  ['Drag a node or its label', 'moves it; what lights up is what moves'],
+  ['Drag the background', 'pans; so does a right or middle drag'],
+  ['Two fingers', 'pinch to zoom and pan, also while one holds a node'],
+  ['Wheel, pinch', 'zoom; a trackpad’s two-finger swipe sideways pans'],
+  ['Double click or tap', 'zoom in; a two-finger tap zooms out'],
+  ['Click or tap a node', 'its details and neighbours; Shift adds, Cmd/Ctrl toggles; the background clears'],
+  ['Shift drag, or long press', 'on the background: a box that selects'],
+  ['Right or Alt drag, twist', 'rotate and tilt (3D)']
 ];
 
 const HELP = [
@@ -64,7 +66,8 @@ const HELP = [
   ['Shift+arrows', 'move the node (Alt: small steps); release Shift to drop it'],
   ['/', 'search'],
   ['Escape', 'close, clear, then leave the nodes'],
-  ['WASD, + and −', 'move and zoom the camera']
+  ['WASD, + and −', 'move and zoom the camera'],
+  ['Q E, R F', 'turn and tilt the camera (3D)']
 ];
 
 const CARD_STYLE = 'position:fixed;z-index:2147483646;max-width:360px;padding:8px 10px;border-radius:4px;' +

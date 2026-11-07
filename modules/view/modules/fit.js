@@ -8,6 +8,8 @@
 // - The camera moves with the layout: when the drawing grows it backs off in the same frame
 //   (nothing is cut off); when it shrinks it eases in (it snaps when the user prefers reduced
 //   motion).
+// - While a node is dragged (or lifted, held, moved by keys) the camera holds still: the drawing
+//   doesn't shrink under the hand that moves it. It catches up when the node is let go.
 // - Any other camera move stops following: a pan, the wheel, a pinch, keys, a double tap, or
 //   reveal() for search and keyboard focus. The module remembers where it left the camera, and
 //   a camera that is somewhere else was moved by someone else.
@@ -80,6 +82,7 @@ export default {
     let turning = 0;          // the animation frame of a turn
     let gliding = 0;          // the animation frame of a glide to a node (zoomTo)
     let tracking = null;      // after zoomTo: () => where the camera looks to keep the node in place
+    let held = false;         // a fit waits for a dragged node to be let go
 
     ctx.onFrame(change => {
       watch(ctx.layout);
@@ -99,7 +102,13 @@ export default {
         setFollowing(false);
         return;
       }
-      if (pending || change.positions || change.structure || easing) {
+      if (ctx.flags && ctx.flags.count && ctx.flags.count(DRAGGED)) {
+        // A node is in someone's hand: the camera holds still until it is let go
+        if (change.positions || change.structure || easing) held = true;
+        return;
+      }
+      if (pending || change.positions || change.structure || easing || held) {
+        held = false;
         let instant = pending;
         pending = false;
         fitNow(instant);
