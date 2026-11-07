@@ -194,12 +194,10 @@ export default function createView(scene, options = {}) {
 
   let camera = null, input = null;
   if (options.input !== false) {
-    camera = createCamera(scene, options.camera);
+    // The user turns only a drawing with depth: a 2D one stays as it is under the hands
+    camera = createCamera(scene, options.camera, {is3D: () => !!layout && layout.simulator.store.D >= 3});
     input = createInput(canvas, {
-      // A press of a mouse or pen picks the node it highlighted, if it is still within reach
-      // A press is decided the same way for every pointer: no bonus for the hovered node, which
-      // would make a mouse grab where a finger pans (in a crowd, see drag.js)
-      pick: (x, y, p) => pick(x, y, {pointerType: p.pointerType, width: p.width}),
+      pick: pressHit,
       emit: (name, e) => events.emit(name, e),
       hasListeners: name => events.has(name),
       scenePoint,
@@ -542,7 +540,10 @@ export default function createView(scene, options = {}) {
     updateProjector();
     return {
       pos: store.pos, D: store.D, count: Math.min(store.n, nodes.count),
-      sizes: nodeData.sizes, maxSize: nodeData.maxSize, projector
+      sizes: nodeData.sizes, maxSize: nodeData.maxSize, projector,
+      // Discs as drawn: at least nodeMinSize pixels wide, at most their room (see pick.js)
+      minPixels: settings.nodeMinSize || 0, baseSize: nodeData.minSize || 1,
+      rooms: settings.nodeRoom > 0 && nodes.rooms ? rooms.data : null
     };
   }
 
@@ -550,6 +551,17 @@ export default function createView(scene, options = {}) {
     let drawContext = scene.getDrawContext();
     let rect = canvas.getBoundingClientRect();
     projector.set(drawContext.projection, drawContext.view.matrix, element.worldModel, rect.width, rect.height);
+  }
+
+  // What a press at (x, y) takes. What lights up is what a press takes: a mouse or pen takes the
+  // node it lit (the hover module says which), a finger the node nearest to it
+  function pressHit(x, y, p) {
+    if (p.pointerType !== 'touch') {
+      let litAt = services.get('litAt');
+      let lit = litAt ? litAt(x, y) : null;
+      if (lit && lit.node && rowOf(lit.node.id) >= 0) return lit;
+    }
+    return pick(x, y, {pointerType: p.pointerType, width: p.width});
   }
 
   function rowOf(id) {

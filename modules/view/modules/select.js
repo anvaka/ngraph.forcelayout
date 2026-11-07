@@ -7,8 +7,8 @@
 //
 // A tap on a node selects it; Shift adds it, Cmd or Ctrl toggles it. A tap on the background, or
 // Escape, clears the selection. A long press on the background, then a drag, draws a box (with a
-// mouse, a pen or a finger) that selects the nodes whose disc touches it; Shift-drag draws one
-// right away. With Shift, Cmd or Ctrl held, the box adds to the selection.
+// finger or a pen: input.js doesn't long-press a mouse) that selects the nodes whose disc touches
+// it; Shift-drag draws one right away, with any pointer. With Shift, Cmd or Ctrl held, the box adds to the selection.
 //
 // 'select' fires before a change is kept: {nodes, added, removed}; e.preventDefault() keeps the
 // old selection. A box shows what it would select while it is drawn, and fires once at the end.

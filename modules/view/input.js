@@ -4,16 +4,23 @@
 // (lower first) whether they want it, with the node under it at hand; the camera, last, takes the
 // rest. So one finger can drag a node while two others move the camera.
 //
-// A press stays undecided until it moves past a small distance (then the owner gets dragstart,
-// drag, dragend) or lifts (then it is a tap, offered to everyone). A long press is offered to
-// everyone while the press is undecided; a handler that takes it becomes the owner. Taps fire on
-// release, at once: a double tap doesn't make single taps wait.
+// Everything is Pointer Events, and every rule follows the `pointerType` of the event at hand,
+// not the kind of device: on a laptop with a touch screen, or a tablet with a pen and a mouse,
+// each pointer behaves as what it is.
 //
-// Two fingers pinch. A finger that lands while another is down goes to the camera, and so does
-// that other finger, wherever they landed (on a node or not): its owner gets cancel(). Only a
-// finger that has committed to a gesture of its own keeps its owner: one that was long-pressed,
-// or that has dragged for `pinchTime`. Then the new finger is offered as usual (it moves the
-// camera, or drags another node).
+// A press stays undecided until it moves past a small distance (then the owner gets dragstart,
+// drag, dragend) or lifts (then it is a tap, offered to everyone). A long press of a finger or a
+// pen (`longPressFor`; a mouse has Shift and its other buttons) is offered to everyone while the
+// press is undecided; a handler that takes it becomes the owner. Taps fire on release, at once: a
+// double tap doesn't make single taps wait.
+//
+// Two fingers always pinch: a finger that lands while another is down goes to the camera, and so
+// does the other finger, wherever they landed (on a node or not). A finger that holds something
+// (its owner has suspend(), as the drag has) and has been down for `pinchTime` keeps it: the
+// camera borrows the finger for the pinch (its owner gets suspend(p)), and gives it back when the
+// camera's own fingers have lifted (resume(p)); the press then counts from where the finger is.
+// Any other finger's gesture ends: its owner gets cancel(). So two fingers that land together are
+// a pinch, also on a node.
 //
 // A handler is an object with any of:
 //   priority          lower is asked first (default 100; the camera is last)
@@ -24,6 +31,7 @@
 //   up(p)             `p` lifted before it moved (a tap may follow)
 //   cancel(p)         the gesture is over without an end: pointercancel, lost capture, blur, Escape...
 //   longpress(p)      return true to take `p` (the previous owner gets cancel)
+//   suspend(p), resume(p)   the camera borrows `p` for a pinch, and gives it back
 //   tap(e), doubletap(e), contextmenu(e), twofingertap(e)   return true to stop the others
 //   hover(point)      a mouse or pen moved with no button down (null: it left)
 //   wheel(w), key(e), keyup(e), blur()
@@ -37,8 +45,12 @@ const DEFAULTS = {
   doubleTapTime: 300,
   doubleTapDistance: {mouse: 10, pen: 30, touch: 30},
   longPressTime: 500,
+  // Pointers that long-press: a mouse has Shift and its other buttons instead, and a slow click
+  // is a click
+  longPressFor: {mouse: false, pen: true, touch: true},
   twoFingerTapTime: 400,
-  // A finger that has dragged for less than this (ms) joins a pinch when another one lands
+  // A finger that has been down for less than this (ms) when another one lands joins the pinch,
+  // and what it held is let go; one down longer keeps holding it through the pinch
   pinchTime: 250
 };
 
@@ -139,6 +151,7 @@ export function createInput(canvas, options) {
     // Its pointers end here
     pointers.forEach(p => {
       if (p.owner !== handler) return;
+      unlend(p);
       if (p.state === PENDING || p.state === DRAGGING) call(handler, 'cancel', p);
       p.owner = null;
       p.state = CANCELLED;
@@ -151,10 +164,12 @@ export function createInput(canvas, options) {
     let p = pointers.get(pointerId);
     if (!p || p.state === CANCELLED) return;
     clearLongPress(p);
+    unlend(p);
     let owner = p.owner;
     p.state = CANCELLED;
     if (group) group.cancelled = true;
     if (owner) call(owner, 'cancel', p);
+    if (owner && owner === cameraHandler()) giveBack();
   }
 
   function cancelAll() {
@@ -187,7 +202,7 @@ export function createInput(canvas, options) {
 
     if (!(p.multi && p.pointerType === 'touch' && pinch(p))) offer(p, 0);
     if (p.owner) call(p.owner, 'down', p);
-    if (!p.multi && wantsLongPress()) {
+    if (!p.multi && settings.longPressFor[p.pointerType] !== false && wantsLongPress()) {
       p.timer = env.setTimeout(() => longPress(p), settings.longPressTime);
     }
   }
@@ -205,6 +220,13 @@ export function createInput(canvas, options) {
       return;
     }
     p.update(e, local(e));
+    if (p.lent) {
+      // Lent to the camera for a pinch: the camera moves with it, its owner waits
+      if (group && Math.hypot(p.x - p.downX, p.y - p.downY) > distanceFor(settings.dragDistance, p.pointerType)) group.moved = true;
+      let camera = cameraHandler();
+      if (camera) call(camera, 'drag', p);
+      return;
+    }
     if (p.state === PENDING) {
       if (Math.hypot(p.x - p.downX, p.y - p.downY) > distanceFor(settings.dragDistance, p.pointerType)) {
         clearLongPress(p);
@@ -237,6 +259,8 @@ export function createInput(canvas, options) {
   function finish(p, cancelled) {
     clearLongPress(p);
     pointers.delete(p.id);
+    // A lent finger lifted: the camera lets go of it, and its owner sees it end as usual
+    unlend(p);
     let owner = p.owner;
     if (p.state === DRAGGING) {
       if (owner) call(owner, cancelled ? 'cancel' : 'dragend', p);
@@ -250,6 +274,7 @@ export function createInput(canvas, options) {
     }
     if (cancelled && group) group.cancelled = true;
     p.state = DONE;
+    if (owner && owner === cameraHandler()) giveBack();
     if (!pointers.size && group) {
       let g = group;
       group = null;
@@ -276,34 +301,67 @@ export function createInput(canvas, options) {
     return false;
   }
 
-  // Finger `p` landed while other fingers are down: they all go to the camera, unless one of
-  // them is committed to a gesture of its own. True when the camera took `p`.
+  // Finger `p` landed while other touch fingers are down: the camera takes it and them, to pinch.
+  // A finger that holds something (its owner can suspend) and has been down for `pinchTime` is
+  // lent to the camera; any other ends its gesture (a node grabbed a moment ago goes back where it
+  // was). True when the camera took `p`.
   function pinch(p) {
-    let camera = handlers.find(h => h.priority === Infinity);
+    let camera = cameraHandler();
     if (!camera) return false;
-    let fingers = [];
-    let others = 0;
+    let others = [];
     for (let q of pointers.values()) {
-      if (q === p || q.pointerType !== 'touch' || q.state === CANCELLED) continue;
-      others += 1;
-      if (q.owner === camera) continue;
-      if (q.longPressed || (q.state === DRAGGING && env.now() - q.dragTime >= settings.pinchTime)) return false;
-      fingers.push(q);
+      if (q !== p && q.pointerType === 'touch' && q.state !== CANCELLED) others.push(q);
     }
-    if (!others) return false;
-    fingers.forEach(q => {
-      // A node grabbed a moment ago goes back where it was
-      if (q.owner) call(q.owner, 'cancel', q);
-      q.owner = camera;
+    if (!others.length) return false;
+    others.forEach(q => {
+      if (q.owner === camera || q.lent) return;
+      let owner = q.owner;
+      clearLongPress(q);
+      if (owner && owner.suspend && env.now() - q.downTime >= settings.pinchTime) {
+        q.lent = true;
+        call(owner, 'suspend', q);
+      } else {
+        if (owner) call(owner, 'cancel', q);
+        q.owner = camera;
+      }
       call(camera, 'down', q);
     });
     p.owner = camera;
     return true;
   }
 
+  // Lets go of a finger the camera borrowed
+  function unlend(p) {
+    if (!p.lent) return;
+    p.lent = false;
+    let camera = cameraHandler();
+    if (camera) call(camera, 'up', p);
+  }
+
+  // Once the camera's own fingers have all lifted, the fingers it borrowed go back to their owners,
+  // and their press counts from where they are now
+  function giveBack() {
+    let camera = cameraHandler();
+    for (let q of pointers.values()) {
+      if (q.owner === camera && !q.lent && (q.state === PENDING || q.state === DRAGGING)) return;
+    }
+    pointers.forEach(q => {
+      if (!q.lent) return;
+      unlend(q);
+      q.downX = q.x;
+      q.downY = q.y;
+      q.downClientX = q.clientX;
+      q.downClientY = q.clientY;
+      call(q.owner, 'resume', q);
+    });
+  }
+
+  function cameraHandler() {
+    return handlers.find(h => h.priority === Infinity) || null;
+  }
+
   function startDrag(p) {
     p.state = DRAGGING;
-    p.dragTime = env.now();
     while (p.owner) {
       let owner = p.owner;
       if (!owner.dragstart || owner.dragstart(p) !== false) {
@@ -417,7 +475,7 @@ export function createInput(canvas, options) {
     e.preventDefault();
     if (options.onPress) options.onPress();
     let wheel = {
-      deltaX: e.deltaX * scale, deltaY: e.deltaY * scale,
+      deltaX: e.deltaX * scale, deltaY: e.deltaY * scale, deltaMode: mode,
       x: point.x, y: point.y, clientX: e.clientX, clientY: e.clientY,
       shiftKey: e.shiftKey, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey,
       originalEvent: e
@@ -503,7 +561,6 @@ class Pointer {
     this.owner = null;
     this.multi = false;
     this.longPressed = false;
-    this.dragTime = 0;
     this.timer = 0;
     this.event = e;
     this.shiftKey = !!e.shiftKey;
@@ -558,6 +615,7 @@ function mergeSettings(custom = {}) {
   let settings = {...DEFAULTS, ...custom};
   settings.dragDistance = {...DEFAULTS.dragDistance, ...(custom.dragDistance || {})};
   settings.doubleTapDistance = {...DEFAULTS.doubleTapDistance, ...(custom.doubleTapDistance || {})};
+  settings.longPressFor = {...DEFAULTS.longPressFor, ...(custom.longPressFor || {})};
   return settings;
 }
 

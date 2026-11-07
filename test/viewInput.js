@@ -121,6 +121,32 @@ test('pickNode says how clearly the nearest node wins', function (t) {
   });
 });
 
+test('pickNode: the disc that picks is the disc drawn, also where the view enlarges small nodes', function (t) {
+  return Promise.all([math, pick]).then(function (mods) {
+    var p = topDown(mods[0]);
+    // 3 px per unit: a node of size 0.2 is 0.6 px wide, but drawn 8 px wide (minPixels)
+    var tiny = state(p, [0, 0], 2, [0.2]);
+    t.equal(mods[1].pickNode(tiny, 403.5, 300, 0), null, 'its own size alone misses a point 3.5 px away');
+    tiny.minPixels = 8;
+    tiny.baseSize = 0.2;
+    var hit = mods[1].pickNode(tiny, 403.5, 300, 0);
+    t.ok(hit && hit.inside, 'the drawn dot takes it');
+    t.ok(Math.abs(hit.radius - 4) < 1e-4, 'radius 4 px');
+    // Larger nodes grow by the square root of their size: 4 times the base is drawn twice as wide
+    var hub = state(p, [0, 0, 30, 0], 2, [0.8, 0.2]);
+    hub.minPixels = 8;
+    hub.baseSize = 0.2;
+    t.ok(Math.abs(mods[1].pickNode(hub, 407, 300, 0).radius - 8) < 1e-4, 'a 16 px dot');
+    t.equal(mods[1].pickNode(hub, 494, 300, 0).row, 1);
+    // A node is no wider than its room where nodes crowd
+    hub.rooms = new Float32Array([1, 0]);
+    t.equal(mods[1].pickNode(hub, 401, 300, 0).radius, 1.5, 'a room of 1 unit is 3 px wide');
+    t.equal(mods[1].pickNode(hub, 407, 300, 0), null);
+    // The selection box measures the same discs
+    t.same(mods[1].nodesInRect(tiny, 403, 290, 420, 310), [0], 'the box touches the drawn dot');
+  });
+});
+
 test('nodesInRect counts discs that touch the box', function (t) {
   return Promise.all([math, pick]).then(function (mods) {
     var p = topDown(mods[0]);
@@ -342,28 +368,45 @@ test('input: a handler that declines at dragstart passes the pointer on', functi
   });
 });
 
-test('input: a long press can be taken over; the release is not a tap', function (t) {
+test('input: a long press of a finger or pen can be taken over; the release is not a tap', function (t) {
   return input.then(function (i) {
     var s = setup(i);
+    var touch = {pointerType: 'touch'};
     s.core.add(s.recorder('grab', 20, function () { return false; }, {
       longpress: function (p) { s.log.push('grab.longpress'); return !!p.node; }
     }));
-    s.down(1, 100, 100);
+    s.down(1, 100, 100, touch);
     s.advance(499);
     t.same(s.log, ['camera.down']);
     s.advance(1);
     t.same(s.log, ['camera.down', 'grab.longpress', 'camera.cancel'], 'the camera lets go');
-    s.move(1, 130, 100);
+    s.move(1, 130, 100, touch);
     t.same(s.log.slice(3), ['grab.dragstart', 'grab.drag']);
-    s.up(1, 130, 100);
+    s.up(1, 130, 100, touch);
     t.same(s.appEvents, ['longpress'], 'the app heard the long press, and no tap');
 
     // On the background nobody takes it, nobody listens: a slow tap is still a tap
     s.log.length = 0;
-    s.down(2, 300, 300);
+    s.down(2, 300, 300, touch);
     s.advance(600);
-    s.up(2, 300, 300);
+    s.up(2, 300, 300, touch);
     t.same(s.log, ['camera.down', 'grab.longpress', 'camera.up', 'grab.tap', 'camera.tap']);
+
+    // A pen long-presses too
+    s.log.length = 0;
+    s.down(3, 300, 300, {pointerType: 'pen'});
+    s.advance(500);
+    t.same(s.log, ['camera.down', 'grab.longpress']);
+    s.up(3, 300, 300, {pointerType: 'pen'});
+
+    // A mouse doesn't: a slow click is a click
+    s.log.length = 0;
+    s.appEvents.length = 0;
+    s.down(4, 100, 100);
+    s.advance(800);
+    s.up(4, 100, 100);
+    t.same(s.log, ['camera.down', 'camera.up', 'grab.tap', 'camera.tap'], 'no long press, a tap');
+    t.same(s.appEvents, ['tap']);
   });
 });
 
@@ -452,31 +495,69 @@ test('input: two fingers pinch, also when the first landed on a node', function 
   });
 });
 
-test('input: a finger that committed to a drag keeps it; the next finger is offered as usual', function (t) {
+test('input: a finger that holds a node keeps it through a pinch: the camera borrows it and gives it back', function (t) {
   return input.then(function (i) {
     var s = setup(i);
     var touch = {pointerType: 'touch'};
     s.core.add(s.recorder('nodes', 20, function (p) { return !!p.node; }, {
-      longpress: function (p) { s.log.push('nodes.longpress'); return !!p.node; }
+      suspend: function () { s.log.push('nodes.suspend'); },
+      resume: function (p) { s.log.push('nodes.resume at ' + p.downX); }
     }));
 
-    // Dragged for longer than pinchTime
+    // Dragging for longer than pinchTime: a second finger pinches, and the node stays held
     s.down(1, 100, 100, touch);
     s.move(1, 115, 100, touch);
     s.advance(300);
     s.down(2, 300, 300, touch);
-    t.same(s.log, ['nodes.down', 'nodes.dragstart', 'nodes.drag', 'camera.down'], 'the node stays; the new finger pans');
+    t.same(s.log, ['nodes.down', 'nodes.dragstart', 'nodes.drag', 'nodes.suspend', 'camera.down', 'camera.down'], 'the camera has both fingers');
+    s.log.length = 0;
+    s.move(1, 120, 100, touch);
+    s.move(2, 340, 300, touch);
+    t.same(s.log, ['camera.drag', 'camera.dragstart', 'camera.drag'], 'both move the camera; the node waits');
+    s.log.length = 0;
+    s.up(2, 340, 300, touch);
+    t.same(s.log, ['camera.dragend', 'camera.up', 'nodes.resume at 120'], 'the camera gives the finger back where it is');
+    s.log.length = 0;
+    s.move(1, 150, 100, touch);
+    s.up(1, 150, 100, touch);
+    t.same(s.log, ['nodes.drag', 'nodes.dragend'], 'it drags the node on');
+    t.same(s.appEvents, [], 'no taps');
+
+    // Held without moving (lifted), and the holding finger lifts first: no tap, the other pans on
+    s.log.length = 0;
+    s.down(1, 100, 100, touch);
+    s.advance(300);
+    s.down(2, 300, 300, touch);
+    t.same(s.log, ['nodes.down', 'nodes.suspend', 'camera.down', 'camera.down']);
+    s.log.length = 0;
+    s.up(1, 100, 100, touch);
+    t.same(s.log, ['camera.up', 'nodes.up'], 'the camera lets go of it, its owner hears it lift');
+    s.log.length = 0;
+    s.move(2, 340, 300, touch);
+    t.same(s.log, ['camera.dragstart', 'camera.drag'], 'one finger pans');
+    s.up(2, 340, 300, touch);
+    t.same(s.appEvents, [], 'still no taps');
+
+    // Cancelled while lent (Escape): the camera lets go, the owner hears cancel
+    s.log.length = 0;
+    s.down(1, 100, 100, touch);
+    s.move(1, 115, 100, touch);
+    s.advance(300);
+    s.down(2, 300, 300, touch);
+    s.log.length = 0;
+    s.core.cancel(1);
+    t.same(s.log, ['camera.up', 'nodes.cancel']);
     s.up(2, 300, 300, touch);
     s.up(1, 115, 100, touch);
 
-    // Taken by a long press
+    // Two fingers that land together are a pinch, also on a node: the lifted node is let go
     s.log.length = 0;
     s.down(1, 100, 100, touch);
-    s.advance(500);
+    s.advance(100);
     s.down(2, 300, 300, touch);
-    t.same(s.log, ['nodes.down', 'nodes.longpress', 'camera.down']);
-    s.up(2, 300, 300, touch);
+    t.same(s.log, ['nodes.down', 'nodes.cancel', 'camera.down', 'camera.down']);
     s.up(1, 100, 100, touch);
+    s.up(2, 300, 300, touch);
 
     // A mouse and a finger don't pinch
     s.log.length = 0;
@@ -846,11 +927,12 @@ test('hover: a node lights up once the pointer rests on it, not while the pointe
     var frames = [];
     global.requestAnimationFrame = function (fn) { frames.push(fn); return frames.length; };
     global.cancelAnimationFrame = function () {};
-    var events = [], handler = null, cursors = [];
+    var events = [], handler = null, cursors = [], services = {};
     var nodes = {a: {id: 'a'}, b: {id: 'b'}};
     var ctx = {
       input: {add: function (h) { handler = h; }, dragging: function () { return false; }, claimant: function () { return null; }},
       onFrame: function () {},
+      provide: function (name, value) { services[name] = value; },
       // Node a left of x = 100, b right of it
       pick: function (x) { return {node: x < 100 ? nodes.a : nodes.b, row: 0}; },
       flags: f.createFlags(function () {}),
@@ -881,8 +963,11 @@ test('hover: a node lights up once the pointer rests on it, not while the pointe
       t.ok(ctx.flags.has('b', f.HOVERED));
       move(132);
       t.equal(api.get().id, 'b', 'a small move keeps it');
+      t.equal(services.litAt(132, 50).node.id, 'b', 'a press where the pointer is takes the lit node');
+      t.equal(services.litAt(150, 50), null, 'a press somewhere else picks for itself');
       move(50);
       t.equal(api.get(), null, 'off to a: b goes out at once, a waits for a rest');
+      t.equal(services.litAt(50, 50), null, 'nothing lit: the press picks');
       t.notOk(ctx.flags.has('b', f.HOVERED));
       return wait(60);
     }).then(function () {

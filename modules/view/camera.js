@@ -2,12 +2,20 @@
 // the wheel and keys. The camera itself stays w-gl's map controls (its pan, zoom about a point,
 // rotation and inertia); only their mouse, touch and keyboard listeners are replaced. The controls
 // listen on a detached element, so they never see an event, and this handler drives them.
+//
+// A 2D view doesn't turn under the user's hands: a right or Alt drag pans it, and two fingers
+// pinch and pan (the fit module may still turn it to the screen's shape). A 3D view rotates and
+// tilts. Motion that only eases (a double tap's zoom, the glide after a fling) is skipped when
+// the user prefers reduced motion.
 import {mapControls} from 'w-gl';
 
 const DEFAULTS = {
-  // 'zoom': the wheel zooms about the pointer. 'pan': it pans, and pinch or Cmd/Ctrl + wheel zooms.
-  wheel: 'zoom',
-  // Rotation and tilt (where the scene allows rotation): right or Alt drag, two-finger twist and tilt
+  // 'auto': a mouse wheel zooms about the pointer, a trackpad's two-finger scroll pans (a scroll
+  // that moves sideways), and a pinch zooms. 'zoom': every scroll zooms. 'pan': every scroll pans,
+  // and a pinch or Cmd/Ctrl + wheel zooms.
+  wheel: 'auto',
+  // Rotation and tilt of a 3D view (where the scene allows rotation): right or Alt drag, two-finger
+  // twist and tilt, Q E R F. 'always': a 2D view turns too. false: never.
   rotate: true,
   doubleTapZoom: true,
   twoFingerTapZoom: true,
@@ -29,9 +37,14 @@ const KEYS = {
 };
 const ROTATING = {turnRight: true, turnLeft: true, tiltUp: true, tiltDown: true};
 
+// Events of one scroll gesture come less than this many ms apart
+const SCROLL_GAP = 200;
+
 /**
  * Takes over camera input of `scene`. Returns {handler, stop, dispose}: add `handler` to the
  * input, `stop()` stops the inertia, and `dispose()` gives the scene back its own controls.
+ * `env`: {is3D() (whether the drawing has depth; default true), now(), reducedMotion(),
+ * requestAnimationFrame, cancelAnimationFrame}, for the view and for tests.
  */
 export function createCamera(scene, options = {}, env = {}) {
   let settings = {...DEFAULTS, ...options};
@@ -42,8 +55,12 @@ export function createCamera(scene, options = {}, env = {}) {
   proxy.getOptions = () => Object.assign({}, scene.getOptions(), {inputTarget: detached});
   let controls = install(scene, proxy);
 
-  let canRotate = !!(settings.rotate && controls.allowRotation);
-  let canTwist = canRotate && controls.allowPinchRotation;
+  let is3D = env.is3D || (() => true);
+  let now = env.now || (() => performance.now());
+  let reducedMotion = env.reducedMotion || (() => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches);
+  // The user turns the view: a 3D one (or any, with rotate: 'always')
+  let canRotate = () => !!(settings.rotate && controls.allowRotation && (settings.rotate === 'always' || is3D()));
+  let canTwist = () => canRotate() && !!controls.allowPinchRotation;
 
   // Pointers this camera owns, in the order they went down: id -> {p, x, y} (client coordinates
   // the last time the camera moved for them)
@@ -51,6 +68,8 @@ export function createCamera(scene, options = {}, env = {}) {
   let mode = null;      // one pointer: 'pan' or 'rotate'
   let pinch = null;     // two or more: what the fingers do
   let pinched = false;  // a pinch happened since the first pointer went down: no inertia after it
+  let gliding = false;  // the pan or rotation records its speed, to glide on after the release
+  let scroll = {pans: false, at: -Infinity}; // the scroll gesture going on: whether it pans
 
   let held = new Map(); // key code -> action
   let keyFrame = 0;
@@ -70,10 +89,11 @@ export function createCamera(scene, options = {}, env = {}) {
     },
     dragstart(p) {
       if (owned.size === 1) {
-        let rotate = canRotate && p.pointerType !== 'touch' && (p.button === 2 || p.altKey);
+        let rotate = canRotate() && p.pointerType !== 'touch' && (p.button === 2 || p.altKey);
         mode = rotate ? 'rotate' : 'pan';
         stop();
-        if (settings.inertia) (rotate ? controls.rotateAnimation : controls.panAnimation).start();
+        gliding = settings.inertia && !reducedMotion();
+        if (gliding) (rotate ? controls.rotateAnimation : controls.panAnimation).start();
       }
     },
     drag: move,
@@ -84,12 +104,12 @@ export function createCamera(scene, options = {}, env = {}) {
     doubletap(e) {
       // Two quick Shift or Cmd taps add and toggle selection: they don't zoom
       if (!settings.doubleTapZoom || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return false;
-      controls.zoomToClientCoordinates(e.clientX, e.clientY, 0.5, true);
+      controls.zoomToClientCoordinates(e.clientX, e.clientY, 0.5, !reducedMotion());
       return true;
     },
     twofingertap(e) {
       if (!settings.twoFingerTapZoom) return false;
-      controls.zoomToClientCoordinates(e.clientX, e.clientY, -1, true);
+      controls.zoomToClientCoordinates(e.clientX, e.clientY, -1, !reducedMotion());
       return true;
     },
     key,
@@ -148,8 +168,8 @@ export function createCamera(scene, options = {}, env = {}) {
   // Two fingers either turn (after `rotateArc` pixels of arc; they also zoom then), tilt (both move
   // up or down together while level), or just pinch and pan
   function classify(ax, ay, bx, by, distance) {
-    if (pinch.state !== 'unknown' || !canRotate) return;
-    if (canTwist && Math.abs(pinch.turned) * distance / 2 > settings.rotateArc) {
+    if (pinch.state !== 'unknown' || !canRotate()) return;
+    if (canTwist() && Math.abs(pinch.turned) * distance / 2 > settings.rotateArc) {
       pinch.state = 'turn';
       return;
     }
@@ -166,18 +186,19 @@ export function createCamera(scene, options = {}, env = {}) {
     if (!owned.delete(p.id)) return;
     pinch = null;
     if (owned.size) return;
-    if (mode && settings.inertia && !abrupt && !pinched) {
+    if (mode && gliding && !abrupt && !pinched) {
       (mode === 'rotate' ? controls.rotateAnimation : controls.panAnimation).stop();
     } else {
       stop();
     }
     mode = null;
     pinched = false;
+    gliding = false;
   }
 
   function wheel(w) {
     stop();
-    if (settings.wheel === 'pan' && !w.ctrlKey && !w.metaKey) {
+    if (!w.ctrlKey && !w.metaKey && scrollPans(w)) {
       controls.panByAbsoluteOffset(-w.deltaX, -w.deltaY);
       controls.redraw();
       return true;
@@ -189,10 +210,24 @@ export function createCamera(scene, options = {}, env = {}) {
     return true;
   }
 
+  // Whether a scroll pans. 'auto': browsers don't say which device scrolled, but only a trackpad
+  // (or a tilting wheel, or Shift + wheel, which want to pan too) scrolls sideways. A scroll
+  // gesture (events less than SCROLL_GAP apart) that moves sideways pans from then on, also where
+  // it goes straight up or down; a mouse wheel zooms.
+  function scrollPans(w) {
+    if (settings.wheel === 'pan') return true;
+    if (settings.wheel !== 'auto') return false;
+    let time = now();
+    if (time - scroll.at > SCROLL_GAP) scroll.pans = false;
+    scroll.at = time;
+    if (w.deltaX) scroll.pans = true;
+    return scroll.pans;
+  }
+
   function key(e) {
     if (!settings.keys || e.ctrlKey || e.metaKey || e.altKey) return false;
     let action = KEYS[e.code] || KEYS[e.key];
-    if (!action || (ROTATING[action] && !canRotate)) return false;
+    if (!action || (ROTATING[action] && !canRotate())) return false;
     held.set(e.code || e.key, action);
     startKeys();
     return true;
