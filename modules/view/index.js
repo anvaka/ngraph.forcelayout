@@ -20,7 +20,7 @@ import {getCapabilities, setBufferData, createFloatTexture} from './gl.js';
 import {createNodeProgram, createEdgeProgram} from './programs.js';
 import {TEXTURE_WIDTH, textureRows, packPositions, collectNodes, collectEdges} from './positions.js';
 import {createProjector, ORIGIN, Z_NORMAL} from './math.js';
-import {pickNode, nodesInRect, projectAll} from './pick.js';
+import {pickNode, nodesInRect, projectAll, singlesOut} from './pick.js';
 import {createFlags, layoutFlags, SELECTED} from './flags.js';
 import * as FLAGS from './flags.js';
 import {createInput, ViewEvent} from './input.js';
@@ -88,6 +88,9 @@ const STYLES = {
 const REACH = {mouse: 8, pen: 10, touch: 16, touchMax: 32};
 // The hovered node gets this many more pixels, so hover doesn't flicker between neighbours
 const STICKY = 4;
+// Pixels within which a pointer can't tell two dots apart: a mouse or pen lights and takes only a
+// node it singles out (see pick.js singlesOut), and drags over denser dots pan
+const TIP = {mouse: 5, pen: 8, touch: 16};
 // Selected nodes are drawn on top while there are at most this many, with this many links
 const ON_TOP_LIMITS = {nodes: 1000, links: 100000};
 
@@ -492,19 +495,23 @@ export default function createView(scene, options = {}) {
    * sets it in pixels; `sticky` (a node) gets a few more pixels; `labels: false` looks at the
    * discs only (a label module makes each label's text pick its node).
    *
-   * Returns {node, row, distance, inside, covers, clear, gap, x, y, radius, label}: `label` is true
-   * when the point is on the node's label and not right on a disc (then `clear` is false: a press there
-   * moves the camera, a tap picks the node, a long press grabs it). `distance` from the
-   * disc's edge in pixels, the disc on the canvas. `clear`: the point is on this disc and no
-   * other, or the next nearest node is at least half the reach farther (`gap` pixels). Where nodes
-   * crowd or overlap, a pick is not clear. The same for every pointer: hovering (`sticky`) helps a
-   * node win, but doesn't make it clear.
+   * `distinct: true` returns only a node the pointer singles out (`distinct` below), else null.
+   *
+   * Returns {node, row, distance, inside, covers, clear, distinct, gap, x, y, radius, label}:
+   * `label` is true when the point is on the node's label and not right on a disc. `distance` from
+   * the disc's edge in pixels, the disc on the canvas. `clear`: the point is on this disc and no
+   * other, or the next nearest node is at least half the reach farther (`gap` pixels). `distinct`:
+   * the pointer singles the node out, though it can't tell apart dots closer than its tip (5 px
+   * for a mouse, 8 for a pen, 16 for a finger): on its label, on a hub's dot, or no other node within
+   * the tip as near. Hovering (`sticky`) helps a node win, but makes it neither clear nor distinct.
    */
   function pick(x, y, pickOptions = {}) {
     let state = pickState();
     if (!state || !state.count) return null;
     let distance = pickOptions.reach !== undefined ? pickOptions.reach : reachFor(pickOptions.pointerType, pickOptions.width);
-    let margin = distance / 2;
+    let tip = TIP[pickOptions.pointerType] || TIP.mouse;
+    // Nodes as far as the tip beyond the nearest count for the gap
+    let margin = Math.max(distance / 2, tip);
     let stickyRow = pickOptions.sticky ? rowOf(pickOptions.sticky.id) : -1;
     let hit = pickNode(state, x, y, distance, stickyRow, stickyRow >= 0 ? STICKY : 0, margin);
     // A label is part of its node: a point on a label's text picks that node, unless it is right
@@ -517,13 +524,15 @@ export default function createView(scene, options = {}) {
     if (labelled && (labelled.front || !onDisc)) {
       let row = rowOf(labelled.node.id);
       if (row >= 0 && nodeData.nodes[row]) {
-        return {node: nodeData.nodes[row], row, distance: 0, inside: true, covers: 1, clear: false, gap: 0,
+        return {node: nodeData.nodes[row], row, distance: 0, inside: true, covers: 1, clear: false, distinct: true, gap: 0,
           x: labelled.x, y: labelled.y, radius: labelled.radius, label: true};
       }
     }
     if (!hit) return null;
     hit.node = nodeData.nodes[hit.row];
-    hit.clear = (hit.inside && hit.covers === 1) || hit.gap >= margin;
+    hit.clear = (hit.inside && hit.covers === 1) || hit.gap >= distance / 2;
+    hit.distinct = singlesOut(hit, tip);
+    if (pickOptions.distinct && !hit.distinct) return null;
     return hit.node ? hit : null;
   }
 
@@ -554,14 +563,14 @@ export default function createView(scene, options = {}) {
   }
 
   // What a press at (x, y) takes. What lights up is what a press takes: a mouse or pen takes the
-  // node it lit (the hover module says which), a finger the node nearest to it
+  // node it lit (the hover module says which), or else a node it singles out (where dots crowd
+  // closer than its tip, the press moves the camera); a finger takes the node nearest to it
   function pressHit(x, y, p) {
-    if (p.pointerType !== 'touch') {
-      let litAt = services.get('litAt');
-      let lit = litAt ? litAt(x, y) : null;
-      if (lit && lit.node && rowOf(lit.node.id) >= 0) return lit;
-    }
-    return pick(x, y, {pointerType: p.pointerType, width: p.width});
+    if (p.pointerType === 'touch') return pick(x, y, {pointerType: p.pointerType, width: p.width});
+    let litAt = services.get('litAt');
+    let lit = litAt ? litAt(x, y) : null;
+    if (lit && lit.node && rowOf(lit.node.id) >= 0) return lit;
+    return pick(x, y, {pointerType: p.pointerType, width: p.width, distinct: true});
   }
 
   function rowOf(id) {

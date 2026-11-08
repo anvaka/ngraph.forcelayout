@@ -147,6 +147,34 @@ test('pickNode: the disc that picks is the disc drawn, also where the view enlar
   });
 });
 
+test('singlesOut: a pointer singles out a node unless other dots are within its tip', function (t) {
+  return Promise.all([math, pick]).then(function (mods) {
+    var p = topDown(mods[0]), singlesOut = mods[1].singlesOut;
+    // Dots 6 px wide, 12 px apart (6 px between their edges): a mouse (tip 5) tells them apart,
+    // a finger (tip 16) doesn't
+    var apart = state(p, [0, 0, 4, 0], 2, [2, 2]);
+    var hit = mods[1].pickNode(apart, 400, 300, 8, -1, 0, 16);
+    t.ok(singlesOut(hit, 5), 'a mouse on the dot');
+    t.notOk(singlesOut(hit, 16), 'a finger covers both');
+    hit = mods[1].pickNode(apart, 395, 300, 8, -1, 0, 16);
+    t.ok(singlesOut(hit, 5), 'a mouse just beside it, away from the other');
+    // Dots 3 px wide, 4.5 px apart: texture to a mouse, wherever it is
+    var crowd = state(p, [0, 0, 1.5, 0, 3, 0], 2, [1, 1, 1]);
+    t.notOk(singlesOut(mods[1].pickNode(crowd, 400, 300, 8, -1, 0, 16), 5), 'on a dot in a crowd');
+    t.notOk(singlesOut(mods[1].pickNode(crowd, 402, 300, 8, -1, 0, 16), 5), 'between dots');
+    // A hub's dot (12 px wide) stands out, even with a neighbour overlapping it
+    var hub = state(p, [0, 0, 1, 0], 2, [4, 1]);
+    t.ok(singlesOut(mods[1].pickNode(hub, 398, 300, 8, -1, 0, 16), 5), 'inside a hub');
+    // A label names one node; nothing singles out nothing
+    t.ok(singlesOut({label: true, gap: 0}, 16));
+    t.notOk(singlesOut(null, 5));
+    // The hovered node's bonus doesn't make it distinct
+    hit = mods[1].pickNode(crowd, 402, 300, 8, 0, 4, 16);
+    t.equal(hit.row, 0, 'the hovered one wins');
+    t.notOk(singlesOut(hit, 5), 'but it is not singled out');
+  });
+});
+
 test('nodesInRect counts discs that touch the box', function (t) {
   return Promise.all([math, pick]).then(function (mods) {
     var p = topDown(mods[0]);
@@ -934,7 +962,7 @@ test('hover: a node lights up once the pointer rests on it, not while the pointe
       onFrame: function () {},
       provide: function (name, value) { services[name] = value; },
       // Node a left of x = 100, b right of it
-      pick: function (x) { return {node: x < 100 ? nodes.a : nodes.b, row: 0}; },
+      pick: function (x, y, options) { ctx.pickedWith = options; return {node: x < 100 ? nodes.a : nodes.b, row: 0}; },
       flags: f.createFlags(function () {}),
       setCursor: function (c) { cursors.push(c); },
       emit: function (name, fields) { events.push([name, fields.node ? fields.node.id : null]); return {defaultPrevented: false}; }
@@ -955,6 +983,7 @@ test('hover: a node lights up once the pointer rests on it, not while the pointe
       move(130); return wait(10);
     }).then(function () {
       t.same(events, [], 'nothing lights up while it moves');
+      t.equal(ctx.pickedWith.distinct, true, 'only a node the pointer singles out can light up');
       t.equal(cursors[cursors.length - 1], 'pointer', 'but the cursor shows a node is under it');
       return wait(60);
     }).then(function () {

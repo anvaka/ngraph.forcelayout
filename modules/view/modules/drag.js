@@ -8,8 +8,10 @@
 // One rule for a mouse, a pen and a finger: a press on a node takes it, a press anywhere else
 // moves the camera. On a node means on its dot as drawn, on its label, or within the pointer's
 // reach of the dot (8 pixels for a mouse, 10 for a pen, 16 or the finger's half width for a
-// finger); where several nodes are within reach, the nearest takes the press, and a mouse or pen
-// takes the node it highlighted. What lights up is what moves.
+// finger); where several nodes are within reach, the nearest takes the press. A mouse or pen takes
+// the node it lit, and only a node it singles out: where dots crowd closer than its tip (5 pixels
+// for a mouse, 8 for a pen) it can't tell them apart, and a drag there pans. What lights up is
+// what moves.
 //
 // The node lifts (flagged DRAGGED: drawn larger, with a ring, its label in front) the moment the
 // press lands, before it moves, so a finger sees what it holds; the cursor is a grabbing hand. A

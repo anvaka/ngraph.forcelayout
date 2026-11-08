@@ -132,7 +132,10 @@ gesture:
   whether they want it, with the node under it already picked; the camera takes the rest.
 * **What lights up is what a press takes.** A press on a node (its dot as drawn, its label, or
   within the pointer's reach of the dot) takes that node, and the node lifts at once, before the
-  pointer moves; anywhere else the press moves the camera. A mouse or pen takes the node it lit.
+  pointer moves; anywhere else the press moves the camera. A mouse or pen takes the node it lit,
+  and lights only a node it singles out: where dots crowd closer than its tip it can't tell them
+  apart, so a drag there pans, as on the background (zoom in and they come apart). A finger,
+  which has nothing lit and covers several dots anyway, takes the nearest node; two fingers pan.
   There are no hidden modes: no timing decides between moving a node and moving the camera.
 * **Two fingers always pinch**, wherever they land. A finger that lands while another is down goes
   to the camera, and so does the other finger. A finger that holds a node (and has been down for
@@ -254,6 +257,16 @@ With the labels module, a label's text is part of its node: a point on a label p
 a letter doesn't take the word). A label in front (the pointed node's, see labels) wins over discs
 too. A press on a label takes its node, as a press on its dot does. `labels: false` looks at the
 discs only.
+
+`distinct` says the pointer singles the node out. A pointer can't tell apart dots closer than its
+tip: 5 px for a mouse, 8 for a pen, 16 for a finger. A node is distinct when the point is on its
+label, on its dot when that is at least one and a half tips wide (a hub), or when no other node is
+within the tip as near (`gap` of at least the tip). `pick(x, y, {distinct: true})` returns only a
+distinct node. The hover module lights only distinct nodes, and a mouse or pen press takes only a
+distinct node, so in a dense drawing at a small zoom a mouse drag pans; on a graph like
+Barabási–Albert with 20k nodes, fitted to a 1280 × 800 canvas, about 89% of the drawing pans, and
+the share of nodes a mouse can grab grows from 4% to 67% at four times the zoom. Labelled graphs
+of a few thousand nodes start at about half of their nodes and half of their drawing.
 
 It works as a bubble cursor with a capped reach. A point inside a node's disc picks that node
 (overlaps go to the node drawn last in 2D, the nearest one in 3D). Otherwise the node whose disc
@@ -389,7 +402,9 @@ front}`), `stats()`.
 
 `view.use(hoverNodes, {holdStill, rest, stillReach})`: the node a mouse or pen rests on (or on
 its label) gets `HOVERED`, and `hover` fires. The cursor shows at once what a press would do
-(grab, a box's crosshair, or a pointer over a node a tap would pick). Touch never hovers.
+(grab, a box's crosshair, or a pointer over a node a tap would pick). Only a node the pointer
+singles out lights up (`distinct`, see [Picking](#picking)): dots denser than its tip are texture,
+and a press there pans. Touch never hovers.
 
 The pointer rests when it stayed within 3 px of a point (6 for a pen, which shakes in the air)
 for 120 ms (`rest: {distance, time}`; `rest: false` hovers at once): Windows' hover rectangle
@@ -413,10 +428,12 @@ pinned). Dragging a selected node moves the whole selection. Escape puts the nod
 One rule for a mouse, a pen and a finger: a press on a node takes it, a press anywhere else moves
 the camera. On a node means on its dot as drawn, on its label, or within the pointer's reach of the
 dot (see [Picking](#picking)); where several nodes are within reach the nearest takes the press,
-and a mouse or pen takes the node it lit. The node lifts (`DRAGGED`: drawn larger, with a ring,
+and a mouse or pen takes the node it lit, only ever a node it singles out (dots denser than its
+tip pan, see [Picking](#picking)). The node lifts (`DRAGGED`: drawn larger, with a ring,
 its label in front) the moment the press lands, so a finger sees what it holds before it moves,
 and the hover cursor (`grab`) says it before a mouse presses. A press that lifts without moving is
-a tap. To pan where nodes crowd, zoom in, use two fingers, or a right or middle drag.
+a tap. To pan where nodes crowd: a mouse drag over the crowd pans; with fingers, use two; or zoom
+in.
 
 The node keeps its offset from the pointer, and stays under it while the camera moves (keys,
 inertia). A second finger pinches: the node stays where it is in the drawing, still held, and when
