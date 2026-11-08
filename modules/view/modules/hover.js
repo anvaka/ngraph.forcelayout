@@ -5,11 +5,6 @@
 //   view.use(hoverNodes);
 //   view.on('hover', e => tooltip(e.node));
 //
-// Only a node the pointer singles out lights up (view.pick's `distinct`): on its label, on a hub's
-// dot, or a dot with no other within the pointer's tip (5 px for a mouse, 8 for a pen). Dots
-// denser than that are texture: nothing lights, and a press there moves the camera. Zoom in and
-// they come apart.
-//
 // Resting: a node lights up (and its label comes in front, its tooltip opens) once the pointer
 // rests on it: it stayed within `rest.distance` pixels of a point for `rest.time` ms (as Windows'
 // hover rectangle, and hoverIntent).
@@ -99,12 +94,10 @@ export default {
         if (moved && still && hovered && near(hovered.node)) {
           hit = hovered;
         } else {
-          // Only a node the pointer singles out lights up: dots denser than its tip are texture
           hit = ctx.pick(point.x, point.y, {
             pointerType: point.pointerType,
             width: point.width,
-            sticky: hovered ? hovered.node : null,
-            distinct: true
+            sticky: hovered ? hovered.node : null
           });
         }
       }

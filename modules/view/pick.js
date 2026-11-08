@@ -191,19 +191,6 @@ function keep(best, row, distance, radius) {
 }
 
 /**
- * Whether a pointer that can't tell apart dots closer than `tip` pixels singles out `hit`'s node:
- * the point is on its label, on a dot at least one and a half tips wide (a hub), or no other node
- * is within `tip` pixels as near (`gap`). Where dots crowd closer than that they read as one
- * texture, and a mouse that presses there moves the camera, as on the background.
- */
-export function singlesOut(hit, tip) {
-  if (!hit) return false;
-  if (hit.label) return true;
-  if (hit.inside && hit.radius * 2 >= tip * 1.5) return true;
-  return hit.gap >= tip;
-}
-
-/**
  * The radius in pixels of row `row`'s disc as drawn, `pixelsPerUnit` where it is: its size, at
  * least the smallest drawn diameter (grown by the square root of its size), at most its room.
  * Flags (hovered, selected) draw it larger still; picking doesn't count that.
