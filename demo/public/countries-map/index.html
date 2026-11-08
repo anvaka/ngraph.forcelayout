@@ -33,7 +33,7 @@
   .border { fill: none; stroke: var(--ink); stroke-width: 0.7; stroke-dasharray: 3 2; stroke-linejoin: round; vector-effect: non-scaling-stroke; opacity: 0.8; }
   .lines .hidden, .labels .hidden, .markers .hidden { display: none; }
   .border.lit { stroke: var(--accent); stroke-width: 2.4; stroke-dasharray: none; opacity: 1; }
-  .marker { fill: none; stroke: var(--ink); stroke-width: 0.8; vector-effect: non-scaling-stroke; }
+  .marker { fill: none; stroke: var(--ink); stroke-opacity: 0.55; stroke-width: 0.8; stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; }
   .marker.lit { stroke: var(--accent); stroke-width: 1.6; }
   .label { fill: var(--ink); text-anchor: middle; dominant-baseline: central; pointer-events: none;
     font-family: 'IM Fell English SC', 'IM Fell English', Georgia, serif; letter-spacing: 0.08em; }
@@ -261,20 +261,31 @@ function updateDetail() {
   let k = state.k;
   items.forEach(item => {
     let px = item.size * k;                    // country's width on screen, roughly
-    item.marker && item.marker.classList.toggle('hidden', px >= 4);
+    item.marker && item.marker.classList.toggle('hidden', px >= 3);
     let fontPx = item.font * k;
     item.label && item.label.classList.toggle('hidden', !(fontPx >= 9 && item.labelFits * k >= 18) && item !== selected);
   });
   world.lineItems.forEach(line => line.node.classList.toggle('hidden', line.size * k < 3));
 }
 
+// Fit the world into the screen beside or below the title card, whichever leaves more room
 function fit() {
   let box = world.box;
   let w = svg.clientWidth, h = svg.clientHeight;
-  let k = Math.min(w / (box.maxX - box.minX), h / (box.maxY - box.minY)) * 0.94;
+  let card = document.querySelector('header.cartouche').getBoundingClientRect();
+  let options = [
+    {x0: 0, y0: card.bottom + 8, x1: w, y1: h},          // below the card
+    {x0: card.right + 8, y0: 0, x1: w, y1: h},           // beside it
+  ];
+  let best = null;
+  options.forEach(o => {
+    let k = Math.min((o.x1 - o.x0) / (box.maxX - box.minX), (o.y1 - o.y0) / (box.maxY - box.minY)) * 0.94;
+    if (!best || k > best.k) best = {...o, k};
+  });
+  let k = best.k;
   state.k = k;
-  state.x = w / 2 - k * (box.minX + box.maxX) / 2;
-  state.y = h / 2 + k * (box.minY + box.maxY) / 2;
+  state.x = (best.x0 + best.x1) / 2 - k * (box.minX + box.maxX) / 2;
+  state.y = (best.y0 + best.y1) / 2 - k * (box.minY + box.maxY) / 2;
   applyView();
 }
 
@@ -343,7 +354,7 @@ function draw(result) {
 
 // Markers keep a constant on-screen radius
 function updateMarkers() {
-  let r = 3.5 / state.k;
+  let r = 6 / state.k;
   items.forEach(item => item.marker.setAttribute('r', r));
 }
 

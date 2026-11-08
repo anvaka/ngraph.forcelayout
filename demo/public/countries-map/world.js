@@ -2332,7 +2332,11 @@ export async function buildWorld(doc, options = {}) {
       let edges = [];
       drawn.forEach(([a, b]) => { if (local.has(a) && local.has(b)) edges.push([local.get(a), local.get(b)]); });
       let targets = core.map(g => pop(g) * scale);
-      let planar = planarSubgraph(core.length, edges, {weight: k => Math.min(targets[edges[k][0]], targets[edges[k][1]])});
+      // which links become exclaves: the cheapest set (smallest countries), and for other worlds
+      // than the first, a different but still smallest set, picked by the seed
+      let jitter = edges.map(() => seed === 1 ? 1 : 0.2 + random());
+      let planar = planarSubgraph(core.length, edges, {seed,
+        weight: k => jitter[k] * Math.min(targets[edges[k][0]], targets[edges[k][1]])});
       let embedded = seaFacingEmbedding(core.length, planar.rotation, u => targets[u]);
       // only a big piece hanging by a single link is worth cutting loose (one exclave); smaller
       // pockets stay where they are, as countries around an inner sea
@@ -2401,7 +2405,7 @@ export async function buildWorld(doc, options = {}) {
     foam.faces.forEach(face => { if (face.kind === 'land') face.owner = core[face.owner]; });
     let check = options.check || (() => {});
     check('start', foam);
-    relax(foam, {iterations: 250, retract: 1});
+    relax(foam, {iterations: options.shapeIterations ?? 250, retract: 1, junctionTension: options.junctionPull ?? 1});
     check('shape', foam);
     report(); await pause();
     enclaves.forEach(e => {
