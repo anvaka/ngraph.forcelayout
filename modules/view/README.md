@@ -263,10 +263,12 @@ tip: 5 px for a mouse, 8 for a pen, 16 for a finger. A node is distinct when the
 label, on its dot when that is at least one and a half tips wide (a hub), or when no other node is
 within the tip as near (`gap` of at least the tip). `pick(x, y, {distinct: true})` returns only a
 distinct node. The hover module lights only distinct nodes, and a mouse or pen press takes only a
-distinct node, so in a dense drawing at a small zoom a mouse drag pans; on a graph like
-Barabási–Albert with 20k nodes, fitted to a 1280 × 800 canvas, about 89% of the drawing pans, and
-the share of nodes a mouse can grab grows from 4% to 67% at four times the zoom. Labelled graphs
-of a few thousand nodes start at about half of their nodes and half of their drawing.
+distinct node, so in a dense drawing at a small zoom a mouse drag pans. Measured in the demo on a
+1280 × 800 canvas: on a Barabási–Albert graph of 20k nodes, fitted, a drag pans on 91% of the
+drawing, and the share of on-screen nodes a mouse can grab grows from 3% to 20% at twice the zoom
+and 57% at four times. On labelled graphs of one to three thousand nodes (Mammals, US counties) a
+mouse can grab 42–46% of the nodes when fitted and 93–94% at twice the zoom, while a drag still
+pans on 38–59% of the drawing.
 
 It works as a bubble cursor with a capped reach. A point inside a node's disc picks that node
 (overlaps go to the node drawn last in 2D, the nearest one in 3D). Otherwise the node whose disc
