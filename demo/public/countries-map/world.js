@@ -1230,20 +1230,20 @@ function skeletonEnergy(sk, px, gradient, mu) {
 function rimRepulsion(ring, px, gradient, weight) {
   if (!ring || !weight) return 0;
   let n = ring.length;
-  let lens = new Float64Array(n), longest = 0;
+  let lens = new Float64Array(n), mean = 0;
   for (let i = 0; i < n; ++i) {
     let a = ring[i], b = ring[(i + 1) % n];
     lens[i] = Math.hypot(px[2 * b] - px[2 * a], px[2 * b + 1] - px[2 * a + 1]);
-    longest = Math.max(longest, lens[i]);
+    mean += lens[i] / n;
   }
-  // every pair closer than its reach (at most the longest segment) must be seen, whatever the
-  // cells: a pair that drops out of the search would make the energy jump
-  let cell = longest;
+  // a pair pushes when closer than half their lengths summed; each segment sits in the grid
+  // with its box grown by half its length and looks around its own box grown by half its own,
+  // so every such pair is found whatever the cells (a missed pair would make the energy jump)
+  let cell = 2 * mean || 1;
   let grid = new Map();
   let key = (i, j) => i * 1000003 + j;
   let energy = 0;
-  let pull = (p, a, b, k) => {
-    // p against segment a-b: distance, and where along a-b the closest point is
+  let pull = (p, a, b) => {
     let ax = px[2 * a], ay = px[2 * a + 1], bx = px[2 * b], by = px[2 * b + 1];
     let dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
     let t = len2 > 0 ? Math.max(0, Math.min(1, ((px[2 * p] - ax) * dx + (px[2 * p + 1] - ay) * dy) / len2)) : 0;
@@ -1251,32 +1251,39 @@ function rimRepulsion(ring, px, gradient, weight) {
     let ex = px[2 * p] - cx, ey = px[2 * p + 1] - cy;
     return {d: Math.hypot(ex, ey), ex, ey, t};
   };
+  let stamp = new Int32Array(n).fill(-1);
   for (let i = 0; i < n; ++i) {
     let a = ring[i], b = ring[(i + 1) % n];
-    let reach = longest;
-    let x0 = Math.min(px[2 * a], px[2 * b]) - reach, x1 = Math.max(px[2 * a], px[2 * b]) + reach;
-    let y0 = Math.min(px[2 * a + 1], px[2 * b + 1]) - reach, y1 = Math.max(px[2 * a + 1], px[2 * b + 1]) + reach;
-    let seen = new Set();
-    for (let gx = Math.floor(x0 / cell); gx <= Math.floor(x1 / cell); ++gx) {
-      for (let gy = Math.floor(y0 / cell); gy <= Math.floor(y1 / cell); ++gy) {
+    let grow = 0.5 * lens[i];
+    let x0 = Math.min(px[2 * a], px[2 * b]) - grow, x1 = Math.max(px[2 * a], px[2 * b]) + grow;
+    let y0 = Math.min(px[2 * a + 1], px[2 * b + 1]) - grow, y1 = Math.max(px[2 * a + 1], px[2 * b + 1]) + grow;
+    let g0 = Math.floor(x0 / cell), g1 = Math.floor(x1 / cell), h0 = Math.floor(y0 / cell), h1 = Math.floor(y1 / cell);
+    for (let gx = g0; gx <= g1; ++gx) {
+      for (let gy = h0; gy <= h1; ++gy) {
         let list = grid.get(key(gx, gy));
         if (!list) continue;
         for (let j of list) {
-          if (seen.has(j) || Math.abs(i - j) <= 1 || Math.abs(i - j) === n - 1) continue;
-          seen.add(j);
+          if (stamp[j] === i || Math.abs(i - j) <= 1 || Math.abs(i - j) === n - 1) continue;
+          stamp[j] = i;
           let c = ring[j], d = ring[(j + 1) % n];
           let d0 = 0.5 * (lens[i] + lens[j]);
-          // the four end-to-segment distances; the closest one carries the push
+          // boxes further apart than d0 cannot push
+          let bx0 = Math.min(px[2 * c], px[2 * d]), bx1 = Math.max(px[2 * c], px[2 * d]);
+          let by0 = Math.min(px[2 * c + 1], px[2 * d + 1]), by1 = Math.max(px[2 * c + 1], px[2 * d + 1]);
+          let gapX = Math.max(0, bx0 - (x1 - grow), (x0 + grow) - bx1), gapY = Math.max(0, by0 - (y1 - grow), (y0 + grow) - by1);
+          if (gapX * gapX + gapY * gapY >= d0 * d0) continue;
           let best = null;
-          for (let [p, s0, s1, endOf] of [[a, c, d, 0], [b, c, d, 0], [c, a, b, 1], [d, a, b, 1]]) {
+          for (let k = 0; k < 4; ++k) {
+            let p = k === 0 ? a : k === 1 ? b : k === 2 ? c : d;
+            let s0 = k < 2 ? c : a, s1 = k < 2 ? d : b;
             let r = pull(p, s0, s1);
-            if (!best || r.d < best.d) best = {...r, p, s0, s1};
+            if (!best || r.d < best.d) { best = r; best.p = p; best.s0 = s0; best.s1 = s1; }
           }
           if (!(best.d < d0)) continue;
           if (!(best.d > 0)) return Infinity;
           let x = best.d / d0;
           energy += weight * (-Math.log(x) + x - 1);
-          let g = weight * (-1 / best.d + 1 / d0);          // d energy / d distance
+          let g = weight * (-1 / best.d + 1 / d0);
           let ux = best.ex / best.d, uy = best.ey / best.d;
           gradient[2 * best.p] += g * ux; gradient[2 * best.p + 1] += g * uy;
           gradient[2 * best.s0] -= g * ux * (1 - best.t); gradient[2 * best.s0 + 1] -= g * uy * (1 - best.t);
@@ -1284,8 +1291,6 @@ function rimRepulsion(ring, px, gradient, weight) {
         }
       }
     }
-    let g0 = Math.floor(Math.min(px[2 * a], px[2 * b]) / cell), g1 = Math.floor(Math.max(px[2 * a], px[2 * b]) / cell);
-    let h0 = Math.floor(Math.min(px[2 * a + 1], px[2 * b + 1]) / cell), h1 = Math.floor(Math.max(px[2 * a + 1], px[2 * b + 1]) / cell);
     for (let gx = g0; gx <= g1; ++gx) for (let gy = h0; gy <= h1; ++gy) {
       let list = grid.get(key(gx, gy));
       if (!list) grid.set(key(gx, gy), list = []);
@@ -1851,7 +1856,7 @@ function growComponent(n, edges, rotation, targets, options) {
   let embedded = options.embedded || seaFacingEmbedding(n, rotation);
   let sk = skeleton(n, embedded.rotation, embedded.sea || [0, 0]);
   sk.debug = options.debug;
-  sk.coastWeight = options.coastWeight ?? 20;
+  sk.coastWeight = options.coastWeight ?? 5;
   sk.softWeight = options.softWeight ?? 0.01;
   let total = targets.reduce((a, b) => a + b, 0);
   // sizes for the first drawing: countries by their target, water points small, sea points as
@@ -1892,7 +1897,12 @@ function growComponent(n, edges, rotation, targets, options) {
   let floor = (options.floor ?? 0.02) * sorted[Math.floor(sorted.length / 2)];
   sk.target = new Float64Array(faceCount);
   sk.weight = new Float64Array(faceCount);
-  for (let u = 0; u < n; ++u) { sk.target[u] = Math.max(floor, targets[u]); sk.weight[u] = 1; }
+  // big countries count for more: the later stages move area only slowly across a continent
+  let median = sorted[Math.floor(sorted.length / 2)];
+  for (let u = 0; u < n; ++u) {
+    sk.target[u] = Math.max(floor, targets[u]);
+    sk.weight[u] = Math.min(options.bigWeight ?? 10, Math.max(1, Math.sqrt(targets[u] / median)));
+  }
   sk.lakes.forEach((lake, i) => { sk.target[n + i] = Math.max(floor, lakeTarget[i]); sk.weight[n + i] = 0.3; });
   // how much of each triangle each corner gets (weighted kites): land by its size, water small
   let landSize = sk.kind.map((k, v) => k === 'land' ? Math.sqrt(targets[sk.owner[v]]) : 0).filter(w => w > 0).sort((a, b) => a - b);
