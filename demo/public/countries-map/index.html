@@ -33,7 +33,7 @@
   .border { fill: none; stroke: var(--ink); stroke-width: 0.7; stroke-dasharray: 3 2; stroke-linejoin: round; vector-effect: non-scaling-stroke; opacity: 0.8; }
   .lines .hidden, .labels .hidden, .markers .hidden { display: none; }
   .border.lit { stroke: var(--accent); stroke-width: 2.4; stroke-dasharray: none; opacity: 1; }
-  .marker { fill: none; stroke: var(--ink); stroke-opacity: 0.55; stroke-width: 0.8; stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; }
+  .marker { fill: none; stroke: var(--ink); stroke-opacity: 0.35; stroke-width: 0.75; vector-effect: non-scaling-stroke; }
   .marker.lit { stroke: var(--accent); stroke-width: 1.6; }
   .label { fill: var(--ink); text-anchor: middle; dominant-baseline: central; pointer-events: none;
     font-family: 'IM Fell English SC', 'IM Fell English', Georgia, serif; letter-spacing: 0.08em; }
@@ -265,7 +265,8 @@ function updateDetail() {
     let fontPx = item.font * k;
     item.label && item.label.classList.toggle('hidden', !(fontPx >= 9 && item.labelFits * k >= 18) && item !== selected);
   });
-  world.lineItems.forEach(line => line.node.classList.toggle('hidden', line.size * k < 3));
+  // outlines only around countries big enough that a line does not swell them on screen
+  world.lineItems.forEach(line => line.node.classList.toggle('hidden', line.size * k < 8));
 }
 
 // Fit the world into the screen beside or below the title card, whichever leaves more room
@@ -303,7 +304,7 @@ function draw(result) {
   items = [];
   let neighbours = countries.map(() => []);
   links.forEach(([a, b]) => { neighbours[a].push(b); neighbours[b].push(a); });
-  let coastD = [];
+  let coastD = [], coastBig = [];
   countries.forEach((c, i) => {
     if (!c.rings.length) return;
     let area = c.rings.reduce((s, r) => s + ringArea(r), 0);
@@ -324,11 +325,13 @@ function draw(result) {
       'font-size': fmt(font, digits + 1)}, gLabels);
     label.textContent = c.name;
     coastD.push(d);
+    coastBig.push(size > 2);
     items.push({country: c, index: i, path, marker, label, size, font, labelFits: pole.r * 2, pole, area});
     path.__item = items[items.length - 1];
   });
-  // ripples: thick soft strokes of every coast under the land read as water lines
-  let all = coastD.join(' ');
+  // ripples: thick soft strokes of the coasts of big countries, under the land, read as water
+  // lines (around a tiny island they would only make it look bigger)
+  let all = coastD.filter((d, i) => coastBig[i]).join(' ');
   [[22, 0.06], [12, 0.1], [5, 0.16]].forEach(([w, o]) => el('path', {class: 'ripple', d: all, 'stroke-width': w, 'stroke-opacity': o}, gRipples));
   lakes.forEach(ring => el('path', {class: 'water', d: ringsToD([ring], digitsFor(Math.sqrt(Math.abs(ringArea(ring)))))}, gWaters));
   let sizeOf = i => i >= 0 && items.find(it => it.index === i);
@@ -455,7 +458,9 @@ function zoomAt(px, py, factor) {
   applyView();
   updateMarkers();
 }
+let touched = false;
 stage.addEventListener('pointerdown', e => {
+  touched = true;
   stage.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, {x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY, time: performance.now()});
   gesture = {moved: false, start: snapshot()};
@@ -506,6 +511,7 @@ stage.addEventListener('pointerup', release);
 stage.addEventListener('pointercancel', release);
 stage.addEventListener('wheel', e => {
   e.preventDefault();
+  touched = true;
   let delta = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
   zoomAt(e.clientX, e.clientY, Math.exp(-delta * (e.ctrlKey ? 0.01 : 0.002)));
 }, {passive: false});
@@ -565,6 +571,8 @@ async function main() {
   draw(result);
   fit();
   updateMarkers();
+  // the title card grows once its font arrives: fit again then, if the map was not moved yet
+  if (document.fonts) document.fonts.ready.then(() => { if (!touched) { fit(); updateMarkers(); } });
   showChecks(selfCheck(result), result.exclaves, performance.now() - started);
   html.setAttribute('data-map-state', 'ready');
 }

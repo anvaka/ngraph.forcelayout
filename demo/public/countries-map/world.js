@@ -2496,27 +2496,28 @@ function layOut(masses, countries, random) {
   let cell = span / 160;
   let occupied = new Set();
   let key = (i, j) => (i + 50000) * 100000 + (j + 50000);
+  // Cells a landmass covers: every row from its westmost to its eastmost outline, so its lakes,
+  // inland seas and bays count as taken too and no island lands inside them.
   let footprint = (mass, gapCells) => {
     let cells = new Set();
-    mass.rings.forEach(list => list.forEach(ring => {
-      // rasterise the ring by its segments' cells, then fill rows between
-      let rows = new Map();
-      ring.forEach(([x0, y0], k) => {
-        let [x1, y1] = ring[(k + 1) % ring.length];
-        let steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / (cell * 0.5)));
-        for (let s = 0; s <= steps; ++s) {
-          let i = Math.floor((x0 + (x1 - x0) * s / steps) / cell), j = Math.floor((y0 + (y1 - y0) * s / steps) / cell);
-          if (!rows.has(j)) rows.set(j, [i, i]);
-          let r = rows.get(j);
-          r[0] = Math.min(r[0], i); r[1] = Math.max(r[1], i);
-        }
-      });
-      rows.forEach(([i0, i1], j) => {
-        for (let i = i0 - gapCells; i <= i1 + gapCells; ++i) {
-          for (let dj = -gapCells; dj <= gapCells; ++dj) cells.add(key(i, j + dj));
-        }
-      });
-    }));
+    let rows = new Map();
+    let trace = ring => ring.forEach(([x0, y0], k) => {
+      let [x1, y1] = ring[(k + 1) % ring.length];
+      let steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / (cell * 0.5)));
+      for (let s = 0; s <= steps; ++s) {
+        let i = Math.floor((x0 + (x1 - x0) * s / steps) / cell), j = Math.floor((y0 + (y1 - y0) * s / steps) / cell);
+        if (!rows.has(j)) rows.set(j, [i, i]);
+        let r = rows.get(j);
+        r[0] = Math.min(r[0], i); r[1] = Math.max(r[1], i);
+      }
+    });
+    mass.rings.forEach(list => list.forEach(trace));
+    mass.lakes.forEach(trace);
+    rows.forEach(([i0, i1], j) => {
+      for (let i = i0 - gapCells; i <= i1 + gapCells; ++i) {
+        for (let dj = -gapCells; dj <= gapCells; ++dj) cells.add(key(i, j + dj));
+      }
+    });
     return Array.from(cells, k => [Math.floor(k / 100000) - 50000, (k % 100000) - 50000]);
   };
   let fits = (cells, di, dj) => cells.every(([i, j]) => !occupied.has(key(i + di, j + dj)));
