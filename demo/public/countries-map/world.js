@@ -847,28 +847,7 @@ function relax(foam, options) {
       mx[a] += dx * push; my[a] += dy * push;
       mx[b] -= dx * push; my[b] -= dy * push;
     });
-    let watch = globalThis.__watchFace;
-    let before = watch !== undefined && it % 25 === 0 ? [Float64Array.from(x), Float64Array.from(y)] : null;
     moveSafely(foam, mx, my);
-    if (before) {
-      let f = faces.findIndex(face => face.kind === 'land' && face.owner === watch);
-      if (f >= 0) {
-        let want = 0, got = 0, n = 0;
-        let seen = new Set();
-        segs.forEach(s2 => {
-          if (s2.l !== f && s2.r !== f) return;
-          for (let v of [s2.a, s2.b]) {
-            if (seen.has(v)) continue;
-            seen.add(v);
-            want += Math.hypot(mx[v], my[v]);
-            got += Math.hypot(foam.x[v] - before[0][v], foam.y[v] - before[1][v]);
-            n += 1;
-          }
-        });
-        console.log('watch it', it, 'area/target', (area[f] / faces[f].target).toFixed(3), 'p', pressure[f].toFixed(2),
-          'bias', faces[f].bias.toFixed(2), 'points', n, 'wanted', want.toExponential(2), 'moved', got.toExponential(2));
-      }
-    }
   }
   return error;
 }
