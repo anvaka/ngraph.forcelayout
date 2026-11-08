@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en" data-map-state="loading">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Peopled World</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #efe2c4;
+    --paper-deep: #e2cfa6;
+    --ink: #3b2a1a;
+    --ink-soft: rgba(59, 42, 26, 0.55);
+    --sea: #b9cfc4;
+    --sea-ink: #557a78;
+    --panel: rgba(246, 236, 212, 0.94);
+    --accent: #8b2e1a;
+  }
+  html, body { margin: 0; height: 100%; background: var(--sea); color: var(--ink); overflow: hidden; }
+  body { font-family: 'IM Fell English', Georgia, 'Times New Roman', serif; -webkit-tap-highlight-color: transparent; }
+  #stage { position: fixed; inset: 0; touch-action: none; cursor: grab; }
+  #stage.dragging { cursor: grabbing; }
+  svg#map { width: 100%; height: 100%; display: block; user-select: none; -webkit-user-select: none; }
+  .sea-fill { fill: var(--sea); }
+  .ripple { fill: none; stroke: var(--sea-ink); stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+  .country { stroke: none; }
+  .country.lit { filter: brightness(1.08) saturate(1.25); }
+  .country.dim { opacity: 0.45; }
+  .water { fill: var(--sea); stroke: none; }
+  .coast { fill: none; stroke: var(--ink); stroke-width: 0.9; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+  .border { fill: none; stroke: var(--ink); stroke-width: 0.7; stroke-dasharray: 3 2; stroke-linejoin: round; vector-effect: non-scaling-stroke; opacity: 0.8; }
+  .lines .hidden, .labels .hidden, .markers .hidden { display: none; }
+  .border.lit { stroke: var(--accent); stroke-width: 2.4; stroke-dasharray: none; opacity: 1; }
+  .marker { fill: none; stroke: var(--ink); stroke-width: 0.8; vector-effect: non-scaling-stroke; }
+  .marker.lit { stroke: var(--accent); stroke-width: 1.6; }
+  .label { fill: var(--ink); text-anchor: middle; dominant-baseline: central; pointer-events: none;
+    font-family: 'IM Fell English SC', 'IM Fell English', Georgia, serif; letter-spacing: 0.08em; }
+  .label.small { font-family: 'IM Fell English', Georgia, serif; font-style: italic; letter-spacing: 0.02em; }
+
+  header.cartouche {
+    position: fixed; left: 12px; top: 12px; max-width: min(420px, calc(100vw - 24px));
+    background: var(--panel); border: 1px solid var(--ink-soft); outline: 3px double var(--ink-soft); outline-offset: 3px;
+    padding: 10px 14px 10px; box-shadow: 0 2px 10px rgba(40, 25, 10, 0.18); pointer-events: auto;
+  }
+  header h1 { margin: 0; font-family: 'IM Fell English SC', Georgia, serif; font-weight: normal; font-size: 26px; letter-spacing: 0.06em; }
+  header p { margin: 2px 0 0; font-style: italic; font-size: 14px; line-height: 1.3; }
+  header .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  button, input {
+    font: inherit; font-size: 14px; color: var(--ink); background: #f7eedb; border: 1px solid var(--ink-soft);
+    border-radius: 3px; padding: 4px 10px; min-height: 32px;
+  }
+  button { cursor: pointer; }
+  button:hover { background: #fff6e2; }
+  input { width: 150px; }
+  #checks { font-size: 13px; margin-top: 6px; line-height: 1.35; }
+  #checks b { font-weight: normal; color: var(--accent); }
+  #info {
+    position: fixed; right: 12px; bottom: 12px; width: min(340px, calc(100vw - 24px)); max-height: 45vh; overflow: auto;
+    background: var(--panel); border: 1px solid var(--ink-soft); outline: 3px double var(--ink-soft); outline-offset: 3px;
+    padding: 10px 14px; box-shadow: 0 2px 10px rgba(40, 25, 10, 0.18); font-size: 15px; line-height: 1.35;
+  }
+  #info[hidden] { display: none; }
+  #info h2 { margin: 0 0 2px; font-family: 'IM Fell English SC', Georgia, serif; font-weight: normal; font-size: 22px; }
+  #info .close { position: absolute; right: 6px; top: 6px; min-height: 28px; padding: 0 8px; }
+  #info ul { margin: 4px 0 0; padding-left: 18px; }
+  #info .note { font-style: italic; font-size: 13px; margin-top: 6px; }
+  #tip { position: fixed; pointer-events: none; background: var(--panel); border: 1px solid var(--ink-soft);
+    padding: 3px 8px; font-size: 14px; white-space: nowrap; transform: translate(12px, 12px); }
+  #tip[hidden] { display: none; }
+  #loading { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; }
+  #loading .box { background: var(--panel); border: 1px solid var(--ink-soft); padding: 14px 20px; text-align: center; min-width: 220px; }
+  #loading .bar { height: 4px; background: var(--paper-deep); margin-top: 8px; }
+  #loading .bar div { height: 100%; width: 0; background: var(--accent); transition: width 0.2s; }
+  html[data-map-state="ready"] #loading { display: none; }
+  #compass { position: fixed; right: 16px; top: 14px; width: 74px; height: 74px; opacity: 0.85; pointer-events: none; }
+  @media (max-width: 600px) {
+    header h1 { font-size: 21px; }
+    header p { font-size: 13px; }
+    #compass { width: 52px; height: 52px; right: 10px; top: auto; bottom: 12px; }
+    #info { bottom: 10px; right: 10px; left: 10px; width: auto; }
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="map" aria-label="Map of the world's countries drawn from their borders graph">
+    <rect class="sea-fill" x="-100000" y="-100000" width="200000" height="200000"/>
+    <g id="viewport">
+      <g class="ripples" id="ripples"></g>
+      <g id="countries"></g>
+      <g id="waters"></g>
+      <g class="lines" id="lines"></g>
+      <g class="markers" id="markers"></g>
+      <g class="labels" id="labels"></g>
+    </g>
+  </svg>
+</div>
+<header class="cartouche">
+  <h1>The Peopled World</h1>
+  <p>Every country is as large as its people. Neighbours share a border; countries that are not neighbours never touch.</p>
+  <div class="row">
+    <input id="search" list="names" placeholder="Find a country" aria-label="Find a country">
+    <datalist id="names"></datalist>
+    <button id="reroll" title="Draw another world from the same graph">Another world</button>
+  </div>
+  <div id="checks"></div>
+</header>
+<svg id="compass" viewBox="-50 -50 100 100" aria-hidden="true">
+  <circle r="30" fill="none" stroke="#3b2a1a" stroke-width="1"/>
+  <circle r="26" fill="none" stroke="#3b2a1a" stroke-width="0.5"/>
+  <path d="M0 -46 L7 -7 L0 0 Z M0 46 L-7 7 L0 0 Z M-46 0 L-7 -7 L0 0 Z M46 0 L7 7 L0 0 Z" fill="#3b2a1a"/>
+  <path d="M0 -46 L-7 -7 L0 0 Z M0 46 L7 7 L0 0 Z M-46 0 L-7 7 L0 0 Z M46 0 L7 -7 L0 0 Z" fill="#efe2c4" stroke="#3b2a1a" stroke-width="0.6"/>
+  <text y="-34" text-anchor="middle" font-size="11" font-family="Georgia" fill="#3b2a1a" dy="-10">N</text>
+</svg>
+<div id="info" hidden></div>
+<div id="tip" hidden></div>
+<div id="loading"><div class="box"><div id="loading-text">Charting the world…</div><div class="bar"><div></div></div></div></div>
+
+<script type="module">
+import {buildWorld} from './world.js';
+import {planarSubgraph} from './planar.js';
+
+// The world is built in a worker when the browser can run module workers, else right here
+function build(doc, onProgress) {
+  return new Promise((resolve, reject) => {
+    let worker;
+    try {
+      worker = new Worker(new URL('./worker.js', import.meta.url), {type: 'module'});
+    } catch (e) {
+      buildWorld(doc, {seed, planarSubgraph, onProgress}).then(resolve, reject);
+      return;
+    }
+    worker.onmessage = ({data}) => {
+      if (data.type === 'progress') onProgress(data.progress);
+      else if (data.type === 'done') { resolve(data.result); worker.terminate(); }
+      else if (data.type === 'error') { reject(new Error(data.message)); worker.terminate(); }
+    };
+    worker.onerror = event => {
+      // a browser without module workers fails here: build on this thread instead
+      event.preventDefault();
+      worker.terminate();
+      buildWorld(doc, {seed, planarSubgraph, onProgress}).then(resolve, reject);
+    };
+    worker.postMessage({doc, seed});
+  });
+}
+
+const svgNS = 'http://www.w3.org/2000/svg';
+const params = new URLSearchParams(location.search);
+const seed = Math.max(1, parseInt(params.get('seed'), 10) || 1);
+const html = document.documentElement;
+const svg = document.getElementById('map');
+const viewport = document.getElementById('viewport');
+const PALETTE = ['#e3c48f', '#c8cf96', '#e6ad8c', '#d5b7c9', '#b9cba9', '#ecd68e', '#d2b38e'];
+
+function el(name, attrs, parent) {
+  let node = document.createElementNS(svgNS, name);
+  for (let key in attrs) node.setAttribute(key, attrs[key]);
+  if (parent) parent.appendChild(node);
+  return node;
+}
+
+// Coordinates: the world is built with y up; the screen has y down. They are written at full
+// precision: rounding could close a gap the map keeps open.
+function fmt(v) { return (Object.is(v, -0) ? 0 : v).toString(); }
+// enough digits that the narrowest gap the map keeps open survives the rounding
+function digitsFor(size) { return Math.max(7, Math.min(10, Math.ceil(6 - Math.log10(size)))); }
+function ringsToD(rings, digits) {
+  return rings.map(r => 'M ' + r.map(p => fmt(p[0], digits) + ' ' + fmt(-p[1], digits)).join(' L ') + ' Z').join(' ');
+}
+function lineToD(points, digits) {
+  return 'M ' + points.map(p => fmt(p[0], digits) + ' ' + fmt(-p[1], digits)).join(' L ');
+}
+
+// Neighbours get different colours: greedy colouring, most-constrained first
+function colour(countries, links) {
+  let near = countries.map(() => []);
+  links.forEach(([a, b]) => { near[a].push(b); near[b].push(a); });
+  let colourOf = countries.map(() => -1);
+  let order = countries.map((c, i) => i).filter(i => countries[i].population > 0)
+    .sort((a, b) => near[b].length - near[a].length);
+  order.forEach(i => {
+    let used = new Set(near[i].map(j => colourOf[j]));
+    let pick = 0;
+    let start = (i * 7) % PALETTE.length;
+    for (let k = 0; k < PALETTE.length; ++k) {
+      let c = (start + k) % PALETTE.length;
+      if (!used.has(c)) { pick = c; break; }
+    }
+    colourOf[i] = pick;
+  });
+  return colourOf;
+}
+
+// Largest empty circle inside a country's main ring: where its name goes
+function poleOf(ring) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  ring.forEach(([x, y]) => { minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); });
+  let inside = (x, y) => {
+    let hit = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      let [xi, yi] = ring[i], [xj, yj] = ring[j];
+      if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) hit = !hit;
+    }
+    return hit;
+  };
+  let distance = (x, y) => {
+    let best = Infinity;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      let [ax, ay] = ring[j], [bx, by] = ring[i];
+      let dx = bx - ax, dy = by - ay, len = dx * dx + dy * dy;
+      let t = len ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / len)) : 0;
+      best = Math.min(best, Math.hypot(ax + t * dx - x, ay + t * dy - y));
+    }
+    return best;
+  };
+  let best = {x: (minX + maxX) / 2, y: (minY + maxY) / 2, r: 0};
+  let step = Math.max(maxX - minX, maxY - minY) / 24;
+  let search = (x0, y0, x1, y1, s) => {
+    for (let x = x0; x <= x1; x += s) for (let y = y0; y <= y1; y += s) {
+      if (!inside(x, y)) continue;
+      let r = distance(x, y);
+      if (r > best.r) best = {x, y, r};
+    }
+  };
+  search(minX, minY, maxX, maxY, step);
+  for (let k = 0; k < 3; ++k) {
+    let {x, y} = best;
+    search(x - step, y - step, x + step, y + step, step / 4);
+    step /= 4;
+  }
+  return best;
+}
+
+function ringArea(ring) {
+  let a = 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) a += ring[j][0] * ring[i][1] - ring[i][0] * ring[j][1];
+  return a / 2;
+}
+
+const state = {k: 1, x: 0, y: 0};
+let world = null, items = [], selected = null;
+
+function applyView() {
+  viewport.setAttribute('transform', `translate(${state.x} ${state.y}) scale(${state.k})`);
+  scheduleDetail();
+}
+
+let detailQueued = false;
+function scheduleDetail() {
+  if (detailQueued) return;
+  detailQueued = true;
+  requestAnimationFrame(() => { detailQueued = false; updateDetail(); });
+}
+
+// What is worth drawing at this zoom: labels that fit, lines around countries big enough to
+// see, and a ring marker for every country too small to see as land.
+function updateDetail() {
+  let k = state.k;
+  items.forEach(item => {
+    let px = item.size * k;                    // country's width on screen, roughly
+    item.marker && item.marker.classList.toggle('hidden', px >= 4);
+    let fontPx = item.font * k;
+    item.label && item.label.classList.toggle('hidden', !(fontPx >= 9 && item.labelFits * k >= 18) && item !== selected);
+  });
+  world.lineItems.forEach(line => line.node.classList.toggle('hidden', line.size * k < 3));
+}
+
+function fit() {
+  let box = world.box;
+  let w = svg.clientWidth, h = svg.clientHeight;
+  let k = Math.min(w / (box.maxX - box.minX), h / (box.maxY - box.minY)) * 0.94;
+  state.k = k;
+  state.x = w / 2 - k * (box.minX + box.maxX) / 2;
+  state.y = h / 2 + k * (box.minY + box.maxY) / 2;
+  applyView();
+}
+
+function draw(result) {
+  let {countries, lakes, lines, links, exclaves} = result;
+  let colours = colour(countries, links);
+  let gCountries = document.getElementById('countries');
+  let gWaters = document.getElementById('waters');
+  let gLines = document.getElementById('lines');
+  let gMarkers = document.getElementById('markers');
+  let gLabels = document.getElementById('labels');
+  let gRipples = document.getElementById('ripples');
+  for (let g of [gCountries, gWaters, gLines, gMarkers, gLabels, gRipples]) g.textContent = '';
+  let box = {minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity};
+  items = [];
+  let neighbours = countries.map(() => []);
+  links.forEach(([a, b]) => { neighbours[a].push(b); neighbours[b].push(a); });
+  let coastD = [];
+  countries.forEach((c, i) => {
+    if (!c.rings.length) return;
+    let area = c.rings.reduce((s, r) => s + ringArea(r), 0);
+    let size = Math.sqrt(Math.abs(area));
+    let digits = digitsFor(size);
+    let d = ringsToD(c.rings, digits);
+    let path = el('path', {class: 'country', 'data-id': c.id, d, fill: PALETTE[colours[i]], 'fill-rule': 'evenodd'}, gCountries);
+    c.rings.forEach(r => r.forEach(([x, y]) => {
+      box.minX = Math.min(box.minX, x); box.maxX = Math.max(box.maxX, x);
+      box.minY = Math.min(box.minY, -y); box.maxY = Math.max(box.maxY, -y);
+    }));
+    let main = c.rings.reduce((best, r) => Math.abs(ringArea(r)) > Math.abs(ringArea(best)) ? r : best);
+    let pole = poleOf(main);
+    let marker = el('circle', {class: 'marker hidden', cx: fmt(pole.x, digits), cy: fmt(-pole.y, digits), r: 0}, gMarkers);
+    let font = Math.min(pole.r * 0.55, size * 0.18);
+    let big = c.population > 3e7;
+    let label = el('text', {class: 'label hidden' + (big ? '' : ' small'), x: fmt(pole.x, digits), y: fmt(-pole.y, digits),
+      'font-size': fmt(font, digits + 1)}, gLabels);
+    label.textContent = c.name;
+    coastD.push(d);
+    items.push({country: c, index: i, path, marker, label, size, font, labelFits: pole.r * 2, pole, area});
+    path.__item = items[items.length - 1];
+  });
+  // ripples: thick soft strokes of every coast under the land read as water lines
+  let all = coastD.join(' ');
+  [[22, 0.06], [12, 0.1], [5, 0.16]].forEach(([w, o]) => el('path', {class: 'ripple', d: all, 'stroke-width': w, 'stroke-opacity': o}, gRipples));
+  lakes.forEach(ring => el('path', {class: 'water', d: ringsToD([ring], digitsFor(Math.sqrt(Math.abs(ringArea(ring)))))}, gWaters));
+  let sizeOf = i => i >= 0 && items.find(it => it.index === i);
+  let byIndex = new Map(items.map(it => [it.index, it]));
+  world = {result, box, items, byIndex, neighbours, exclaves, lineItems: []};
+  lines.forEach(line => {
+    let sizes = [line.a, line.b].filter(i => i >= 0).map(i => byIndex.get(i).size);
+    let size = Math.min(...sizes);
+    let node = el('path', {class: line.kind, d: lineToD(line.points, digitsFor(size))}, gLines);
+    world.lineItems.push({node, size, a: line.a, b: line.b, kind: line.kind});
+  });
+  // markers: a ring a few pixels wide, kept the same size on screen
+  items.forEach(item => { item.marker.setAttribute('r', 1); item.marker.setAttribute('vector-effect', 'non-scaling-stroke'); });
+  let names = document.getElementById('names');
+  names.textContent = '';
+  items.slice().sort((a, b) => a.country.name.localeCompare(b.country.name)).forEach(item => {
+    let o = document.createElement('option');
+    o.value = item.country.name;
+    names.appendChild(o);
+  });
+  void sizeOf;
+}
+
+// Markers keep a constant on-screen radius
+function updateMarkers() {
+  let r = 3.5 / state.k;
+  items.forEach(item => item.marker.setAttribute('r', r));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Checks the page runs on what it drew (the independent critics run their own)
+function selfCheck(result) {
+  let {countries, lines, links} = result;
+  let touching = new Map();
+  lines.forEach(line => {
+    if (line.kind !== 'border') return;
+    let key = Math.min(line.a, line.b) + ',' + Math.max(line.a, line.b);
+    touching.set(key, (touching.get(key) || 0) + line.length);
+  });
+  let wanted = new Set(links.map(([a, b]) => Math.min(a, b) + ',' + Math.max(a, b)));
+  let missing = 0, extra = 0;
+  wanted.forEach(key => { if (!touching.has(key)) missing += 1; });
+  touching.forEach((len, key) => { if (!wanted.has(key)) extra += 1; });
+  let people = 0, land = 0;
+  countries.forEach(c => { if (c.rings.length) { people += c.population; land += Math.abs(c.rings.reduce((s, r) => s + ringArea(r), 0)); } });
+  let worst = 0;
+  countries.forEach(c => {
+    if (!c.rings.length) return;
+    let a = Math.abs(c.rings.reduce((s, r) => s + ringArea(r), 0));
+    worst = Math.max(worst, Math.abs(a / (land / people * c.population) - 1));
+  });
+  return {pairs: wanted.size, missing, extra, worst};
+}
+
+function showChecks(check, exclaves, ms) {
+  let box = document.getElementById('checks');
+  let ok = check.missing === 0 && check.extra === 0;
+  box.innerHTML = `${ok ? '✓' : '✗'} ${check.pairs - check.missing} of ${check.pairs} neighbour pairs share a border, ` +
+    `${check.extra} false borders · sizes within ${(check.worst * 100).toFixed(2)}% · ` +
+    `<b>${exclaves.length} exclaves</b> (the borders graph is not planar) · world #${seed}, ${(ms / 1000).toFixed(1)} s`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Selection: a country, its neighbours and the borders between them
+function select(item) {
+  selected = item;
+  let info = document.getElementById('info');
+  items.forEach(it => {
+    it.path.classList.remove('lit', 'dim');
+    it.marker.classList.remove('lit');
+  });
+  world.lineItems.forEach(line => line.node.classList.remove('lit'));
+  if (!item) { info.hidden = true; updateDetail(); return; }
+  let near = new Set(world.neighbours[item.index]);
+  items.forEach(it => {
+    if (it === item || near.has(it.index)) { it.path.classList.add('lit'); it.marker.classList.add('lit'); }
+    else it.path.classList.add('dim');
+  });
+  world.lineItems.forEach(line => {
+    if (line.kind === 'border' && (line.a === item.index || line.b === item.index)) line.node.classList.add('lit');
+  });
+  let c = item.country;
+  let names = Array.from(near).map(i => world.result.countries[i].name).sort();
+  let own = world.exclaves.filter(e => e.owner === c.id).map(e => world.result.countries.find(x => x.id === e.host).name);
+  let hosted = world.exclaves.filter(e => e.host === c.id).map(e => world.result.countries.find(x => x.id === e.owner).name);
+  let people = c.population.toLocaleString('en-US');
+  info.innerHTML = `<button class="close" aria-label="Close">×</button><h2></h2>
+    <div>${c.continent} · ${people} people</div>
+    <div style="margin-top:6px">${names.length ? 'Borders ' + names.length + ':' : 'No neighbours: an island.'}</div>
+    <ul>${names.map(n => `<li>${escapeHtml(n)}</li>`).join('')}</ul>
+    ${own.length ? `<div class="note">Owns an exclave inside ${own.map(escapeHtml).join(', ')}: that border can't be drawn on a flat map without crossing others.</div>` : ''}
+    ${hosted.length ? `<div class="note">Holds an exclave of ${hosted.map(escapeHtml).join(', ')}.</div>` : ''}`;
+  info.querySelector('h2').textContent = c.name;
+  info.querySelector('.close').onclick = () => select(null);
+  info.hidden = false;
+  updateDetail();
+}
+
+function escapeHtml(s) { return s.replace(/[&<>"]/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[ch])); }
+
+function zoomTo(item) {
+  let w = svg.clientWidth, h = svg.clientHeight;
+  let k = Math.min(w, h) * 0.3 / Math.max(item.size, 1e-9);
+  k = Math.max(k, state.k);
+  state.k = k;
+  state.x = w / 2 - k * item.pole.x;
+  state.y = h / 2 + k * item.pole.y;
+  applyView();
+  updateMarkers();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pan and zoom with Pointer Events: one pointer pans, two pinch, wheel zooms at the cursor,
+// a tap (or click) without movement selects.
+const stage = document.getElementById('stage');
+const pointers = new Map();
+let gesture = null;
+function zoomAt(px, py, factor) {
+  let k = Math.max(1e-3, Math.min(state.k * factor, 1e9));
+  factor = k / state.k;
+  state.x = px - (px - state.x) * factor;
+  state.y = py - (py - state.y) * factor;
+  state.k = k;
+  applyView();
+  updateMarkers();
+}
+stage.addEventListener('pointerdown', e => {
+  stage.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, {x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY, time: performance.now()});
+  gesture = {moved: false, start: snapshot()};
+  stage.classList.add('dragging');
+});
+function snapshot() {
+  let list = Array.from(pointers.values());
+  if (list.length >= 2) {
+    let [a, b] = list;
+    return {mode: 'pinch', cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y), view: {...state}};
+  }
+  if (list.length === 1) return {mode: 'pan', cx: list[0].x, cy: list[0].y, view: {...state}};
+  return null;
+}
+stage.addEventListener('pointermove', e => {
+  let p = pointers.get(e.pointerId);
+  if (!p) { hover(e); return; }
+  p.x = e.clientX; p.y = e.clientY;
+  if (Math.hypot(p.x - p.startX, p.y - p.startY) > 6) gesture.moved = true;
+  let s = gesture.start;
+  if (!s) return;
+  if (s.mode === 'pan' && pointers.size === 1) {
+    state.x = s.view.x + (p.x - s.cx);
+    state.y = s.view.y + (p.y - s.cy);
+    applyView();
+  } else if (s.mode === 'pinch' && pointers.size >= 2) {
+    let [a, b] = Array.from(pointers.values());
+    let cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2, d = Math.hypot(a.x - b.x, a.y - b.y);
+    let factor = d / s.d;
+    state.k = s.view.k * factor;
+    state.x = cx - (s.cx - s.view.x) * factor;
+    state.y = cy - (s.cy - s.view.y) * factor;
+    applyView();
+    updateMarkers();
+  }
+  document.getElementById('tip').hidden = true;
+});
+function release(e) {
+  let p = pointers.get(e.pointerId);
+  if (!p) return;
+  pointers.delete(e.pointerId);
+  if (!gesture.moved && pointers.size === 0 && e.type === 'pointerup') tap(e);
+  gesture.start = snapshot();
+  if (pointers.size) gesture.moved = true;
+  if (!pointers.size) stage.classList.remove('dragging');
+}
+stage.addEventListener('pointerup', release);
+stage.addEventListener('pointercancel', release);
+stage.addEventListener('wheel', e => {
+  e.preventDefault();
+  let delta = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
+  zoomAt(e.clientX, e.clientY, Math.exp(-delta * (e.ctrlKey ? 0.01 : 0.002)));
+}, {passive: false});
+stage.addEventListener('dblclick', e => zoomAt(e.clientX, e.clientY, 2.5));
+
+// What is under a point: the drawn land, or else the nearest marker within reach
+function itemAt(x, y) {
+  let hit = document.elementsFromPoint(x, y).find(node => node.classList && node.classList.contains('country'));
+  if (hit) return hit.__item;
+  let best = null, reach = 14;
+  items.forEach(item => {
+    if (item.marker.classList.contains('hidden')) return;
+    let sx = state.x + state.k * item.pole.x, sy = state.y - state.k * item.pole.y;
+    let d = Math.hypot(sx - x, sy - y);
+    if (d < reach) { reach = d; best = item; }
+  });
+  return best;
+}
+let lastTap = 0;
+function tap(e) {
+  let now = performance.now();
+  if (e.pointerType === 'touch' && now - lastTap < 300) { zoomAt(e.clientX, e.clientY, 2.5); lastTap = 0; return; }
+  lastTap = now;
+  select(itemAt(e.clientX, e.clientY));
+}
+function hover(e) {
+  let tip = document.getElementById('tip');
+  if (e.pointerType !== 'mouse' || !world) { tip.hidden = true; return; }
+  let item = itemAt(e.clientX, e.clientY);
+  if (!item) { tip.hidden = true; return; }
+  tip.textContent = `${item.country.name} · ${item.country.population.toLocaleString('en-US')} people`;
+  tip.style.left = e.clientX + 'px';
+  tip.style.top = e.clientY + 'px';
+  tip.hidden = false;
+}
+stage.addEventListener('pointerleave', () => { document.getElementById('tip').hidden = true; });
+
+document.getElementById('search').addEventListener('change', e => {
+  let name = e.target.value.trim().toLowerCase();
+  let item = items.find(it => it.country.name.toLowerCase() === name);
+  if (item) { zoomTo(item); select(item); }
+});
+document.getElementById('reroll').addEventListener('click', () => {
+  let next = new URL(location.href);
+  next.searchParams.set('seed', seed + 1);
+  location.href = next.toString();
+});
+window.addEventListener('resize', () => { if (world) fit(); });
+window.addEventListener('keydown', e => { if (e.key === 'Escape') select(null); });
+
+// ---------------------------------------------------------------------------------------------
+async function main() {
+  let started = performance.now();
+  let bar = document.querySelector('#loading .bar div');
+  let doc = await fetch('../graphs/data/countries.json').then(r => r.json());
+  let result = await build(doc, p => { bar.style.width = (p.done * 100).toFixed(0) + '%'; });
+  draw(result);
+  fit();
+  updateMarkers();
+  showChecks(selfCheck(result), result.exclaves, performance.now() - started);
+  html.setAttribute('data-map-state', 'ready');
+}
+main().catch(error => {
+  console.error(error);
+  document.getElementById('loading-text').textContent = 'The world could not be drawn: ' + error.message;
+  html.setAttribute('data-map-state', 'error');
+});
+</script>
+</body>
+</html>
