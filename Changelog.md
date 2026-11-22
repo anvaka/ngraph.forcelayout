@@ -1,4 +1,4 @@
-# Unreleased
+# v4.0
 
 The physics can now be changed without copying library code (see "Changing the physics" in
 the README):
@@ -55,6 +55,13 @@ Steps are 3-35% faster than in 3.3, and layouts are the same to the last bit.
 
 Breaking changes:
 
+* `step()` returns `true`, and `'stable'` fires, by a new rule: the drawing stopped changing
+  (`'still'`), or what still moves goes nowhere (`'noise'`). Both are measured in sizes of the
+  drawing over windows of 100 steps, so they mean the same for any spring length, graph size or
+  dimension (see "When is the layout done?" in the README). `layout.getStability()` says which
+  and when, the `stable` setting tunes it, and `layout.checkStable()` updates it for engines that
+  step elsewhere. Before, a layout was stable when the bodies moved 0.01 or less on average in
+  one step.
 * `simulator.addForce()`, `removeForce()` and `getForces()` are removed: use stages.
 * `simulator.quadTree` and `invalidateBBox()` are removed.
 * `body.pos`, `body.force` and `body.velocity` (and so `layout.getNodePosition()`) are views
