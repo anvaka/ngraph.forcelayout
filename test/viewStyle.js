@@ -78,3 +78,60 @@ test('below 1/255, a fixed share of the links is drawn instead', async function 
   t.ok(drawn > 50 && drawn < 150, 'about a quarter of the links: ' + drawn);
   t.equal(again, drawn, 'the same links every time');
 });
+
+// Links as the view's style module reads them: positions (2D) and the two ends of each link
+function linksOf(points, pairs) {
+  return {
+    pos: Float64Array.from(points.flat()),
+    springs: {n: pairs.length, from: pairs.map(function (p) { return p[0]; }), to: pairs.map(function (p) { return p[1]; })},
+    rect: {
+      min_x: Math.min.apply(null, points.map(function (p) { return p[0]; })),
+      max_x: Math.max.apply(null, points.map(function (p) { return p[0]; })),
+      min_y: Math.min.apply(null, points.map(function (p) { return p[1]; })),
+      max_y: Math.max.apply(null, points.map(function (p) { return p[1]; }))
+    }
+  };
+}
+
+test('a few long links do not read as a crowd', async function (t) {
+  var s = await style;
+  // A triangle with a tail, 10 units a side, at 12 pixels per unit: four links 120 px long
+  var g = linksOf([[0, 0], [10, 0], [5, 8.66], [15, 8.66]], [[0, 1], [1, 2], [2, 0], [2, 3]]);
+  var crowded = s.linkCrowding(g.pos, 2, g.springs, g.rect, 12, 2);
+  t.ok(crowded > 0.1 && crowded < 1, 'a 2 px line through a cell covers part of it: ' + crowded.toFixed(3));
+  t.ok(0.25 / crowded > 0.25, 'so the links are drawn at a quarter of full opacity or more');
+});
+
+test('a chain that lies almost straight is not a crowd either', async function (t) {
+  var s = await style;
+  var g = linksOf([[0, 0], [10, 0.001], [20, 0], [30, 0.002]], [[0, 1], [1, 2], [2, 3]]);
+  var crowded = s.linkCrowding(g.pos, 2, g.springs, g.rect, 12, 2);
+  t.ok(crowded > 0.5 && crowded < 1.5, 'one line covers the cells it runs through about once: ' + crowded.toFixed(3));
+});
+
+test('links on top of each other are a crowd', async function (t) {
+  var s = await style;
+  // 200 links between the same two spots
+  var points = [], pairs = [];
+  for (var i = 0; i < 200; ++i) {
+    points.push([0, i * 0.001], [10, 10 + i * 0.001]);
+    pairs.push([2 * i, 2 * i + 1]);
+  }
+  var g = linksOf(points, pairs);
+  var crowded = s.linkCrowding(g.pos, 2, g.springs, g.rect, 12, 2);
+  t.ok(crowded > 20, 'many times the cells\' area: ' + crowded.toFixed(1));
+});
+
+test('links shorter than a cell are binned where they are, as before', async function (t) {
+  var s = await style;
+  // A 64 x 64 grid of nodes, each linked to the next in its row: every link is half a cell long
+  var points = [], pairs = [];
+  for (var y = 0; y < 64; ++y) for (var x = 0; x < 64; ++x) {
+    points.push([x, y]);
+    if (x > 0) pairs.push([y * 64 + x - 1, y * 64 + x]);
+  }
+  var g = linksOf(points, pairs);
+  var crowded = s.linkCrowding(g.pos, 2, g.springs, g.rect, 10, 2);
+  // a cell is 63/32 units each way and holds four links of 1 unit, 0.2 units wide
+  t.ok(Math.abs(crowded - 4 * 0.2 / ((63 / 32) * (63 / 32))) < 0.02, 'coverage of an even grid: ' + crowded.toFixed(3));
+});

@@ -15,8 +15,8 @@
 //   data instead. Nodes without a category are `color`.
 // - **Size from links**: a leaf is `unit` scene units wide, a node with k links unit·√k.
 // - **Link alpha from their ink**: at most every 300 ms the links are binned on a 32 x 32 grid over
-//   the drawing, and their alpha is set so the most crowded tenth of the cells gets `ink` of
-//   opacity. A hairball's core isn't a solid disc, a sparse tree's links are bright, and zooming
+//   the drawing (see linkCrowding), and their alpha is set so the most crowded tenth of the cells
+//   gets `ink` of opacity. A hairball's core isn't a solid disc, a sparse tree's links are bright, and zooming
 //   in brings them up. Below 1/255 (the least an 8-bit canvas blends) a fixed share of the links
 //   is drawn at 1/255 instead.
 // - **Nodes at least `minSize` pixels wide**, less where they crowd (1 px at the least), and no
@@ -164,26 +164,10 @@ export default {
         view.setNodeMinSize(size);
       }
 
-      // Links: their length per cell of a 32 x 32 grid, as screen coverage
-      let count = springs.n;
-      if (!count) return;
-      const BINS = 32;
-      let cells = new Float64Array(BINS * BINS);
-      let step = Math.max(1, Math.floor(count / 20000));
-      for (let i = 0; i < count; i += step) {
-        let a = springs.from[i] * D, b = springs.to[i] * D;
-        let x1 = pos[a], y1 = pos[a + 1], x2 = pos[b], y2 = pos[b + 1];
-        let mx = Math.min(BINS - 1, Math.max(0, Math.floor(((x1 + x2) / 2 - rect.min_x) / w * BINS)));
-        let my = Math.min(BINS - 1, Math.max(0, Math.floor(((y1 + y2) / 2 - rect.min_y) / h * BINS)));
-        cells[my * BINS + mx] += Math.hypot(x2 - x1, y2 - y1) * step;
-      }
-      let cellArea = (w / BINS) * (h / BINS);
-      let width = settings.linkWidth / k;
-      let filled = [];
-      for (let c = 0; c < cells.length; ++c) if (cells[c] > 0) filled.push(cells[c] * width / cellArea);
-      if (!filled.length) return;
-      filled.sort((p, q) => p - q);
-      let crowded = filled[Math.floor(0.9 * (filled.length - 1))];
+      // Links: how much of the screen they cover where they crowd
+      if (!springs.n) return;
+      let crowded = linkCrowding(pos, D, springs, rect, k, settings.linkWidth);
+      if (!(crowded > 0)) return;
       let [low, high] = settings.alpha;
       let next = Math.min(high, Math.max(low, settings.ink / Math.max(crowded, 1e-9)));
       // Rebuilding link colors costs a pass over the links: only for a visible change
@@ -215,6 +199,54 @@ function degreeOf(node) {
   let links = node.links;
   if (!links) return 0;
   return links.size !== undefined ? links.size : links.length;
+}
+
+// Cells along each side of the grid that measures link ink
+const BINS = 32;
+// A link is cut into at most this many pieces, each binned where it lies
+const MAX_PIECES = 2 * BINS;
+
+/**
+ * How much links cover the screen where they crowd: links are binned on a BINS x BINS grid over
+ * `rect` (the layout's box), and the answer is the coverage of the cell at the 90th percentile
+ * of the cells that have any (1: as much link as the cell has area; links overlap, so it can be
+ * more). `pixelsPerUnit` is the zoom, `linkWidth` in pixels.
+ *
+ * Every link gives each cell the length that crosses it (it is cut into pieces no longer than a
+ * cell), and no cell is thinner than a link is wide. Otherwise a graph of a few long links would
+ * put each link's whole length into one small cell, and a chain that settles into a straight line
+ * would have cells of no height: both read as crowded, and their links were drawn almost
+ * transparent.
+ */
+export function linkCrowding(pos, D, springs, rect, pixelsPerUnit, linkWidth) {
+  let count = springs.n;
+  let width = linkWidth / pixelsPerUnit;
+  let w = Math.max(rect.max_x - rect.min_x, BINS * width), h = Math.max(rect.max_y - rect.min_y, BINS * width);
+  if (!count || !(w > 0) || !(h > 0)) return 0;
+  let left = (rect.min_x + rect.max_x) / 2 - w / 2, top = (rect.min_y + rect.max_y) / 2 - h / 2;
+  let cellW = w / BINS, cellH = h / BINS, cell = Math.min(cellW, cellH);
+  let cells = new Float64Array(BINS * BINS);
+  // At most about 20,000 links are measured; each stands for `step` links
+  let step = Math.max(1, Math.floor(count / 20000));
+  for (let i = 0; i < count; i += step) {
+    let a = springs.from[i] * D, b = springs.to[i] * D;
+    let x1 = pos[a], y1 = pos[a + 1], dx = pos[b] - x1, dy = pos[b + 1] - y1;
+    let length = Math.hypot(dx, dy);
+    let pieces = Math.min(MAX_PIECES, Math.max(1, Math.ceil(length / cell)));
+    let ink = length * step / pieces;
+    for (let p = 0; p < pieces; ++p) {
+      let t = (p + 0.5) / pieces;
+      let mx = Math.min(BINS - 1, Math.max(0, Math.floor((x1 + dx * t - left) / cellW)));
+      let my = Math.min(BINS - 1, Math.max(0, Math.floor((y1 + dy * t - top) / cellH)));
+      cells[my * BINS + mx] += ink;
+    }
+  }
+  let cellArea = cellW * cellH;
+  let filled = [];
+  for (let c = 0; c < cells.length; ++c) if (cells[c] > 0) filled.push(cells[c] * width / cellArea);
+  if (!filled.length) return 0;
+  filled.sort((p, q) => p - q);
+  return filled[Math.floor(0.9 * (filled.length - 1))];
 }
 
 /**
