@@ -1,8 +1,11 @@
-// What is published, and what the page may say because of it. npm's ngraph.forcelayout is 3.3.1
-// (2022-10-04): it has none of main's speed-ups (maxVelocity, integrator, nbody), and the add-ons
-// in modules/ (WebGPU, pivot start, view) are private, not on npm. Flip RELEASED when a release
-// with this page's library is on npm; every line below follows.
-export const RELEASED = false;
+// What is published, and what the page may say because of it. npm's ngraph.forcelayout is 4.0.0
+// (2026-11-22): it has everything this page uses of the library. The add-ons in modules/
+// (WebGPU, pivot start, view) are private, not on npm; the copied code clones them.
+//
+// Set RELEASED back to false when the page starts to use something of the library that the
+// latest release on npm doesn't have: the install line then names the commit that built the
+// page, and every line below follows.
+export const RELEASED = true;
 
 // The commit the demo was built from (vite.config.js), or '' (tests, a build outside git)
 // eslint-disable-next-line no-undef
