@@ -1081,7 +1081,7 @@ export {default as navigateNodes, nearestInDirection, neighboursOf} from './modu
 export {default as searchNodes, buildSearchIndex, findNodes} from './modules/search.js';
 export {default as labelNodes} from './modules/labels.js';
 export {default as pulseNodes} from './modules/pulse.js';
-export {default as styleNodes, PALETTE, OTHER, colorsOf, sizeByLinks, readable, parseColor} from './modules/style.js';
+export {default as styleNodes, PALETTE, OTHER, colorsOf, sizeByLinks, linkCrowding, readable, parseColor} from './modules/style.js';
 export {default as fitLayout, layoutBounds} from './modules/fit.js';
 export {largestOpenRect} from './visible.js';
 export {placeLabels} from './labels/place.js';

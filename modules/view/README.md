@@ -323,9 +323,11 @@ made for a dark background:
 * **Size from links**: a leaf is `unit` × 0.5 scene units wide, a node with k links
   `unit` × 0.5 √k (`unit` 1; `sizeByLinks(unit)` is exported).
 * **Link alpha from their ink**: at most every 300 ms the links are binned on a 32 × 32 grid over
-  the drawing, and their alpha is set so the most crowded tenth of the cells gets `ink` (0.25) of
+  the drawing (each cell gets the length of link that crosses it; `linkCrowding()` is exported),
+  and their alpha is set so the most crowded tenth of the cells gets `ink` (0.25) of
   opacity, within `alpha` (`[0.05 / 255, 0.5]`). Below 1/255 a fixed share of the links is drawn
-  at 1/255. A 200k-link hairball keeps its texture; a sparse tree's links are bright.
+  at 1/255. A 200k-link hairball keeps its texture; a sparse tree's links are bright, and so are
+  the links of a graph of four nodes.
 * **Nodes at least `minSize`** (3.5) CSS pixels wide, less where they crowd, and at most `room`
   (0.7) of the distance to their nearest neighbour as big (the view's `nodeRoom`).
 * **Highlights** (`rings`, true): nodes keep their color and get a ring: white under the pointer,
