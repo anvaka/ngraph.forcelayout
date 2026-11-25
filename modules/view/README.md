@@ -59,6 +59,9 @@ Options:
 * `nodeColor` (`0x90f8fcff`): a color as `0xRRGGBBAA`, or `node => color`. A function that returns
   0 (or nothing) gives the default color for that node.
 * `linkColor` (`0xffffff10`): a color, or `link => color`.
+* `theme` (`'dark'`): `'dark'` or `'light'`, for the background the canvas has. The colors nobody
+  set follow it: nodes, links and highlights here, label text, and the panels modules put on the
+  page (see [Light and dark](#light-and-dark)).
 * `nodeSize`: a number, or `node => size` in scene units. Default: `node.data.size`, or 1.
 * `nodeMinSize` (0): the smallest diameter of the smallest node in CSS pixels, at any zoom, so
   nodes (and their colors) stay visible when a big graph is zoomed out. Bigger nodes keep their
@@ -94,6 +97,8 @@ Methods:
 * `setNodeMinSize(pixels)`: a new `nodeMinSize`.
 * `setDrawing({nodeSize, linkWidth, nodeRoom, fog, blend})`: new drawing options.
 * `getStyles()`: the current `styles`.
+* `setTheme(name)`, `getTheme()`: the theme, `'dark'` or `'light'` (see
+  [Light and dark](#light-and-dark)).
 * `invalidate()`: positions changed outside of a step, e.g. after `layout.setNodePosition()` or
   code that wrote `store.pos`.
 * `refresh()`: call the color and size functions again, e.g. when the data they read changed.
@@ -301,6 +306,29 @@ color) `ringGap` (2) pixels wide between the node and its ring. A ring reads on 
 and in any crowd, so with rings the fill colors can be 0, and nodes keep their own color (their
 category). Labels leave room for the ring.
 
+## Light and dark
+
+The view draws on a dark background or on a light one. What differs is in one table (`THEMES` in
+`theme.js`, exported): the default node and link colors, the fill and halo of highlighted nodes,
+label text and its halo, and the colors of the tooltip, the search box, the help card and the
+selection box.
+
+``` js
+view.use(styleNodes, {background: '#ffffff'});   // the style module picks the theme
+style.update({background: '#0e1624'});           // and switches it later
+
+createView(scene, {graph, layout, theme: 'light'});   // without the style module
+view.setTheme('dark');
+```
+
+With the [style module](#style), its `background` is all there is to say: a background that
+black text reads better on than white text is light (`themeOf(color)` is exported). Without it,
+set the `theme` option, or call `setTheme()`, to match the color the page gives the canvas.
+
+Colors the page set itself stay: `nodeColor`, `linkColor`, `styles`, a label `color`, a
+tooltip `style`. Panels take the theme when they next show; listeners of the view's `theme`
+event (`{theme}`) hear of a change at once.
+
 ## Modules
 
 Every module works the same with a mouse, a pen and a finger; only the picking reach differs.
@@ -310,35 +338,41 @@ Where a mouse uses a key (Shift-drag for a box), a long press does the same for 
 
 `view.use(styleNodes, {colorBy, palette, linkColors, background, ...})`: colors and sizes from the
 graph's data, kept readable while the layout and the camera move. One set of rules for any graph,
-made for a dark background:
+on a dark background or a light one:
 
 * **Color from a category**: `colorBy`, a field of `node.data` (or `node => value`; default
   `group` when nodes have one). Categories take `PALETTE` (eight colors, exported) in order of
   size, the biggest first; past it they share `OTHER`. `palette` (`{value: color}`) gives the
   data's own colors, and values that are colors (`'#e42313'`, `'red'`) are drawn as they are. Any
-  color too dark for `background` is lightened to 3:1 against it. Links inside a category take
+  color too close to `background` is moved away from it, to 3:1 against it (lightened on a dark
+  background, darkened on a light one). Links inside a category take
   its color, links between categories stay neutral and fainter (`crossLinks`, 0.6). `linkColors`
   (`{value: color}` for `link.data`, or `'self'` when link.data is a color) colors links from the
-  data instead. Nodes without a category are `color` (`'#90f8fc'`).
+  data instead. Nodes without a category are `color` (`'#90f8fc'`; `'#0b7a8a'` on a light
+  background).
 * **Size from links**: a leaf is `unit` × 0.5 scene units wide, a node with k links
   `unit` × 0.5 √k (`unit` 1; `sizeByLinks(unit)` is exported).
 * **Link alpha from their ink**: at most every 300 ms the links are binned on a 32 × 32 grid over
   the drawing (each cell gets the length of link that crosses it; `linkCrowding()` is exported),
-  and their alpha is set so the most crowded tenth of the cells gets `ink` (0.25) of
-  opacity, within `alpha` (`[0.05 / 255, 0.5]`). Below 1/255 a fixed share of the links is drawn
+  and their alpha is set so the most crowded tenth of the cells gets `ink` (0.25; 0.35 on a light
+  background, where dark links contrast less) of opacity, within `alpha` (`[0.05 / 255, 0.5]`). Below 1/255 a fixed share of the links is drawn
   at 1/255. A 200k-link hairball keeps its texture; a sparse tree's links are bright, and so are
   the links of a graph of four nodes.
 * **Nodes at least `minSize`** (3.5) CSS pixels wide, less where they crowd, and at most `room`
   (0.7) of the distance to their nearest neighbour as big (the view's `nodeRoom`).
 * **Highlights** (`rings`, true): nodes keep their color and get a ring: white under the pointer,
-  cyan when focused or found by search, amber when selected; lit links in one light color. While something is selected,
+  cyan when focused or found by search, amber when selected; lit links in one light color (on a
+  light background: near black, dark cyan, dark amber, and dark lit links). While something is selected,
   the rest fades to `dim` (0.3), so the visitor still sees where the selection is.
-* **`background`** (`'#0e1624'`): the scene's clear color, the rings' and the labels' halo.
+* **`background`** (`'#0e1624'`, any CSS color): the scene's clear color, the rings' and the
+  labels' halo. It also sets the view's theme, so a light background gets dark links, dark label
+  text and light panels (see [Light and dark](#light-and-dark)).
 * In 3D, `fog` (0.3) fades the far side of the drawing.
 
 API: `legend()` (`{title, items: [{color, label, count}], more}`, or null when the colors are the
 data's own or the categories are bare numbers), `colorOf(node)`, `linkAlpha()`, `nodeMinSize()`,
-`update()` (read the data again). `colorsOf(graph, options)` gives the same colors without a view.
+`update(options)` (read the data again, with new options when given: `update({background})`
+switches between light and dark). `colorsOf(graph, options)` gives the same colors without a view.
 
 ### pulse
 
@@ -346,7 +380,8 @@ data's own or the categories are bare numbers), `colorOf(node)`, `linkAlpha()`, 
 fade, so the eye finds it in a big drawing. By default the node search goes to pulses
 (`on: ['search']`); `start(node)` pulses any node. Two rings (`count`), 900 ms each
 (`duration`), 300 ms apart, out to 64 px (`radius`). With `prefers-reduced-motion` nothing moves:
-the node's ring (see Flags) shows where it is.
+the node's ring (see Flags) shows where it is. `color` is by default the focused node's ring
+color (without one: white on a dark theme, near black on a light one).
 
 ### labels
 

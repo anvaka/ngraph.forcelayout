@@ -10,19 +10,22 @@
 // following the node as it moves. With prefers-reduced-motion nothing moves: no pulse (the
 // highlight stays).
 //
-// Options: `on` (['search']: view events whose node pulses), `color` (0xffffffff), `halo`
-// (0x0e1624b3: a dark band either side of the ring, so it reads over bright areas), `width` (2
+// Options: `on` (['search']: view events whose node pulses), `color` (the focused node's ring
+// in the view's styles; without one, white on a dark theme and near black on a light one), `halo`
+// (the styles' ringHalo: a band of the background either side of the ring, so it reads over the
+// drawing), `width` (2
 // CSS pixels), `radius` (64: how far the rings spread), `count` (2), `duration` (900),
 // `stagger` (300).
 //
 // API: start(nodeOrId), stop(), dispose().
 import {createProgram, createBuffer} from '../gl.js';
 import {POSITION_OF} from '../programs.js';
+import {themeValues} from '../theme.js';
 
 const DEFAULTS = {
   on: ['search'],
-  color: 0xffffffff,
-  halo: 0x0e1624b3,
+  color: undefined,
+  halo: undefined,
   width: 2,
   radius: 64,
   count: 2,
@@ -77,7 +80,7 @@ export default {
     let info = createProgram(gl, VERTEX, FRAGMENT, ['point'],
       ['modelViewProjection', 'positions', 'positionsSize', 'resolution', 'row', 'reach', 'color', 'halo', 'radius', 'width', 'alpha']);
     let quad = createBuffer(gl, QUAD);
-    let color = rgba(settings.color), halo = rgba(settings.halo);
+    let color = null, halo = null;
     // {node, start} while a pulse runs
     let running = null;
     let reduced = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
@@ -144,6 +147,12 @@ export default {
       if (reduced && reduced.matches) return;
       let node = typeof nodeOrId === 'object' && nodeOrId ? nodeOrId : ctx.graph.getNode(nodeOrId);
       if (!node) return;
+      // The colors of now: the styles and the theme may have changed since the last pulse
+      let styles = ctx.view.getStyles();
+      let own = settings.color !== undefined ? settings.color
+        : styles.focusedRing || themeValues(ctx.view.getTheme()).pointedRing;
+      color = rgba(own);
+      halo = rgba(settings.halo !== undefined ? settings.halo : ((styles.ringHalo & 0xffffff00) | 0xb3) >>> 0);
       running = {node, start: performance.now()};
       ctx.requestFrame();
     }

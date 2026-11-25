@@ -15,11 +15,11 @@
 //
 // Options:
 // - `box` (true): a long press on the background, or Shift-drag, draws a selection box.
-// - `boxStyle`: CSS for the box element.
+// - `boxStyle`: CSS for the box element, added to its own (whose colors follow the view's theme).
 import {SELECTED} from '../flags.js';
+import {themeValues} from '../theme.js';
 
-const BOX_STYLE = 'position:fixed;pointer-events:none;z-index:2147483647;box-sizing:border-box;' +
-  'border:1px solid rgba(255,255,255,0.85);background:rgba(255,255,255,0.08);';
+const BOX_STYLE = 'position:fixed;pointer-events:none;z-index:2147483647;box-sizing:border-box;';
 
 export default {
   name: 'select',
@@ -182,7 +182,8 @@ export default {
     function createBoxElement() {
       if (typeof document === 'undefined') return null;
       let element = document.createElement('div');
-      element.style.cssText = BOX_STYLE + (options.boxStyle || '');
+      let theme = themeValues(ctx.view.getTheme());
+      element.style.cssText = BOX_STYLE + 'border:1px solid ' + theme.boxBorder + ';background:' + theme.box + ';' + (options.boxStyle || '');
       document.body.appendChild(element);
       return element;
     }
