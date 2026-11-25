@@ -35,6 +35,7 @@
 // API: focus(node), get(), clear(), announce(text).
 import {FOCUSED, SELECTED, DRAGGED, HOVERED} from '../flags.js';
 import {placeOverCanvas} from '../visible.js';
+import {paintPanel} from '../theme.js';
 
 const DIRECTIONS = {
   ArrowRight: {x: 1, y: 0, name: 'to the right'},
@@ -71,8 +72,7 @@ const HELP = [
 ];
 
 const CARD_STYLE = 'position:fixed;z-index:2147483646;max-width:360px;padding:8px 10px;border-radius:4px;' +
-  'background:rgba(9,22,44,0.96);color:#e8f1ff;border:1px solid rgba(255,255,255,0.18);' +
-  'font:12px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,0.45);';
+  'font:12px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;';
 const HIDDEN_STYLE = 'position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;' +
   'overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;';
 
@@ -463,6 +463,7 @@ export default {
       if (help) return closeHelp();
       help = document.createElement('div');
       help.style.cssText = CARD_STYLE;
+      paintPanel(help, ctx.view.getTheme());
       help.setAttribute('data-graph-overlay', '');
       help.setAttribute('role', 'dialog');
       help.setAttribute('aria-label', 'Keys and gestures');

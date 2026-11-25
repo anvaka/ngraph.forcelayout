@@ -25,14 +25,15 @@
 //   Strings are always text, never HTML.
 // - `hover` (true): show tooltips on hover (needs the hover module). `tap` (true): keep one open
 //   on tap. `delay` (280): ms a hovered node waits for its card.
-// - `style`: CSS added to the tooltip's own. `className`: a class for it.
+// - `style`: CSS added to the tooltip's own (whose colors follow the view's theme). `className`:
+//   a class for it.
 //
 // API: show(node), hide(), get() (the node shown, or null).
 import {overlayBoxes} from '../visible.js';
+import {paintPanel} from '../theme.js';
 
 const STYLE = 'position:fixed;z-index:2147483646;max-width:280px;padding:6px 8px;border-radius:4px;' +
-  'background:rgba(9,22,44,0.94);color:#e8f1ff;border:1px solid rgba(255,255,255,0.18);' +
-  'font:12px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 2px 10px rgba(0,0,0,0.45);' +
+  'font:12px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;' +
   'pointer-events:auto;user-select:text;-webkit-user-select:text;overflow-wrap:anywhere;display:none;' +
   // A finger may scroll a docked card, but a pinch on it must not zoom the page
   'touch-action:pan-y;';
@@ -107,6 +108,8 @@ export default {
   attach(ctx, options = {}) {
     let content = options.content || (node => describeNode(node, ctx.graph, ctx.labelOf ? ctx.labelOf(node) : undefined));
     let card = null;
+    // The theme the card has the colors of
+    let painted = null;
     let natural = null;
     let fade = null;
     // What is shown: {node, pinned, source} (source: 'hover', 'focus' or 'tap')
@@ -194,6 +197,7 @@ export default {
       let body = content(node);
       if (body === null || body === undefined) return hide();
       ensureCard();
+      if (painted !== ctx.view.getTheme()) paint();
       if (!shown || shown.node !== node) fill(body);
       let same = shown && shown.node === node;
       shown = {node, pinned, source, side: same ? shown.side : null, narrow: same ? shown.narrow : null, size: same ? shown.size : 0};
@@ -426,13 +430,21 @@ export default {
       return points;
     }
 
+    // The theme's colors, then the page's own CSS on top of them
+    function paint() {
+      painted = ctx.view.getTheme();
+      paintPanel(card, painted);
+      if (options.style) card.style.cssText += ';' + options.style;
+    }
+
     function ensureCard() {
       if (card) return;
       card = document.createElement('div');
       card.setAttribute('role', 'tooltip');
       // It moves with the node it describes: it doesn't hide the canvas (see visible.js)
       card.setAttribute('data-graph-overlay', '');
-      card.style.cssText = STYLE + (options.style || '');
+      card.style.cssText = STYLE;
+      paint();
       // Its own size caps (STYLE's, or the `style` option's): what a card that shrank goes back to
       natural = {maxWidth: card.style.maxWidth, maxHeight: card.style.maxHeight};
       if (options.className) card.className = options.className;

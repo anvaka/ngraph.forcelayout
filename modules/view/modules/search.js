@@ -20,14 +20,13 @@
 // The box opens at the top of what shows of the canvas, beside a panel that covers part of it
 // rather than under it (see the view's visible area).
 import {placeOverCanvas} from '../visible.js';
+import {paintPanel, themeValues} from '../theme.js';
 
 // Height kept free below the box's top for the list of matches (CSS pixels)
 const RESULTS_ROOM = 260;
 const ROOT_STYLE = 'position:fixed;z-index:2147483646;width:300px;max-width:calc(100vw - 24px);padding:6px;' +
-  'border-radius:4px;background:rgba(9,22,44,0.96);border:1px solid rgba(255,255,255,0.18);' +
-  'box-shadow:0 2px 10px rgba(0,0,0,0.45);font:13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;color:#e8f1ff;';
-const INPUT_STYLE = 'width:100%;box-sizing:border-box;padding:5px 7px;border-radius:3px;border:1px solid rgba(255,255,255,0.3);' +
-  'background:rgba(0,0,0,0.35);color:inherit;font:inherit;outline-offset:1px;';
+  'border-radius:4px;font:13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;';
+const INPUT_STYLE = 'width:100%;box-sizing:border-box;padding:5px 7px;border-radius:3px;color:inherit;font:inherit;outline-offset:1px;';
 const LIST_STYLE = 'list-style:none;margin:4px 0 0;padding:0;max-height:50vh;overflow:auto;';
 const OPTION_STYLE = 'display:flex;justify-content:space-between;gap:8px;padding:3px 6px;border-radius:3px;cursor:pointer;';
 
@@ -88,6 +87,12 @@ export default {
 
     function open(text) {
       if (!box) createBox();
+      // The view's theme of now
+      let name = ctx.view.getTheme();
+      box.theme = themeValues(name);
+      paintPanel(box.root, name);
+      box.input.style.border = '1px solid ' + box.theme.fieldBorder;
+      box.input.style.background = box.theme.field;
       box.input.value = text || '';
       box.root.style.display = 'block';
       // At the top of what shows, not under a panel, with room for the results below it
@@ -147,7 +152,7 @@ export default {
         let option = e.target.closest('[role=option]');
         if (option) pick(+option.dataset.index, true);
       });
-      box = {root, input, list, status, matches: [], active: -1};
+      box = {root, input, list, status, matches: [], active: -1, theme: null};
     }
 
     function update() {
@@ -191,7 +196,7 @@ export default {
       for (let i = 0; i < items.length; ++i) {
         let on = i === box.active;
         items[i].setAttribute('aria-selected', on ? 'true' : 'false');
-        items[i].style.background = on ? 'rgba(255,255,255,0.16)' : '';
+        items[i].style.background = on ? box.theme.chosen : '';
       }
       if (box.active >= 0) {
         box.input.setAttribute('aria-activedescendant', `${listId}-${box.active}`);

@@ -27,6 +27,7 @@ import {createInput, ViewEvent} from './input.js';
 import {createCamera} from './camera.js';
 import {createVisibility} from './visible.js';
 import {computeRooms} from './room.js';
+import {themeValues} from './theme.js';
 
 const DEFAULTS = {
   // The text that stands for a node: in tooltips, search, announcements and labels
@@ -38,8 +39,12 @@ const DEFAULTS = {
     }
     return String(node.id);
   },
-  nodeColor: 0x90f8fcff,
-  linkColor: 0xffffff10,
+  // 'dark' or 'light': what the background is. It sets the colors that nothing else set: the
+  // defaults of nodeColor, linkColor and the styles here, and of the modules (see theme.js)
+  theme: 'dark',
+  // By default the theme's: 0x90f8fcff and 0xffffff10 on dark
+  nodeColor: undefined,
+  linkColor: undefined,
   linkWidth: 2,
   // Size of a node's dot in scene units
   nodeSize: node => (node.data && node.data.size) || 1,
@@ -56,7 +61,8 @@ const DEFAULTS = {
   fog: 1
 };
 
-// How flagged nodes and links look. "Pointed" is hovered, dragged or focused.
+// How flagged nodes and links look. "Pointed" is hovered, dragged or focused. The colors here are
+// the dark theme's; the light theme has its own pointedColor, selectedColor and ringHalo.
 const STYLES = {
   pointedColor: 0xffffffff,
   pointedScale: 1.5,
@@ -102,6 +108,8 @@ const ON_TOP_LIMITS = {nodes: 1000, links: 100000};
  * - `nodeLabel`: `node => text` that stands for a node in tooltips, search and announcements
  *   (default: `data.label`, `data.name`, or the id).
  * - `styles`: how flagged nodes look (STYLES above).
+ * - `theme`: 'dark' (default) or 'light', for the background the page gives the canvas: the
+ *   colors that weren't set follow it, here and in the modules.
  * - `camera`: camera input options (see camera.js), `input`: thresholds (see input.js), or
  *   `input: false` to leave the scene's own controls alone (no modules then).
  * - `reach`: picking reach in pixels per pointer type (REACH above).
@@ -121,10 +129,13 @@ export default function createView(scene, options = {}) {
   let canvas = scene.getDrawContext().canvas;
 
   let settings = {...DEFAULTS};
-  ['nodeColor', 'linkColor', 'linkWidth', 'nodeSize', 'nodeLabel', 'nodeMinSize', 'nodeRoom', 'blend', 'fog'].forEach(name => {
+  ['theme', 'nodeColor', 'linkColor', 'linkWidth', 'nodeSize', 'nodeLabel', 'nodeMinSize', 'nodeRoom', 'blend', 'fog'].forEach(name => {
     if (options[name] !== undefined) settings[name] = options[name];
   });
-  let styles = {...STYLES, ...(options.styles || {})};
+  let theme = themeValues(settings.theme);
+  // The styles the page set; the rest are STYLES with the theme's colors
+  let ownStyles = {...(options.styles || {})};
+  let styles = {...STYLES, ...theme.styles, ...ownStyles};
   let reach = {...REACH, ...(options.reach || {})};
   let style = {
     pointedColor: new Float32Array(4), pointedSize: new Float32Array(2),
@@ -219,6 +230,8 @@ export default function createView(scene, options = {}) {
     setDrawing,
     setStyles,
     getStyles: () => ({...styles}),
+    setTheme,
+    getTheme: () => settings.theme,
     invalidate,
     refresh,
     use,
@@ -291,7 +304,24 @@ export default function createView(scene, options = {}) {
 
   /** New styles for flagged nodes and links (any of STYLES) */
   function setStyles(newStyles) {
+    Object.assign(ownStyles, newStyles);
     Object.assign(styles, newStyles);
+    scene.renderFrame();
+  }
+
+  /**
+   * 'dark' or 'light', for the background the canvas has now. The colors that the page didn't
+   * set change with it (nodes, links, highlights), and modules follow: listeners of the 'theme'
+   * event at once, panels the next time they show.
+   */
+  function setTheme(name) {
+    theme = themeValues(name);
+    if (name === settings.theme) return;
+    settings.theme = name;
+    styles = {...STYLES, ...theme.styles, ...ownStyles};
+    if (settings.nodeColor === undefined) nodesDirty = true;
+    if (settings.linkColor === undefined) edgesDirty = true;
+    events.emit('theme', {theme: name});
     scene.renderFrame();
   }
 
@@ -802,9 +832,9 @@ export default function createView(scene, options = {}) {
   function buildNodes() {
     let size = settings.nodeSize;
     let sizeOf = typeof size === 'function' ? size : () => size;
-    let color = settings.nodeColor;
+    let color = settings.nodeColor === undefined ? theme.nodeColor : settings.nodeColor;
     let colorOf = typeof color === 'function' ? color : null;
-    let defaultColor = colorOf ? DEFAULTS.nodeColor : color;
+    let defaultColor = colorOf ? theme.nodeColor : color;
     let built = collectNodes(graph, layout, colorOf, sizeOf, defaultColor);
     let count = built.sizes.length;
 
@@ -902,7 +932,7 @@ export default function createView(scene, options = {}) {
 
   function buildEdges() {
     let colorOf = linkColorOf();
-    let built = collectEdges(graph, layout, colorOf, DEFAULTS.linkColor);
+    let built = collectEdges(graph, layout, colorOf, theme.linkColor);
     setBufferData(gl, edges.ends, built.ends);
     setBufferData(gl, edges.colors, built.colors);
     edges.count = built.count;
@@ -912,7 +942,7 @@ export default function createView(scene, options = {}) {
   }
 
   function linkColorOf() {
-    let color = settings.linkColor;
+    let color = settings.linkColor === undefined ? theme.linkColor : settings.linkColor;
     return typeof color === 'function' ? color : () => color;
   }
 
@@ -965,7 +995,7 @@ export default function createView(scene, options = {}) {
       if (from < 0 || to < 0) return;
       ends[2 * k] = from;
       ends[2 * k + 1] = to;
-      linkColors[k] = colorOf(link) || DEFAULTS.linkColor;
+      linkColors[k] = colorOf(link) || theme.linkColor;
       k += 1;
     });
     setBufferData(gl, top.edges.ends, ends.subarray(0, 2 * k));
@@ -1083,6 +1113,7 @@ export {default as labelNodes} from './modules/labels.js';
 export {default as pulseNodes} from './modules/pulse.js';
 export {default as styleNodes, PALETTE, OTHER, colorsOf, sizeByLinks, linkCrowding, readable, parseColor} from './modules/style.js';
 export {default as fitLayout, layoutBounds} from './modules/fit.js';
+export {THEMES, themeOf} from './theme.js';
 export {largestOpenRect} from './visible.js';
 export {placeLabels} from './labels/place.js';
 export {computeImportance, rankRows} from './labels/importance.js';

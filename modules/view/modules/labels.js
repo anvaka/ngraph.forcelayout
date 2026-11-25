@@ -54,7 +54,8 @@
 //   always at full brightness.
 // - `text`: `node => string`, the label's text (default: the view's `labelOf`). Return '' for
 //   nodes that should have no label, e.g. nodes that have only an id.
-// - `font` (system-ui and friends), `color` (0xffffffff), `halo` (0x0c2952e6), `haloWidth` (2 px),
+// - `font` (system-ui and friends), `color` and `halo` (the view's theme's: 0xffffffff on
+//   0x0c2952e6 when it is dark, near black on white when it is light), `haloWidth` (2 px),
 //   `gap` (3 px between the node and its label), `every` (250 ms), `fade` (300 ms), `maxLength` (40).
 //
 // API: update(options) (new options; importance, text and look are read again), refresh() (labels
@@ -66,6 +67,7 @@ import {createLabelProgram, STRIDE} from '../labels/program.js';
 import {placeLabels, boxBeside, frontSide, labelAt, ANCHOR_INDEX} from '../labels/place.js';
 import {computeImportance, rankRows} from '../labels/importance.js';
 import {HOVERED, SELECTED, DRAGGED, FOCUSED} from '../flags.js';
+import {themeValues} from '../theme.js';
 
 const DEFAULTS = {
   importance: 'degree',
@@ -87,8 +89,8 @@ const DEFAULTS = {
   // Pixels kept free around each label: room to breathe, so dense parts aren't a wall of text
   padding: 'auto',
   font: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
-  color: 0xffffffff,
-  halo: 0x0c2952e6,
+  color: undefined,
+  halo: undefined,
   haloWidth: 2,
   gap: 3,
   every: 250,
@@ -140,7 +142,12 @@ export default {
     let data = new Float32Array(64 * STRIDE);
     let count = 0;
     let look = {count: 0, atlas: atlas.texture, time: 0, fade: settings.fade / 1000, gap: settings.gap,
-      textColor: rgba(settings.color), haloColor: rgba(settings.halo)};
+      textColor: null, haloColor: null};
+    paint();
+    ctx.on('theme', () => {
+      paint();
+      ctx.requestFrame();
+    });
 
     let pending = true;
     // The layout or the camera moved since the last placement
@@ -205,14 +212,20 @@ export default {
     graph.on('changed', onGraphChanged);
     ctx.requestFrame();
 
+    // The colors the options give, or else the theme's
+    function paint() {
+      let theme = themeValues(ctx.view.getTheme());
+      look.textColor = rgba(settings.color !== undefined ? settings.color : theme.labelColor);
+      look.haloColor = rgba(settings.halo !== undefined ? settings.halo : theme.labelHalo);
+    }
+
     return {
       update(newOptions) {
         settings = merge(Object.assign({}, options, newOptions));
         options = Object.assign({}, options, newOptions);
         look.fade = settings.fade / 1000;
         look.gap = settings.gap;
-        look.textColor = rgba(settings.color);
-        look.haloColor = rgba(settings.halo);
+        paint();
         restart();
       },
       refresh: restart,

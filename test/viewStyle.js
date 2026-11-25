@@ -135,3 +135,38 @@ test('links shorter than a cell are binned where they are, as before', async fun
   // a cell is 63/32 units each way and holds four links of 1 unit, 0.2 units wide
   t.ok(Math.abs(crowded - 4 * 0.2 / ((63 / 32) * (63 / 32))) < 0.02, 'coverage of an even grid: ' + crowded.toFixed(3));
 });
+
+test('a light background gets the light look: dark links, a dark plain color, darkened data colors', async function (t) {
+  var s = await style;
+  var theme = await import('../modules/view/theme.js');
+  t.equal(theme.themeOf('#ffffff'), 'light');
+  t.equal(theme.themeOf('#f4f1ea'), 'light');
+  t.equal(theme.themeOf('#808080'), 'light', 'black text reads better on mid grey');
+  t.equal(theme.themeOf('#0e1624'), 'dark');
+  t.equal(theme.themeOf('#000'), 'dark');
+  t.throws(function () { theme.themeValues('sepia'); }, /Unknown theme/);
+
+  var graph = createGraph();
+  graph.addLink(1, 2);
+  var plain = s.colorsOf(graph, {background: '#ffffff'});
+  t.equal(hex(plain.nodeColor(graph.getNode(1))), theme.THEMES.light.node, 'nodes are dark enough to read on white');
+  t.equal((plain.linkColor(0.5) & 0xffffff00) >>> 0, theme.THEMES.light.link, 'links are ink, not white');
+  t.equal(hex(s.colorsOf(graph, {}).nodeColor(graph.getNode(1))), theme.THEMES.dark.node, 'the dark look is as it was');
+  t.equal((s.colorsOf(graph, {}).linkColor(0.5) & 0xffffff00) >>> 0, 0xffffff00);
+
+  var lines = createGraph();
+  lines.addNode(1, {line: 'Circle'});
+  lines.addNode(2, {line: 'Northern'});
+  var colors = s.colorsOf(lines, {colorBy: 'line', background: '#ffffff', palette: {Circle: '#ffd329', Northern: '#000000'}});
+  t.not(hex(colors.nodeColor(lines.getNode(1))), '#ffd329', 'yellow is darkened on white');
+  t.equal(hex(colors.nodeColor(lines.getNode(2))), '#000000', 'black stays');
+  t.equal(s.readable('#ffffff', '#ffffff'), '#8c8c8c', 'toward black, in steps, to 3:1 or more');
+  t.equal(s.readable('#000000', '#0e1624') > '#000000', true, 'toward white on dark');
+
+  var grouped = createGraph();
+  grouped.addNode(1, {kind: 'a'});
+  grouped.addNode(2, {kind: 'b'});
+  var onWhite = s.colorsOf(grouped, {colorBy: 'kind', background: '#ffffff'});
+  t.equal(hex(onWhite.nodeColor(grouped.getNode(1))), s.PALETTE[0], 'the palette is the same on both backgrounds');
+  t.throws(function () { s.colorsOf(grouped, {background: 'no such color'}); }, /needs a color/);
+});
